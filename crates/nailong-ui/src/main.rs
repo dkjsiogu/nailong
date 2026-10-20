@@ -1,7 +1,7 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 use eframe::egui;
-use nailong_core::install::{catalog, fabric, forge, health, neoforge, vanilla};
+use nailong_core::install::{catalog, fabric, forge, health, modpack, neoforge, vanilla};
 use nailong_core::launch::{self, LaunchOptions};
 use nailong_core::progress::{Progress, Sink, from_fn};
 use nailong_core::{Root, java};
@@ -47,26 +47,44 @@ impl LoaderKind {
 #[derive(Clone)]
 struct Row {
     id: String,
+    profile: String,
     label: String,
     mc: String,
     loader: LoaderKind,
     loader_version: Option<String>,
+    game_dir: Option<PathBuf>,
+    instance: Option<String>,
     health: health::Health,
 }
 
 #[derive(Clone)]
-struct RepairTarget {
-    mc: String,
-    loader: LoaderKind,
-    version: String,
+enum RepairTarget {
+    Loader {
+        mc: String,
+        loader: LoaderKind,
+        version: String,
+    },
+    Modpack(PathBuf),
 }
 
 impl RepairTarget {
     fn label(&self) -> String {
-        if self.loader == LoaderKind::Vanilla {
-            self.mc.clone()
-        } else {
-            format!("{} · {} {}", self.mc, self.loader.name(), self.version)
+        match self {
+            Self::Loader {
+                mc,
+                loader,
+                version,
+            } => {
+                if *loader == LoaderKind::Vanilla {
+                    mc.clone()
+                } else {
+                    format!("{mc} · {} {version}", loader.name())
+                }
+            }
+            Self::Modpack(path) => path
+                .file_name()
+                .map(|s| format!("整合包 {}", s.to_string_lossy()))
+                .unwrap_or_else(|| "整合包".to_string()),
         }
     }
 }
@@ -159,71 +177,64 @@ impl App {
                     continue;
                 }
                 let id = entry.file_name().to_string_lossy().to_string();
-                let path = self.root.version_json(&id);
-                if !path.exists() {
+                if !self.root.version_json(&id).exists() {
                     continue;
                 }
-                let value: serde_json::Value = std::fs::read(&path)
-                    .ok()
-                    .and_then(|b| serde_json::from_slice(&b).ok())
-                    .unwrap_or_default();
-                let inherited = value
-                    .get("inheritsFrom")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or(&id)
-                    .to_string();
-
-                let (loader, loader_version, mc) =
-                    if let Some(rest) = id.strip_prefix("fabric-loader-") {
-                        match rest.rsplit_once('-') {
-                            Some((version, mc)) => (
-                                LoaderKind::Fabric,
-                                Some(version.to_string()),
-                                mc.to_string(),
-                            ),
-                            None => (
-                                LoaderKind::Fabric,
-                                Some(rest.to_string()),
-                                inherited.clone(),
-                            ),
-                        }
-                    } else if let Some(rest) = id.strip_prefix("neoforge-") {
-                        (
-                            LoaderKind::NeoForge,
-                            Some(rest.to_string()),
-                            inherited.clone(),
-                        )
-                    } else if let Some(rest) = id.strip_prefix("forge-") {
-                        match rest.split_once('-') {
-                            Some((mc, version)) => {
-                                (LoaderKind::Forge, Some(version.to_string()), mc.to_string())
-                            }
-                            None => (LoaderKind::Forge, Some(rest.to_string()), inherited.clone()),
-                        }
-                    } else if let Some((mc, version)) = id.split_once("-forge-") {
-                        (LoaderKind::Forge, Some(version.to_string()), mc.to_string())
-                    } else {
-                        (LoaderKind::Vanilla, None, id.clone())
-                    };
-
+                let (mc, loader, loader_version) = profile_info(&self.root, &id);
                 let label = match &loader_version {
                     Some(version) => format!("{mc} · {} {version}", loader.name()),
                     None => mc.clone(),
                 };
                 let row_health = health::inspect(&self.root, &id);
                 rows.push(Row {
-                    id,
+                    id: id.clone(),
+                    profile: id,
                     label,
                     mc,
                     loader,
                     loader_version,
+                    game_dir: None,
+                    instance: None,
                     health: row_health,
                 });
             }
         }
+        if let Ok(entries) = std::fs::read_dir(self.root.instances()) {
+            for entry in entries.flatten() {
+                if !entry.path().is_dir() {
+                    continue;
+                }
+                let meta_path = entry.path().join("instance.json");
+                let Ok(bytes) = std::fs::read(&meta_path) else {
+                    continue;
+                };
+                let Ok(meta) = serde_json::from_slice::<modpack::InstanceMeta>(&bytes) else {
+                    continue;
+                };
+                if !self.root.version_json(&meta.profile).exists() {
+                    continue;
+                }
+                let (mc, loader, loader_version) = profile_info(&self.root, &meta.profile);
+                let game_dir = entry.path().join(&meta.game_dir);
+                let id = format!("instance:{}", entry.file_name().to_string_lossy());
+                rows.push(Row {
+                    id,
+                    profile: meta.profile.clone(),
+                    label: format!("{} · 整合包", meta.name),
+                    mc,
+                    loader,
+                    loader_version,
+                    game_dir: Some(game_dir),
+                    instance: Some(meta.name),
+                    health: health::inspect(&self.root, &meta.profile),
+                });
+            }
+        }
         rows.sort_by(|a, b| {
-            mc_key(&b.mc)
-                .cmp(&mc_key(&a.mc))
+            b.instance
+                .is_some()
+                .cmp(&a.instance.is_some())
+                .then_with(|| mc_key(&b.mc).cmp(&mc_key(&a.mc)))
                 .then_with(|| a.loader.rank().cmp(&b.loader.rank()))
         });
         if self
@@ -294,6 +305,51 @@ impl App {
         self.start_install_worker(row.mc, row.loader, row.loader_version.unwrap_or_default());
     }
 
+    fn start_modpack(&mut self, path: PathBuf) {
+        if self.busy.is_some() {
+            return;
+        }
+        if !path.is_file() {
+            self.error = Some(format!("找不到整合包: {}", path.display()));
+            return;
+        }
+        let name = path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "整合包".to_string());
+        self.error = None;
+        self.notice = None;
+        self.show_install = true;
+        self.show_log = false;
+        self.busy = Some(Task::Install);
+        self.progress = Some(Progress::stage("准备导入整合包"));
+        self.progress_label = name.clone();
+        self.repair_target = Some(RepairTarget::Modpack(path.clone()));
+        self.log.push(format!("导入整合包 {name}"));
+
+        let root = self.root.clone();
+        let (tx, rx) = mpsc::channel();
+        self.rx = Some(rx);
+        let tx = Arc::new(Mutex::new(tx));
+        let sink: Sink = {
+            let tx = tx.clone();
+            from_fn(move |p| {
+                if let Ok(tx) = tx.lock() {
+                    let _ = tx.send(Msg::Progress(p));
+                }
+            })
+        };
+        std::thread::spawn(move || {
+            let msg = match modpack::import_mrpack(&root, &path, "official", &sink) {
+                Ok(instance) => Msg::InstallDone(format!("instance:{}", instance.id)),
+                Err(e) => Msg::InstallFailed(e.to_string()),
+            };
+            if let Ok(tx) = tx.lock() {
+                let _ = tx.send(msg);
+            }
+        });
+    }
+
     fn start_install_worker(&mut self, mc: String, loader: LoaderKind, version: String) {
         if self.busy.is_some() {
             return;
@@ -320,7 +376,7 @@ impl App {
         self.busy = Some(Task::Install);
         self.progress = Some(Progress::stage("准备安装"));
         self.progress_label = target_label.clone();
-        self.repair_target = Some(RepairTarget {
+        self.repair_target = Some(RepairTarget::Loader {
             mc: mc.clone(),
             loader,
             version: version.clone(),
@@ -395,9 +451,10 @@ impl App {
             let opts = LaunchOptions {
                 username,
                 memory_mb: memory,
+                game_dir: row.game_dir.clone(),
                 ..Default::default()
             };
-            let msg = match launch::launch(&root, &row.id, &opts) {
+            let msg = match launch::launch(&root, &row.profile, &opts) {
                 Ok(0) => Msg::LaunchDone(0),
                 Ok(code) => Msg::LaunchDone(code),
                 Err(e) => Msg::LaunchFailed(e.to_string()),
@@ -505,12 +562,17 @@ impl App {
                         ui.add_space(22.0);
                         if matches!(self.busy, Some(Task::Launch)) {
                             ui.spinner();
-                        } else if !self.show_install
-                            && !self.rows.is_empty()
-                            && self.busy.is_none()
-                            && ghost_button(ui, "+ 安装").clicked()
+                        } else if !self.show_install && !self.rows.is_empty() && self.busy.is_none()
                         {
-                            self.open_install();
+                            if ghost_button(ui, "导入整合包").clicked()
+                                && let Some(path) = pick_modpack()
+                            {
+                                self.start_modpack(path);
+                            }
+                            ui.add_space(4.0);
+                            if ghost_button(ui, "+ 安装").clicked() {
+                                self.open_install();
+                            }
                         }
                     });
                 });
@@ -666,7 +728,14 @@ impl App {
                         }
                         ui.vertical_centered(|ui| {
                             if primary_button(ui, "继续安装", self.busy.is_none()) {
-                                self.start_install_worker(target.mc, target.loader, target.version);
+                                match target.clone() {
+                                    RepairTarget::Loader {
+                                        mc,
+                                        loader,
+                                        version,
+                                    } => self.start_install_worker(mc, loader, version),
+                                    RepairTarget::Modpack(path) => self.start_modpack(path),
+                                }
                             }
                             ui.add_space(6.0);
                             if ui.button("返回").clicked() {
@@ -731,7 +800,6 @@ impl App {
                         {
                             kind = LoaderKind::Vanilla;
                         }
-                        ui.label(egui::RichText::new("不装加载器").color(MUTED).size(12.0));
                     });
 
                     // Reserve the status line so loading / error text does not
@@ -791,6 +859,30 @@ impl App {
                     }
                 });
 
+                ui.add_space(14.0);
+                let hovering = ui.ctx().input(|i| !i.raw.hovered_files.is_empty());
+                let mut choose_pack = false;
+                egui::Frame::new()
+                    .fill(PANEL)
+                    .stroke(egui::Stroke::new(1.0, if hovering { ACCENT } else { LINE }))
+                    .corner_radius(10)
+                    .inner_margin(egui::Margin::same(12))
+                    .show(ui, |ui| {
+                        ui.vertical_centered(|ui| {
+                            ui.label(
+                                egui::RichText::new("拖入 Modrinth 整合包 (.mrpack)")
+                                    .size(13.0)
+                                    .color(if hovering { ACCENT } else { MUTED }),
+                            );
+                            ui.add_space(6.0);
+                            if ghost_button(ui, "选择文件").clicked() {
+                                choose_pack = true;
+                            }
+                        });
+                    });
+                if choose_pack && let Some(path) = pick_modpack() {
+                    self.start_modpack(path);
+                }
                 if !self.java_ok {
                     java_warning(ui);
                 }
@@ -852,6 +944,25 @@ impl App {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll();
+        let dropped = ui
+            .ctx()
+            .input_mut(|i| std::mem::take(&mut i.raw.dropped_files));
+        for file in dropped {
+            let path = file.path().to_path_buf();
+            let is_pack = path
+                .extension()
+                .map(|e| e.to_string_lossy().eq_ignore_ascii_case("mrpack"))
+                .unwrap_or(false);
+            if is_pack {
+                if self.busy.is_none() {
+                    self.start_modpack(path);
+                } else {
+                    self.error = Some("正在安装，请等当前任务结束".into());
+                }
+            } else {
+                self.error = Some("只支持 Modrinth 整合包（.mrpack）".into());
+            }
+        }
         if self.busy.is_some() {
             ui.ctx().request_repaint_after(Duration::from_millis(100));
         }
@@ -1044,6 +1155,39 @@ fn preferred_forge(cat: &catalog::Catalog, mc: &str) -> String {
     cat.forge_for(mc).first().cloned().unwrap_or_default()
 }
 
+fn profile_info(root: &Root, profile: &str) -> (String, LoaderKind, Option<String>) {
+    let value: serde_json::Value = std::fs::read(root.version_json(profile))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+    let inherited = value
+        .get("inheritsFrom")
+        .and_then(|v| v.as_str())
+        .unwrap_or(profile)
+        .to_string();
+    if let Some(rest) = profile.strip_prefix("fabric-loader-") {
+        match rest.rsplit_once('-') {
+            Some((version, mc)) => (
+                mc.to_string(),
+                LoaderKind::Fabric,
+                Some(version.to_string()),
+            ),
+            None => (inherited, LoaderKind::Fabric, Some(rest.to_string())),
+        }
+    } else if let Some(rest) = profile.strip_prefix("neoforge-") {
+        (inherited, LoaderKind::NeoForge, Some(rest.to_string()))
+    } else if let Some(rest) = profile.strip_prefix("forge-") {
+        match rest.split_once('-') {
+            Some((mc, version)) => (mc.to_string(), LoaderKind::Forge, Some(version.to_string())),
+            None => (inherited, LoaderKind::Forge, Some(rest.to_string())),
+        }
+    } else if let Some((mc, version)) = profile.split_once("-forge-") {
+        (mc.to_string(), LoaderKind::Forge, Some(version.to_string()))
+    } else {
+        (profile.to_string(), LoaderKind::Vanilla, None)
+    }
+}
+
 fn mc_key(v: &str) -> Vec<u64> {
     v.split(|c: char| !c.is_ascii_digit())
         .filter(|s| !s.is_empty())
@@ -1067,6 +1211,13 @@ fn ghost_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
             .corner_radius(8)
             .min_size(egui::vec2(72.0, 30.0)),
     )
+}
+
+fn pick_modpack() -> Option<PathBuf> {
+    rfd::FileDialog::new()
+        .set_title("选择 Modrinth 整合包")
+        .add_filter("Modrinth 整合包", &["mrpack"])
+        .pick_file()
 }
 
 fn logo_mark(ui: &mut egui::Ui) {
@@ -1166,7 +1317,7 @@ fn main() -> eframe::Result<()> {
         centered: true,
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([920.0, 640.0])
-            .with_min_inner_size([760.0, 560.0])
+            .with_min_inner_size([760.0, 600.0])
             .with_title("nailong"),
         ..Default::default()
     };

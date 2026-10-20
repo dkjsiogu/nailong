@@ -1,7 +1,7 @@
 # 14 · 原型实现状态（0.1 → 0.3）
 
 > 日期：2026-10-20
-> 对应发布：GitHub Release `v0.3.1` 的 `nailong.exe`、`nailong_0.3.1_amd64.deb`
+> 对应发布：GitHub Release `v0.4.0` 的 `nailong.exe`、`nailong_0.4.0_amd64.deb`
 > 目的：把「设计稿」和「已经跑起来的代码」分开记账，避免把计划当成已完成。
 
 ## 1. 一句话结论
@@ -34,10 +34,12 @@
 | Fabric 安装 / 启动 | `core::install::fabric` | 完成（原生 profile） | 1.21.1 / 0.19.5 安装并启动到渲染 |
 | Forge 安装 / 启动 | `core::install::forge` | **可用，但复用官方 installer** | 1.21.1 / 52.1.20 安装并启动到渲染 |
 | 四加载器选择 | `nailong-ui` | 完成 | 安装页按 Minecraft / Fabric / NeoForge / Forge / 原版排列 |
+| Modrinth 整合包导入 | `core::install::modpack` | 完成 | `.mrpack` → 加载器 + 151 模组 + 独立 gameDir |
+| Windows 便携目录 | `core::paths` | 完成 | 默认使用 exe 同目录 `.minecraft` |
 | CLI（list/java/info/install/launch） | `nailong-cli` | 完成 | 打包产物冒烟 |
 | GUI（版本下拉、安装进度、缺文件补全、启动、设置） | `nailong-ui` | 可用 | Xvfb 下走完安装 / 补全 / 启动；实际 NeoForge 到主菜单 |
 | Windows 交叉编译 | `x86_64-pc-windows-gnu` | 通过 | 无 MinGW DLL 依赖，仅系统 DLL |
-| 发布包 | GitHub Release `v0.3.1` | 完成（CI 构建） | 单 exe 约 12 MB / deb 约 4.2 MB |
+| 发布包 | GitHub Release `v0.4.0` | 完成（CI 构建） | 单 exe 约 12 MB / deb 约 4.2 MB |
 
 ### 2.1 实测记录
 

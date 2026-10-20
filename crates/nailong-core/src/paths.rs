@@ -12,6 +12,13 @@ impl Root {
     }
 
     pub fn default_root() -> PathBuf {
+        // Windows: portable by default — game data lives next to nailong.exe.
+        #[cfg(windows)]
+        if let Ok(exe) = std::env::current_exe()
+            && let Some(dir) = exe.parent()
+        {
+            return dir.join(".minecraft");
+        }
         directories::BaseDirs::new()
             .map(|d| d.data_dir().join("nailong").join(".minecraft"))
             .unwrap_or_else(|| PathBuf::from(".minecraft"))
@@ -45,6 +52,14 @@ impl Root {
         self.dir.join("cache").join("nailong")
     }
 
+    pub fn instances(&self) -> PathBuf {
+        self.dir.join("instances")
+    }
+
+    pub fn instance_dir(&self, id: &str) -> PathBuf {
+        self.instances().join(sanitize(id))
+    }
+
     pub fn natives(&self, profile: &str) -> PathBuf {
         self.dir.join("natives").join(sanitize(profile))
     }
@@ -70,6 +85,7 @@ impl Root {
             self.indexes(),
             self.objects(),
             self.cache(),
+            self.instances(),
         ] {
             std::fs::create_dir_all(&p).map_err(|e| io(&p, e))?;
         }

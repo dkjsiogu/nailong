@@ -1,6 +1,6 @@
 use anyhow::Context;
 use clap::{Parser, Subcommand};
-use nailong_core::install::{fabric, forge, neoforge, vanilla};
+use nailong_core::install::{fabric, forge, modpack, neoforge, vanilla};
 use nailong_core::launch::{self, LaunchOptions};
 use nailong_core::manifest::{self, Context as ResolveContext};
 use nailong_core::progress::{Progress, Sink, from_fn};
@@ -76,6 +76,8 @@ enum InstallTarget {
     Neoforge { mc: String, version: String },
     /// Forge（先安装原版，再执行客户端 processors）
     Forge { mc: String, version: String },
+    /// Modrinth 整合包（.mrpack）
+    Modpack { path: PathBuf },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -153,6 +155,9 @@ fn main() -> anyhow::Result<()> {
                 }
                 InstallTarget::Forge { mc, version } => {
                     forge::install_with(&root, &mc, &version, &cli.mirror, &sink)?;
+                }
+                InstallTarget::Modpack { path } => {
+                    modpack::import_mrpack(&root, &path, &cli.mirror, &sink)?;
                 }
             }
         }
