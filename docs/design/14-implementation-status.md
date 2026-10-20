@@ -57,9 +57,10 @@
   `remove_classpath_args` 之后对 `resolved.client_jar` 的剔除。
 - **离线 UUID**：`MD5("OfflinePlayer:" + name)`，再置 version=3、variant=2；与 Java 的
   `UUID.nameUUIDFromBytes` 一致。测试向量：`Notch -> b50ad385829d3141a2167e7d7539ba7f`。
-- **安装器调用**：下载 `neoforge-<ver>-installer.jar`，执行
-  `java -jar ... --installClient <root>`，然后读取生成的
-  `versions/neoforge-<ver>/neoforge-<ver>.json`。启动器运行时不依赖该 jar。
+- **processor 安装**：下载 Forge/NeoForge 安装包，但只把它当数据包读取
+  `install_profile.json`；Rust 解析 data/libraries/processors，只执行客户端的
+  processor（mappings、jarsplitter、renamer、binarypatcher 等），再写出
+  `versions/<id>/<id>.json`。不执行官方 GUI installer。
 - **下载器**：阻塞 `reqwest` + rustls(ring)，rayon 并发；单文件原子写；sha1 不匹配重试。
   没有 async 运行时，换取更小的依赖面与更简单的错误处理。
 
@@ -80,7 +81,7 @@
 ## 4. 已知问题与风险
 
 1. **Windows 只在 Linux 上交叉编译通过**，还没有 Windows 实机启动记录；OpenGL 驱动、路径、Java 发现都可能出问题。
-2. **安装器路径**依赖官方 installer 的 `--installClient` 行为；NeoForge 改参数或需要网络访问时可能失败。
+2. **processor 安装**依赖安装包里的 `install_profile` 结构和 processor 工具；上游改格式时需要跟进。
 3. **离线账户会触发 401**：游戏向 Mojang 请求 user properties 被拒，日志有 `InvalidCredentialsException`，但不阻塞单人游戏；后续可关闭该请求或接正版登录。
 4. **安装没有取消按钮**；关闭窗口可中断，重新打开会检测并补全。
 5. **GUI 内存 135 MB**（软件渲染）高于 120 MB 目标；需要真实 GPU 复测，或减少字体/纹理占用。

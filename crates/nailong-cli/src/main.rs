@@ -72,9 +72,9 @@ enum InstallTarget {
     Vanilla { mc: String },
     /// Fabric（原版 + Fabric profile）
     Fabric { mc: String, loader: String },
-    /// NeoForge（先安装原版，再运行官方安装器完成一次性安装）
+    /// NeoForge（先安装原版，再执行客户端 processors）
     Neoforge { mc: String, version: String },
-    /// Forge（先安装原版，再运行官方安装器完成一次性安装）
+    /// Forge（先安装原版，再执行客户端 processors）
     Forge { mc: String, version: String },
 }
 
