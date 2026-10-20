@@ -4,7 +4,7 @@
 
 轻量的 Minecraft 启动器，使用 Rust 编写。
 
-> 当前版本：**0.2.0 · NeoForge 预览版**
+> 当前版本：**0.3.0 · 四加载器预览版**
 > 目标：单文件、无额外运行时、低内存、快速启动；版本可选、安装可见、中断可补。
 
 ## 下载
@@ -14,14 +14,14 @@
 | 平台 | 文件 | 说明 |
 |---|---|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | **单个 exe，不用解压**，双击即用 |
-| Linux x64 (deb) | [nailong_0.2.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.2.0_amd64.deb) | amd64，兼容 Ubuntu 24.04+ |
+| Linux x64 (deb) | [nailong_0.3.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.3.0_amd64.deb) | amd64，兼容 Ubuntu 24.04+ |
 
 校验值：[SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS)。
 
 ### Windows
 
 1. 下载 `nailong.exe`，放到任意目录，双击运行；
-2. 第一次打开就是安装页：用下拉框选 Minecraft 和 NeoForge 版本，点“安装”；
+2. 第一次打开就是安装页：选 Minecraft 版本，再在 Fabric / NeoForge / Forge / 原版中选一个，点“安装”；
 3. 进度条走完后会自动回到主页，点“启动游戏”。
 
 需要系统里有 **Java 21**。启动器会自动查找；没找到时界面上会提示。
@@ -31,7 +31,7 @@
 ### Linux（Debian / Ubuntu）
 
 ```bash
-sudo apt install ./nailong_0.2.0_amd64.deb
+sudo apt install ./nailong_0.3.0_amd64.deb
 nailong
 ```
 
@@ -53,9 +53,10 @@ sudo apt remove nailong
 ## 现在能做什么
 
 - **安装 Minecraft 原版**（已验证 1.21.1）
-- **安装 NeoForge**（已验证 1.21.1 / 21.1.209）
+- **安装 Fabric / NeoForge / Forge**（已验证 1.21.1：Fabric 0.19.5、NeoForge 21.1.209、Forge 52.1.20）
+- **四种安装方式**：安装页按 Minecraft → Fabric → NeoForge → Forge → 原版排列，版本全部下拉选择
 - **离线账户启动**（单人 / 局域网）
-- **版本选择**：Minecraft / NeoForge 都是下拉框，自动从官方清单读取，不用手输
+- **版本选择**：Minecraft 和三种加载器都是下拉框，自动从官方清单读取，不用手输
 - **安装进度**：阶段、百分比、已下载 / 总大小、文件数
 - **中断可补**：启动时检查缺哪些文件；缺资源会显示“补全资源”，修完再启动
 - **图形界面**：一屏完成选版本、安装、启动；玩家名/内存收在下方一行
@@ -66,9 +67,9 @@ sudo apt remove nailong
 |---|---:|---|
 | Windows GUI `nailong.exe` | 约 12 MB | 单文件，无额外运行库 |
 | Linux GUI（deb 内） | 约 11.6 MB | 单二进制 |
-| `nailong_0.2.0_amd64.deb` | 约 4.2 MB | 含桌面图标、菜单项、GPL 许可 |
+| `nailong_0.3.0_amd64.deb` | 约 4.2 MB | 含桌面图标、菜单项、GPL 许可 |
 
-> 实机验证：Linux（Xvfb + Mesa）走完“选版本 → 安装 → 进度 → 启动 NeoForge 1.21.1 到主菜单”；删除资源后会提示缺失并可补全。Windows 由 CI 原生编译，尚未在 Windows 实机启动，欢迎帮忙试。
+> 实机验证：Linux（Xvfb + Mesa）下 Fabric / NeoForge / Forge 1.21.1 均启动到游戏渲染/主菜单；删除资源后会提示缺失并可补全。Windows 由 CI 原生编译，尚未在 Windows 实机启动，欢迎帮忙试。
 
 ## 命令行（可选）
 
@@ -109,16 +110,16 @@ cargo build --release -p nailong-ui -p nailong-cli
 ## 这一版刻意没做
 
 - 微软正版登录（client id / 审批未就绪；先离线）
-- Fabric / Forge / 整合包（下一步）
+- 整合包、正版登录、自动更新
 - 自动更新、模组管理、皮肤
 - 安装取消按钮（关闭窗口即可中断；下次启动会检测并补全）
-- NeoForge 安装内置化：当前复用 **NeoForge 官方安装器**做一次性安装，启动器本体不依赖它；下一步换成内置 processors
+- NeoForge / Forge 安装内置化：当前复用两家官方 installer 做一次性安装（Fabric 已是原生 profile），启动器本体运行时不依赖它们；下一步换成内置 processors
 
 ## 代码结构
 
 ```text
 crates/
-  nailong-core/   版本解析、下载、Java 检测、启动、NeoForge 安装
+  nailong-core/   版本解析、下载、Java 检测、启动、Fabric/NeoForge/Forge 安装
   nailong-cli/    命令行
   nailong-ui/     egui 图形界面
 packaging/linux/  desktop、图标、AppStream 元数据、版权文件

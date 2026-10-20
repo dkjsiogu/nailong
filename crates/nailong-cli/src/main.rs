@@ -1,6 +1,6 @@
 use anyhow::Context;
 use clap::{Parser, Subcommand};
-use nailong_core::install::{neoforge, vanilla};
+use nailong_core::install::{fabric, forge, neoforge, vanilla};
 use nailong_core::launch::{self, LaunchOptions};
 use nailong_core::manifest::{self, Context as ResolveContext};
 use nailong_core::progress::{Progress, Sink, from_fn};
@@ -70,8 +70,12 @@ enum Commands {
 enum InstallTarget {
     /// 原版
     Vanilla { mc: String },
+    /// Fabric（原版 + Fabric profile）
+    Fabric { mc: String, loader: String },
     /// NeoForge（先安装原版，再运行官方安装器完成一次性安装）
     Neoforge { mc: String, version: String },
+    /// Forge（先安装原版，再运行官方安装器完成一次性安装）
+    Forge { mc: String, version: String },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -141,8 +145,14 @@ fn main() -> anyhow::Result<()> {
                 InstallTarget::Vanilla { mc } => {
                     vanilla::install_with(&root, &mc, &cli.mirror, &sink)?;
                 }
+                InstallTarget::Fabric { mc, loader } => {
+                    fabric::install_with(&root, &mc, &loader, &cli.mirror, &sink)?;
+                }
                 InstallTarget::Neoforge { mc, version } => {
                     neoforge::install_with(&root, &mc, &version, &cli.mirror, &sink)?;
+                }
+                InstallTarget::Forge { mc, version } => {
+                    forge::install_with(&root, &mc, &version, &cli.mirror, &sink)?;
                 }
             }
         }

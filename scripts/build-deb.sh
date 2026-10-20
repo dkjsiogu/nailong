@@ -75,11 +75,11 @@ Maintainer: dkjsiogu <123802475+dkjsiogu@users.noreply.github.com>
 Depends: libc6 (>= $glibc_req), libgcc-s1, libgl1, libegl1, libx11-6, libxext6, libxcursor1, libxi6, libxrandr2, libxkbcommon0
 Recommends: openjdk-21-jre | default-jre
 Homepage: https://github.com/dkjsiogu/nailong
-Description: Lightweight Minecraft launcher (NeoForge preview)
+Description: Lightweight Minecraft launcher
  nailong is a lightweight Minecraft: Java Edition launcher written in Rust.
  .
- It can install Minecraft releases with NeoForge, shows download progress,
- repairs incomplete game files, and launches the game with an offline account.
+ It can install Minecraft with Fabric, NeoForge, Forge or no loader, shows
+ download progress, repairs incomplete files, and launches offline.
  It needs a Java 21 runtime installed.
 EOF
 
