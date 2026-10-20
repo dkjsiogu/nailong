@@ -1,6 +1,5 @@
 use crate::error::Result;
-use crate::http::{FileSpec, Http};
-use crate::install::{processors, vanilla};
+use crate::install::{processors, slim, vanilla};
 use crate::paths::Root;
 use crate::progress::{Progress, Sink, noop};
 
@@ -36,23 +35,11 @@ pub fn install_with(
     println!("→ 检查 / 补全原版 {mc}");
     vanilla::install_with(root, mc, mirror, sink)?;
 
-    // The installer package is data only; its processors are executed below.
+    // The installer is data only; fetch just the profile, version and client
+    // patch instead of the whole 6–9 MB package.
     let (url, file) = installer_url(version);
-    let dest = root.cache().join("installers").join(&file);
-    let http = Http::new(mirror)?;
-    (sink)(Progress::stage("下载 NeoForge 安装包"));
-    println!("→ 获取 NeoForge {version} 安装包…");
-    http.download_with(
-        FileSpec {
-            url,
-            dest: dest.clone(),
-            sha1: None,
-            size: None,
-            verify_existing: false,
-        },
-        "下载 NeoForge 安装包",
-        sink,
-    )?;
+    println!("→ 读取 NeoForge {version} 安装信息…");
+    let dest = slim::prepare(root, &url, &file, mirror, "NeoForge", sink)?;
 
     (sink)(Progress::stage("安装 NeoForge"));
     let id = processors::install_client(root, mc, &dest, mirror, "NeoForge", sink)?;

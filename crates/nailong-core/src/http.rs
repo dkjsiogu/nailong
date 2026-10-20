@@ -2,6 +2,7 @@ use crate::error::{Error, Result, io};
 use crate::progress::{Progress, Sink};
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
+use reqwest::header::{ACCEPT_ENCODING, CONTENT_RANGE, RANGE};
 use sha1::{Digest, Sha1};
 use std::fs::File;
 use std::io::{Read, Write};
@@ -22,6 +23,12 @@ pub struct FileSpec {
 pub struct Http {
     client: reqwest::blocking::Client,
     mirror: String,
+}
+
+#[derive(Debug)]
+pub struct RangeResponse {
+    pub bytes: Vec<u8>,
+    pub total: Option<u64>,
 }
 
 impl Http {
@@ -85,6 +92,80 @@ impl Http {
     pub fn get_json(&self, url: &str) -> Result<serde_json::Value> {
         let text = self.get_text(url)?;
         serde_json::from_str(&text).map_err(|e| Error::Install(format!("JSON 解析失败: {e}")))
+    }
+
+    /// Fetch one inclusive byte range.  `Ok(None)` means the server ignored the
+    /// Range header and started a normal 200 response; callers must fall back
+    /// to a full download instead of treating that body as a range.
+    pub fn get_range(&self, url: &str, start: u64, end: u64) -> Result<Option<RangeResponse>> {
+        if end < start {
+            return Err(Error::Install(format!("无效的 Range: {start}-{end}")));
+        }
+        let url = self.url(url);
+        let mut last = None;
+        for attempt in 0..3u32 {
+            match self.try_get_range(&url, start, end) {
+                Ok(Some(response)) => return Ok(Some(response)),
+                Ok(None) => return Ok(None),
+                Err(e) => {
+                    last = Some(e);
+                    std::thread::sleep(Duration::from_millis(400 * (attempt + 1) as u64));
+                }
+            }
+        }
+        Err(last.unwrap_or_else(|| Error::Install(format!("请求失败: {url}"))))
+    }
+
+    pub fn range_len(&self, url: &str) -> Result<Option<u64>> {
+        Ok(self
+            .get_range(url, 0, 0)?
+            .and_then(|response| response.total))
+    }
+
+    fn try_get_range(&self, url: &str, start: u64, end: u64) -> Result<Option<RangeResponse>> {
+        let response = self
+            .client
+            .get(url)
+            .header(RANGE, format!("bytes={start}-{end}"))
+            // Byte ranges only make sense on the raw representation.
+            .header(ACCEPT_ENCODING, "identity")
+            .send()
+            .map_err(|e| Error::Net {
+                url: url.into(),
+                source: e,
+            })?;
+        let status = response.status();
+        if status == reqwest::StatusCode::PARTIAL_CONTENT {
+            let total = response
+                .headers()
+                .get(CONTENT_RANGE)
+                .and_then(|v| v.to_str().ok())
+                .and_then(parse_content_range_total);
+            let bytes = response
+                .bytes()
+                .map_err(|e| Error::Net {
+                    url: url.into(),
+                    source: e,
+                })?
+                .to_vec();
+            let expected = end.saturating_sub(start).saturating_add(1);
+            if bytes.len() as u64 != expected {
+                return Err(Error::Install(format!(
+                    "Range 响应长度不对: 期望 {expected}，实际 {} ({url})",
+                    bytes.len()
+                )));
+            }
+            Ok(Some(RangeResponse { bytes, total }))
+        } else if status == reqwest::StatusCode::OK {
+            // Server sent the whole file.  Do not read it: the caller will
+            // choose a normal download path with progress and checksums.
+            Ok(None)
+        } else {
+            Err(Error::Http {
+                url: url.into(),
+                status: status.as_u16(),
+            })
+        }
     }
 
     pub fn download(&self, spec: &FileSpec) -> Result<()> {
@@ -336,6 +417,12 @@ impl Batch<'_> {
         };
         (self.sink)(progress);
     }
+}
+
+fn parse_content_range_total(value: &str) -> Option<u64> {
+    let value = value.strip_prefix("bytes ")?;
+    let (_, total) = value.split_once('/')?;
+    total.trim().parse().ok()
 }
 
 fn now_ms() -> u64 {

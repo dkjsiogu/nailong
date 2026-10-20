@@ -167,7 +167,7 @@ flowchart TB
 | D3 | 版本来源 | **官方 profile JSON + inheritsFrom 链**（非自研 patch 格式） | 与官方/Prism/MultiMC 互操作；加载器安装器天然产出这种格式 | [04](04-version-model.md#5-加载器-profile) |
 | D4 | 下载 | **自研候选 URL 下载器 + 两级缓存** | 镜像切换、续传、校验、并发都可控 | [06](06-install-download.md) |
 | D5 | Java | **优先 Mojang 官方运行时，系统 JDK 兜底** | 与游戏版本严格匹配；无需第三方 API key | [06](06-install-download.md#7-java-运行时管理) |
-| D6 | Forge | **原生 processors，保留外部 installer 兜底**（原型暂用 installer） | 可控进度/镜像/取消；兜底降低首发风险；原型先验证启动链路 | [06](06-install-download.md#6-加载器安装)、[14](14-implementation-status.md) |
+| D6 | Forge | **原生 processors + 按需读取安装数据，完整安装包仅兼容兜底** | 可控进度/镜像；只取约 3 MB 核心数据；处理器依赖完整包时自动回退 | [06](06-install-download.md#6-加载器安装)、[14](14-implementation-status.md) |
 | D7 | 认证 | **授权码 + PKCE（loopback）为主，设备码兜底** | 体验好；无需 client secret | [07](07-auth-accounts.md) |
 | D8 | 存储 | **TOML 配置 + JSON 版本文件 + 文件系统，无数据库** | 轻量、可手工修复、易迁移 | [04](04-version-model.md#2-磁盘布局) |
 | D9 | 错误 | **thiserror 类型化错误 + 稳定错误码 + i18n key** | UI 可解释；日志可检索；测试可断言 | [03](03-architecture.md#5-错误模型) |

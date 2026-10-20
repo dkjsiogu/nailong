@@ -1,6 +1,5 @@
 use crate::error::Result;
-use crate::http::{FileSpec, Http};
-use crate::install::{processors, vanilla};
+use crate::install::{processors, slim, vanilla};
 use crate::paths::Root;
 use crate::progress::{Progress, Sink};
 
@@ -27,20 +26,9 @@ pub fn install_with(
     vanilla::install_with(root, mc, mirror, sink)?;
 
     let (url, file) = installer_url(mc, version);
-    let dest = root.cache().join("installers").join(&file);
-    let http = Http::new(mirror)?;
-    (sink)(Progress::stage("下载 Forge 安装包"));
-    http.download_with(
-        FileSpec {
-            url,
-            dest: dest.clone(),
-            sha1: None,
-            size: None,
-            verify_existing: false,
-        },
-        "下载 Forge 安装包",
-        sink,
-    )?;
+    // 7–9 MB installer, but a client install needs only ~3 MB of it.  Read
+    // those entries directly and keep a small cache instead of the package.
+    let dest = slim::prepare(root, &url, &file, mirror, "Forge", sink)?;
 
     (sink)(Progress::stage("安装 Forge"));
     let id = processors::install_client(root, mc, &dest, mirror, "Forge", sink)?;

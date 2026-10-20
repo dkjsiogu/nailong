@@ -1831,7 +1831,7 @@ dependencies = [
 
 [[package]]
 name = "nailong-cli"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -1842,10 +1842,12 @@ dependencies = [
 
 [[package]]
 name = "nailong-core"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
+ "crc32fast",
  "directories",
+ "flate2",
  "indicatif",
  "md-5 0.11.0",
  "rayon",
@@ -1862,7 +1864,7 @@ dependencies = [
 
 [[package]]
 name = "nailong-ui"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "eframe",

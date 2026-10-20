@@ -308,14 +308,36 @@ pub enum InstallStage {
 这是唯一需要"运行外部 JVM"的安装器。流程：
 
 ```text
-1. 下载 installer jar
-2. 读取 install_profile.json + version.json + maven/ + data/
-3. 安装 profile.libraries + 内嵌 maven 库
+1. 按需读取 installer jar 的核心条目（约 3 MB）
+2. 读取 install_profile.json + version.json + data/client.*
+3. 安装 profile.libraries（Forge 的 universal/shim 从 maven 直接下载）
 4. 解析 data 变量表
-5. 逐个执行 processors（跳过已满足 outputs）
+5. 逐个执行客户端 processors（跳过已满足 outputs）
 6. 写 version.json 到 shared/versions/<id>/
 7. 校验最终 profile 的库齐全
 ```
+
+#### 轻量读取（0.4.2）
+
+官方 installer 是 6–9 MB 的 zip，但客户端安装真正需要的只有：
+
+- `install_profile.json`（几十 KB）
+- `version.json`（几十 KB）
+- `data/client.lzma` / 客户端 binary patch（约 3 MB）
+
+其余是服务端数据、安装器 GUI 类、许可证、内嵌 universal 等。安装器只把这些当容器，不需要完整落盘。
+
+实现（`core::install::slim`）：
+
+1. 先发 `Range: bytes=0-0` 探测服务器是否支持分段读取，并从 `Content-Range` 得到总长度。
+2. 读文件尾最多 64 KB，定位 ZIP EOCD，解析中央目录；只取需要的本地条目。
+3. 校验每个条目的 CRC32、解压后长度；写入 `cache/nailong/installers/<installer>.slim.zip`。
+4. 成功后删除完整 installer；以后重装/修复直接复用精简 zip。
+5. 不支持 Range 的镜像先尝试官方 Maven 的同一路径；仍失败才回退完整下载。完整下载成功后也会转成精简 zip（保留完整包仅作为最后兜底）。
+
+> 兼容性：若客户端 processor 的参数里出现 `{INSTALLER}`，说明它可能需要安装器内的其他文件，此时不做精简，直接使用完整包。
+
+Forge 的 `universal` / `shim` 虽然也在 installer 内，但 `install_profile.libraries` 已给出官方 Maven URL 和 SHA1，直接按普通库下载即可，避免把 3 MB 的 universal 塞进精简包。
 
 #### 变量解析
 
@@ -324,7 +346,7 @@ pub enum InstallStage {
 | `{KEY}` | 引用 data 表中的另一个 key（递归，检测环） |
 | `'literal'` | 去引号的字面量 |
 | `[group:artifact:version:classifier]` | 映射到 `libraries/<group path>/<artifact>/<version>/<artifact>-<version>[-classifier].jar` |
-| `/data/xxx` | 从 installer jar 解压到临时目录 |
+| `/data/xxx` | 从 installer jar（或精简缓存）解压到临时目录 |
 | `{ "client": ..., "server": ... }` | 按 `SIDE` 取对应值；也可为字面量/URL |
 | 其他 | 原样字符串 |
 
@@ -335,7 +357,7 @@ SIDE = client
 MINECRAFT_JAR = 临时目录中的 client.jar（必须是副本，见下）
 MINECRAFT_VERSION = profile.minecraft
 ROOT = shared 根（真实目录）
-INSTALLER = installer.jar 绝对路径
+INSTALLER = 精简缓存 / 完整 installer 的绝对路径
 LIBRARY_DIR = shared/libraries
 ```
 
@@ -371,18 +393,23 @@ for p in profile.processors where p.sides.contains("client") {
 - 写 `nailong.profile.json`：installer 的 SHA1、Forge 版本、processor 列表、时间。
 - 失败回滚：删除本次产生的半成品 outputs 与临时 client.jar；已下载库保留（可复用）。
 
-#### 外部 installer 兜底
+#### 完整安装包兜底（已实现）
 
-配置 `advanced.forge_strategy = auto | native | installer`：
+轻量读取不是唯一路径。遇到以下情况时自动回退：
+
+- 镜像和官方 Maven 都不支持 HTTP Range；
+- ZIP 结构异常（ZIP64、加密、未知压缩方式、CRC 失败）；
+- 客户端 processor 的参数引用 `{INSTALLER}`，可能需要完整包内的其他文件。
+
+回退流程：
 
 ```text
-java -jar forge-installer.jar --installClient <shared_root>
+1. 正常下载完整 installer 到 cache/nailong/installers/
+2. 用同一套 Rust 解析器读取并执行客户端 processors（不运行官方 GUI）
+3. 成功后尝试生成 *.slim.zip；能精简就删除完整包，否则保留完整包
 ```
 
-- 需要 `shared_root` 已有原版 `versions/<mc>/<mc>.json` + jar。
-- 安装器自己下载库并生成 profile；完成后我们接管。
-- 适合 native processors 失败的新版本；缺点是进度不可控、镜像不可配、错误难解析。
-- 默认 `auto`：先 native，失败后提示用户选择兜底（不自动执行外部安装器，避免"两个下载器同时写"）。
+这条路径的进度、镜像和错误处理仍由启动器控制；代价是首次多下载约 3–6 MB。不会调用 `java -jar installer --installClient`。
 
 ### 6.3 Forge（旧格式，≤1.12.2）
 

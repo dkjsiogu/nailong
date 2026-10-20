@@ -5,4 +5,5 @@ pub mod health;
 pub mod modpack;
 pub mod neoforge;
 pub mod processors;
+pub mod slim;
 pub mod vanilla;
