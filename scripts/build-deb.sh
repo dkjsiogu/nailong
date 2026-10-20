@@ -78,8 +78,9 @@ Homepage: https://github.com/dkjsiogu/nailong
 Description: Lightweight Minecraft launcher (NeoForge preview)
  nailong is a lightweight Minecraft: Java Edition launcher written in Rust.
  .
- This preview installs Minecraft 1.21.1 and NeoForge 21.1.209, then launches
- the game with an offline account. It needs a Java 21 runtime installed.
+ It can install Minecraft releases with NeoForge, shows download progress,
+ repairs incomplete game files, and launches the game with an offline account.
+ It needs a Java 21 runtime installed.
 EOF
 
 (cd "$stage" && find . -type f ! -path './DEBIAN/*' -printf '%P\n' | sort | xargs md5sum > DEBIAN/md5sums)

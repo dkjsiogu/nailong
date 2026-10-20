@@ -1,4 +1,5 @@
 use crate::error::{Error, Result, io};
+use crate::progress::{Progress, Sink};
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use sha1::{Digest, Sha1};
@@ -6,7 +7,8 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone)]
 pub struct FileSpec {
@@ -49,7 +51,7 @@ impl Http {
         rewrite_mirror(url, &self.mirror)
     }
 
-    pub fn get_json(&self, url: &str) -> Result<serde_json::Value> {
+    pub fn get_text(&self, url: &str) -> Result<String> {
         let url = self.url(url);
         let mut last = None;
         for attempt in 0..3 {
@@ -62,7 +64,7 @@ impl Http {
                             status: status.as_u16(),
                         });
                     } else {
-                        return resp.json().map_err(|e| Error::Net {
+                        return resp.text().map_err(|e| Error::Net {
                             url: url.clone(),
                             source: e,
                         });
@@ -80,22 +82,43 @@ impl Http {
         Err(last.unwrap_or_else(|| Error::Install(format!("请求失败: {url}"))))
     }
 
+    pub fn get_json(&self, url: &str) -> Result<serde_json::Value> {
+        let text = self.get_text(url)?;
+        serde_json::from_str(&text).map_err(|e| Error::Install(format!("JSON 解析失败: {e}")))
+    }
+
     pub fn download(&self, spec: &FileSpec) -> Result<()> {
+        self.download_inner(spec, None)
+    }
+
+    pub fn download_with(&self, spec: FileSpec, label: &str, sink: &Sink) -> Result<()> {
+        self.download_many_with(vec![spec], label, sink).map(|_| ())
+    }
+
+    fn download_inner(&self, spec: &FileSpec, batch: Option<&Batch>) -> Result<()> {
         if spec.dest.exists() {
-            let size_ok = spec
-                .size
-                .is_none_or(|s| spec.dest.metadata().map(|m| m.len() == s).unwrap_or(false));
+            let actual_size = spec.dest.metadata().map(|m| m.len()).unwrap_or(0);
+            let size_ok = spec.size.is_none_or(|s| actual_size == s);
             if size_ok && !spec.verify_existing {
+                if let Some(batch) = batch {
+                    batch.file_done(actual_size);
+                }
                 return Ok(());
             }
             if size_ok {
                 if let Some(expected) = &spec.sha1 {
                     let actual = sha1_file(&spec.dest)?;
                     if actual.eq_ignore_ascii_case(expected) {
+                        if let Some(batch) = batch {
+                            batch.file_done(actual_size);
+                        }
                         return Ok(());
                     }
                     let _ = std::fs::remove_file(&spec.dest);
                 } else {
+                    if let Some(batch) = batch {
+                        batch.file_done(actual_size);
+                    }
                     return Ok(());
                 }
             }
@@ -106,18 +129,39 @@ impl Http {
         let url = self.url(&spec.url);
         let mut last = None;
         for attempt in 0..3u32 {
-            match self.try_download(&url, &spec.dest, spec.sha1.as_deref()) {
-                Ok(()) => return Ok(()),
+            let before = batch.map(|b| b.bytes_done.load(Ordering::Relaxed));
+            match self.try_download(&url, &spec.dest, spec.sha1.as_deref(), batch) {
+                Ok(()) => {
+                    if let Some(batch) = batch {
+                        batch.file_done(0);
+                    }
+                    return Ok(());
+                }
                 Err(e) => {
+                    if let (Some(batch), Some(before)) = (batch, before) {
+                        let after = batch.bytes_done.load(Ordering::Relaxed);
+                        batch
+                            .bytes_done
+                            .fetch_sub(after.saturating_sub(before), Ordering::Relaxed);
+                    }
                     last = Some(e);
                     std::thread::sleep(Duration::from_millis(500 * (attempt + 1) as u64));
                 }
             }
         }
+        if let Some(batch) = batch {
+            batch.file_done(0);
+        }
         Err(last.unwrap_or_else(|| Error::Install(format!("下载失败: {url}"))))
     }
 
-    fn try_download(&self, url: &str, dest: &Path, expected: Option<&str>) -> Result<()> {
+    fn try_download(
+        &self,
+        url: &str,
+        dest: &Path,
+        expected: Option<&str>,
+        batch: Option<&Batch>,
+    ) -> Result<()> {
         let resp = self.client.get(url).send().map_err(|e| Error::Net {
             url: url.into(),
             source: e,
@@ -134,7 +178,6 @@ impl Http {
         let mut hasher = Sha1::new();
         let mut reader = resp;
         let mut buf = [0u8; 64 * 1024];
-        let mut total = 0u64;
         loop {
             let n = reader.read(&mut buf).map_err(|e| io(dest, e))?;
             if n == 0 {
@@ -142,7 +185,10 @@ impl Http {
             }
             hasher.update(&buf[..n]);
             file.write_all(&buf[..n]).map_err(|e| io(&tmp, e))?;
-            total += n as u64;
+            if let Some(batch) = batch {
+                batch.bytes_done.fetch_add(n as u64, Ordering::Relaxed);
+                batch.emit(false);
+            }
         }
         file.sync_all().map_err(|e| io(&tmp, e))?;
         if let Some(expected) = expected {
@@ -156,7 +202,6 @@ impl Http {
                 });
             }
         }
-        let _ = total;
         std::fs::rename(&tmp, dest).map_err(|e| {
             let _ = std::fs::remove_file(&tmp);
             io(dest, e)
@@ -165,34 +210,72 @@ impl Http {
     }
 
     pub fn download_many(&self, specs: Vec<FileSpec>, label: &str) -> Result<usize> {
-        if specs.is_empty() {
-            return Ok(0);
-        }
-        let bar = Arc::new(ProgressBar::new(specs.len() as u64));
+        let bar = Arc::new(ProgressBar::new(0));
         bar.set_style(
             ProgressStyle::with_template("{spinner:.green} {msg} {pos}/{len} [{bar:30}]").unwrap(),
         );
         bar.set_message(label.to_string());
+        let sink: Sink = {
+            let bar = bar.clone();
+            Arc::new(move |p: Progress| {
+                let use_bytes = p.bytes_total > 0;
+                bar.set_length(if use_bytes {
+                    p.bytes_total
+                } else {
+                    p.files_total
+                });
+                bar.set_position(if use_bytes {
+                    p.bytes_done
+                } else {
+                    p.files_done
+                });
+                bar.set_message(p.stage);
+            })
+        };
+        let result = self.download_many_with(specs, label, &sink);
+        bar.finish_and_clear();
+        result
+    }
+
+    pub fn download_many_with(
+        &self,
+        specs: Vec<FileSpec>,
+        label: &str,
+        sink: &Sink,
+    ) -> Result<usize> {
+        if specs.is_empty() {
+            return Ok(0);
+        }
+        let total_bytes = if specs.iter().all(|s| s.size.is_some()) {
+            specs.iter().filter_map(|s| s.size).sum()
+        } else {
+            0
+        };
+        let batch = Batch {
+            sink,
+            stage: label.to_string(),
+            files_done: AtomicU64::new(0),
+            files_total: specs.len() as u64,
+            bytes_done: AtomicU64::new(0),
+            bytes_total: total_bytes,
+            last_emit_ms: AtomicU64::new(0),
+        };
+        batch.emit(true);
+        let workers = specs.len().clamp(1, 16);
         let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(16)
+            .num_threads(workers)
             .build()
             .map_err(|e| Error::Install(e.to_string()))?;
         let errors: Vec<String> = pool.install(|| {
             specs
                 .par_iter()
-                .filter_map(|s| match self.download(s) {
-                    Ok(()) => {
-                        bar.inc(1);
-                        None
-                    }
-                    Err(e) => {
-                        bar.inc(1);
-                        Some(format!("{}: {e}", s.dest.display()))
-                    }
+                .filter_map(|s| match self.download_inner(s, Some(&batch)) {
+                    Ok(()) => None,
+                    Err(e) => Some(format!("{}: {e}", s.dest.display())),
                 })
                 .collect()
         });
-        bar.finish_and_clear();
+        batch.emit(true);
         if errors.is_empty() {
             Ok(specs.len())
         } else {
@@ -209,6 +292,57 @@ impl Http {
             )))
         }
     }
+}
+
+struct Batch<'a> {
+    sink: &'a Sink,
+    stage: String,
+    files_done: AtomicU64,
+    files_total: u64,
+    bytes_done: AtomicU64,
+    bytes_total: u64,
+    last_emit_ms: AtomicU64,
+}
+
+impl Batch<'_> {
+    fn file_done(&self, size: u64) {
+        if size > 0 {
+            self.bytes_done.fetch_add(size, Ordering::Relaxed);
+        }
+        self.files_done.fetch_add(1, Ordering::Relaxed);
+        self.emit(true);
+    }
+
+    fn emit(&self, force: bool) {
+        let now = now_ms();
+        let last = self.last_emit_ms.load(Ordering::Relaxed);
+        if !force && now.saturating_sub(last) < 80 {
+            return;
+        }
+        if self
+            .last_emit_ms
+            .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
+            .is_err()
+        {
+            return;
+        }
+        let progress = Progress {
+            stage: self.stage.clone(),
+            files_done: self.files_done.load(Ordering::Relaxed),
+            files_total: self.files_total,
+            bytes_done: self.bytes_done.load(Ordering::Relaxed),
+            bytes_total: self.bytes_total,
+            indeterminate: false,
+        };
+        (self.sink)(progress);
+    }
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 pub fn sha1_file(path: &Path) -> Result<String> {

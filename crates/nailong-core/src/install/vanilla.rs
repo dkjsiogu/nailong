@@ -2,6 +2,7 @@ use crate::error::{Error, Result};
 use crate::http::{FileSpec, Http};
 use crate::manifest::{AssetIndex, Context, VersionJson, library_specs_for};
 use crate::paths::{Root, write_atomic};
+use crate::progress::{Progress, Sink, noop};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -19,9 +20,14 @@ struct ManifestEntry {
 }
 
 pub fn install(root: &Root, mc: &str, mirror: &str) -> Result<()> {
+    install_with(root, mc, mirror, &noop())
+}
+
+pub fn install_with(root: &Root, mc: &str, mirror: &str, sink: &Sink) -> Result<()> {
     root.ensure()?;
     let http = Http::new(mirror)?;
     let ctx = Context::current();
+    (sink)(Progress::stage("读取版本信息"));
     println!("→ 解析 Minecraft {mc} 版本信息…");
     let manifest: Manifest = serde_json::from_value(http.get_json(VERSION_MANIFEST)?)
         .map_err(|e| Error::Install(format!("版本清单格式异常: {e}")))?;
@@ -53,13 +59,15 @@ pub fn install(root: &Root, mc: &str, mirror: &str) -> Result<()> {
         size: client.size,
         verify_existing: true,
     };
+    (sink)(Progress::stage("下载客户端"));
     println!("→ 下载客户端…");
-    http.download(&client_spec)?;
+    http.download_with(client_spec, "下载客户端", sink)?;
 
     // libraries
     let lib_specs = library_specs_for(root, &vj.libraries, &ctx);
+    (sink)(Progress::stage("下载运行库"));
     println!("→ 下载依赖库（{} 个）…", lib_specs.len());
-    http.download_many(lib_specs, "libraries")?;
+    http.download_many_with(lib_specs, "下载运行库", sink)?;
 
     // asset index
     let ai = vj
@@ -71,14 +79,19 @@ pub fn install(root: &Root, mc: &str, mirror: &str) -> Result<()> {
         .url
         .clone()
         .ok_or_else(|| Error::Unsupported("assetIndex 缺少 url".into()))?;
+    (sink)(Progress::stage("读取资源索引"));
     println!("→ 下载资源索引 {}…", ai.id);
-    http.download(&FileSpec {
-        url: index_url,
-        dest: index_path.clone(),
-        sha1: ai.sha1.clone(),
-        size: ai.size,
-        verify_existing: true,
-    })?;
+    http.download_with(
+        FileSpec {
+            url: index_url,
+            dest: index_path.clone(),
+            sha1: ai.sha1.clone(),
+            size: ai.size,
+            verify_existing: true,
+        },
+        "读取资源索引",
+        sink,
+    )?;
 
     // assets
     let index: Value = serde_json::from_slice(
@@ -109,20 +122,33 @@ pub fn install(root: &Root, mc: &str, mirror: &str) -> Result<()> {
         });
     }
     println!("→ 下载资源（{} 个文件）…", specs.len());
-    http.download_many(specs, "assets")?;
+    http.download_many_with(specs, "下载游戏资源", sink)?;
 
     // logging config
     if let Some(logging) = vj.logging.as_ref().and_then(|l| l.client.as_ref()) {
         let dest = root.assets().join("log_configs").join(&logging.file.id);
-        let _ = http.download(&FileSpec {
-            url: logging.file.url.clone(),
-            dest,
-            sha1: logging.file.sha1.clone(),
-            size: logging.file.size,
-            verify_existing: true,
-        });
+        (sink)(Progress::stage("下载日志配置"));
+        let _ = http.download_with(
+            FileSpec {
+                url: logging.file.url.clone(),
+                dest,
+                sha1: logging.file.sha1.clone(),
+                size: logging.file.size,
+                verify_existing: true,
+            },
+            "下载日志配置",
+            sink,
+        );
     }
 
+    (sink)(Progress {
+        stage: "安装完成".into(),
+        files_done: 1,
+        files_total: 1,
+        bytes_done: 1,
+        bytes_total: 1,
+        indeterminate: false,
+    });
     println!("✓ Minecraft {mc} 安装完成");
     Ok(())
 }

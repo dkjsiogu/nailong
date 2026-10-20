@@ -1,7 +1,7 @@
-# 14 · 原型实现状态（0.1.0）
+# 14 · 原型实现状态（0.1 → 0.2）
 
 > 日期：2026-10-20
-> 对应发布：GitHub Release `v0.1.0` 的 `nailong.exe`、`nailong_0.1.0_amd64.deb`
+> 对应发布：GitHub Release `v0.2.0` 的 `nailong.exe`、`nailong_0.2.0_amd64.deb`
 > 目的：把「设计稿」和「已经跑起来的代码」分开记账，避免把计划当成已完成。
 
 ## 1. 一句话结论
@@ -32,9 +32,9 @@
 | NeoForge 安装 | `core::install::neoforge` | **可用，但复用官方 installer** | 1.21.1 / 21.1.209 空目录安装成功 |
 | NeoForge 启动 | `core::launch` | 完成 | 到主菜单；纹理图集加载完成 |
 | CLI（list/java/info/install/launch） | `nailong-cli` | 完成 | 打包产物冒烟 |
-| GUI（实例列表、用户名/内存、安装、启动、日志） | `nailong-ui` | 可用原型 | Xvfb 下启动；xdotool 点击启动成功 |
+| GUI（版本下拉、安装进度、缺文件补全、启动、设置） | `nailong-ui` | 可用 | Xvfb 下走完安装 / 补全 / 启动；实际 NeoForge 到主菜单 |
 | Windows 交叉编译 | `x86_64-pc-windows-gnu` | 通过 | 无 MinGW DLL 依赖，仅系统 DLL |
-| 发布包 | GitHub Release `v0.1.0` | 完成 | 单 exe 11.4 MB / deb 4.2 MB |
+| 发布包 | GitHub Release `v0.2.0` | 完成（CI 构建） | 单 exe 约 12 MB / deb 约 4.2 MB |
 
 ### 2.1 实测记录
 
@@ -66,9 +66,9 @@
 |---|---|---|
 | Forge/NeoForge 原生 processors，外部 installer 仅兜底 | **直接调用官方 installer** | 安装阶段需要系统 Java、进度不可控、镜像不可控；下一步实现 processors 并保留兜底 |
 | 托管 JRE（Mojang runtime） | 只用系统 Java 21 | 用户需预装 Java；这是“开箱即用”目标的主要缺口 |
-| 异步 runtime + 事件总线 + 可取消任务 | 阻塞调用 + 线程；GUI 只显示状态文字 | 安装时 UI 会等待；下一步做进度事件与取消 |
+| 异步 runtime + 事件总线 + 可取消任务 | 阻塞调用 + 线程 + 进度回调；暂无取消 | 下载与安装已有阶段/字节进度；下一步做取消令牌 |
 | 实例（Instance）抽象、配置存储 | 直接以版本目录为单位；无配置文件 | 目前只能切版本，不能多实例隔离 |
-| 完整 GUI（路由/向导/设置/下载中心） | 单页最小界面 | 只够验证启动链路 |
+| 完整 GUI（路由/向导/设置/下载中心） | 单页、版本下拉、进度页、补全提示 | 核心路径清楚；下载中心/设置页未做 |
 | Fabric / Forge / 整合包 | 未实现 | 下一步先 Fabric，再 Forge |
 | 微软正版登录 | 未实现（离线） | 按决定推迟到 M3.5 |
 | 自动更新 / 签名 / 崩溃报告 | 未实现 | 发布前补齐 |
@@ -79,7 +79,7 @@
 1. **Windows 只在 Linux 上交叉编译通过**，还没有 Windows 实机启动记录；OpenGL 驱动、路径、Java 发现都可能出问题。
 2. **安装器路径**依赖官方 installer 的 `--installClient` 行为；NeoForge 改参数或需要网络访问时可能失败。
 3. **离线账户会触发 401**：游戏向 Mojang 请求 user properties 被拒，日志有 `InvalidCredentialsException`，但不阻塞单人游戏；后续可关闭该请求或接正版登录。
-4. **GUI 安装期间无进度条**，大文件下载时看起来“卡住”；CLI 会打印阶段。
+4. **安装没有取消按钮**；关闭窗口可中断，重新打开会检测并补全。
 5. **GUI 内存 135 MB**（软件渲染）高于 120 MB 目标；需要真实 GPU 复测，或减少字体/纹理占用。
 6. **无断点续传**：当前是“已存在且哈希正确则跳过”，不是 HTTP Range 续传；中断后重跑会重下未完成文件。
 7. **无安装锁**：并发启动两个安装可能写同一目录；原型未处理。
@@ -88,7 +88,7 @@
 ## 5. 下一步（按优先级）
 
 1. **Windows 实机验证**：在一台 Windows 10/11 + Java 21 上跑安装与启动，记录失败点。
-2. **GUI 进度与取消**：把 core 的下载/安装回调接到 UI，至少显示“当前文件/总数/字节”。
+2. **安装取消**：增加取消令牌，让用户在下载/安装中安全停止。
 3. **NeoForge 原生安装**：实现 processors（downloads、srg 合并、patch、outputs 校验），官方 installer 保留为开关。
 4. **Fabric 支持**：profile JSON + 库下载，作为第二个加载器验证抽象。
 5. **测试与 CI**：版本 JSON 夹具、规则/合并/argv 快照、mock HTTP（重试/哈希失败）、`fmt/clippy/test`。

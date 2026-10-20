@@ -308,6 +308,12 @@ pub fn load(root: &Root, id: &str) -> Result<VersionJson> {
     serde_json::from_slice(&data).map_err(|e| json(&path, e))
 }
 
+/// Merge the inheritance chain without requiring the client jar to exist.
+/// Used by the health check to report a missing client instead of failing.
+pub fn merged_chain(root: &Root, id: &str) -> Result<(VersionJson, Vec<String>)> {
+    resolve_inner(root, id, &mut Vec::new())
+}
+
 pub fn resolve(root: &Root, id: &str, _ctx: &Context) -> Result<Resolved> {
     let mut stack = Vec::new();
     let (merged, chain) = resolve_inner(root, id, &mut stack)?;
@@ -455,10 +461,10 @@ impl Library {
         if let Some(natives) = &self.natives {
             let template = natives.get(ctx.os.name())?;
             let classifier = template.replace("${arch}", ctx.arch.bits());
-            if let Some(dl) = &self.downloads {
-                if let Some(a) = dl.classifiers.as_ref().and_then(|m| m.get(&classifier)) {
-                    return Some((classifier, a.clone()));
-                }
+            if let Some(dl) = &self.downloads
+                && let Some(a) = dl.classifiers.as_ref().and_then(|m| m.get(&classifier))
+            {
+                return Some((classifier, a.clone()));
             }
             return None;
         }
@@ -548,30 +554,30 @@ fn rule_matches(rule: &Rule, ctx: &Context) -> bool {
                 return false;
             }
         }
-        if let Some(arch) = &os.arch {
-            if normalize_arch(arch) != ctx.arch.name() {
-                return false;
-            }
+        if let Some(arch) = &os.arch
+            && normalize_arch(arch) != ctx.arch.name()
+        {
+            return false;
         }
         if os.version.is_some() || os.version_range.is_some() {
             let Some(version) = &ctx.os_version else {
                 return false;
             };
-            if let Some(v) = &os.version {
-                if !version_matches_exact(version, v) {
-                    return false;
-                }
+            if let Some(v) = &os.version
+                && !version_matches_exact(version, v)
+            {
+                return false;
             }
             if let Some(r) = &os.version_range {
-                if let Some(min) = &r.min {
-                    if compare_versions(version, min) < 0 {
-                        return false;
-                    }
+                if let Some(min) = &r.min
+                    && compare_versions(version, min) < 0
+                {
+                    return false;
                 }
-                if let Some(max) = &r.max {
-                    if compare_versions(version, max) > 0 {
-                        return false;
-                    }
+                if let Some(max) = &r.max
+                    && compare_versions(version, max) > 0
+                {
+                    return false;
                 }
             }
         }

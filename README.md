@@ -4,8 +4,8 @@
 
 轻量的 Minecraft 启动器，使用 Rust 编写。
 
-> 当前版本：**0.1.0 · NeoForge 预览版**
-> 目标：单文件、无额外运行时、低内存、快速启动；先跑通一条完整路径，再扩展。
+> 当前版本：**0.2.0 · NeoForge 预览版**
+> 目标：单文件、无额外运行时、低内存、快速启动；版本可选、安装可见、中断可补。
 
 ## 下载
 
@@ -14,24 +14,24 @@
 | 平台 | 文件 | 说明 |
 |---|---|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | **单个 exe，不用解压**，双击即用 |
-| Linux x64 (deb) | [nailong_0.1.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.1.0_amd64.deb) | amd64，兼容 Ubuntu 24.04+ |
+| Linux x64 (deb) | [nailong_0.2.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.2.0_amd64.deb) | amd64，兼容 Ubuntu 24.04+ |
 
 校验值：[SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS)。
 
 ### Windows
 
 1. 下载 `nailong.exe`，放到任意目录，双击运行；
-2. 第一次使用：展开“安装 NeoForge”，保持默认 `1.21.1 / 21.1.209`，点“开始安装”；
-3. 安装完成后选中实例，填用户名，点“启动”。
+2. 第一次打开就是安装页：用下拉框选 Minecraft 和 NeoForge 版本，点“安装”；
+3. 进度条走完后会自动回到主页，点“启动游戏”。
 
-需要系统里有 **Java 21**。启动器会自动查找；没找到会在状态栏提示。
+需要系统里有 **Java 21**。启动器会自动查找；没找到时界面上会提示。
 
 > exe 未做代码签名，Windows SmartScreen 可能提示“未知发布者”；选择“更多信息 → 仍要运行”即可。杀毒软件误报也偶有发生。
 
 ### Linux（Debian / Ubuntu）
 
 ```bash
-sudo apt install ./nailong_0.1.0_amd64.deb
+sudo apt install ./nailong_0.2.0_amd64.deb
 nailong
 ```
 
@@ -55,18 +55,20 @@ sudo apt remove nailong
 - **安装 Minecraft 原版**（已验证 1.21.1）
 - **安装 NeoForge**（已验证 1.21.1 / 21.1.209）
 - **离线账户启动**（单人 / 局域网）
-- **图形界面**：选实例、填用户名/内存、安装 NeoForge、一键启动
+- **版本选择**：Minecraft / NeoForge 都是下拉框，自动从官方清单读取，不用手输
+- **安装进度**：阶段、百分比、已下载 / 总大小、文件数
+- **中断可补**：启动时检查缺哪些文件；缺资源会显示“补全资源”，修完再启动
+- **图形界面**：一屏完成选版本、安装、启动；玩家名/内存收在下方一行
 - **命令行**：安装、启动、查看 Java、打印启动计划
-- **核心单元测试**：版本规则、Maven 坐标、natives、离线 UUID（`cargo test --workspace`）
 - **Windows + Linux**：Windows 为单 exe；Linux 提供 deb，安装后可直接从应用菜单启动
 
 | 产物 | 大小 | 说明 |
 |---|---:|---|
-| Windows GUI `nailong.exe` | 11.4 MB | 单文件，无额外运行库 |
-| Linux GUI（deb 内） | 11.6 MB | 单二进制 |
-| `nailong_0.1.0_amd64.deb` | 4.2 MB | 含桌面图标、菜单项、GPL 许可 |
+| Windows GUI `nailong.exe` | 约 12 MB | 单文件，无额外运行库 |
+| Linux GUI（deb 内） | 约 11.6 MB | 单二进制 |
+| `nailong_0.2.0_amd64.deb` | 约 4.2 MB | 含桌面图标、菜单项、GPL 许可 |
 
-> 实机验证：Linux（Xvfb + Mesa）安装 NeoForge 1.21.1 并启动到主菜单；Windows 已交叉编译并检查依赖，但尚未在 Windows 实机启动，欢迎帮忙试。
+> 实机验证：Linux（Xvfb + Mesa）走完“选版本 → 安装 → 进度 → 启动 NeoForge 1.21.1 到主菜单”；删除资源后会提示缺失并可补全。Windows 由 CI 原生编译，尚未在 Windows 实机启动，欢迎帮忙试。
 
 ## 命令行（可选）
 
@@ -86,7 +88,7 @@ deb 只装了 GUI；如果你自己构建，会同时得到 CLI：
 - **CI**：`fmt + clippy + test`，每次 push / PR 自动跑
 - **Release**：手动运行 `Release` workflow（或 push `v*` tag），自动构建 Windows exe 和 Linux deb，并上传到对应 Release
 
-本地构建：
+本地构建（Rust 1.95+）：
 
 
 ```bash
@@ -109,7 +111,7 @@ cargo build --release -p nailong-ui -p nailong-cli
 - 微软正版登录（client id / 审批未就绪；先离线）
 - Fabric / Forge / 整合包（下一步）
 - 自动更新、模组管理、皮肤
-- 图形界面的安装进度条（目前只有状态文字；CLI 会打印阶段）
+- 安装取消按钮（关闭窗口即可中断；下次启动会检测并补全）
 - NeoForge 安装内置化：当前复用 **NeoForge 官方安装器**做一次性安装，启动器本体不依赖它；下一步换成内置 processors
 
 ## 代码结构

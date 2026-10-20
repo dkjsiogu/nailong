@@ -3,8 +3,10 @@ use clap::{Parser, Subcommand};
 use nailong_core::install::{neoforge, vanilla};
 use nailong_core::launch::{self, LaunchOptions};
 use nailong_core::manifest::{self, Context as ResolveContext};
+use nailong_core::progress::{Progress, Sink, from_fn};
 use nailong_core::{Root, java};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -133,14 +135,17 @@ fn main() -> anyhow::Result<()> {
                 r.asset_index.as_ref().map(|a| a.id.clone())
             );
         }
-        Commands::Install { target } => match target {
-            InstallTarget::Vanilla { mc } => {
-                vanilla::install(&root, &mc, &cli.mirror)?;
+        Commands::Install { target } => {
+            let sink = cli_progress();
+            match target {
+                InstallTarget::Vanilla { mc } => {
+                    vanilla::install_with(&root, &mc, &cli.mirror, &sink)?;
+                }
+                InstallTarget::Neoforge { mc, version } => {
+                    neoforge::install_with(&root, &mc, &version, &cli.mirror, &sink)?;
+                }
             }
-            InstallTarget::Neoforge { mc, version } => {
-                neoforge::install(&root, &mc, &version, &cli.mirror)?;
-            }
-        },
+        }
         Commands::Launch {
             profile,
             username,
@@ -173,4 +178,25 @@ fn main() -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+fn cli_progress() -> Sink {
+    let last = Arc::new(Mutex::new((String::new(), u32::MAX)));
+    from_fn(move |p: Progress| {
+        let bucket = if p.indeterminate {
+            0
+        } else {
+            (p.fraction() * 100.0) as u32 / 5
+        };
+        if let Ok(mut last) = last.lock()
+            && (last.0 != p.stage || last.1 != bucket)
+        {
+            *last = (p.stage.clone(), bucket);
+            if p.indeterminate {
+                eprintln!("  {}", p.stage);
+            } else {
+                eprintln!("  {} {}%", p.stage, (p.fraction() * 100.0) as u32);
+            }
+        }
+    })
 }

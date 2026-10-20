@@ -5,6 +5,7 @@ pub mod java;
 pub mod launch;
 pub mod manifest;
 pub mod paths;
+pub mod progress;
 
 pub use error::{Error, Result};
 pub use paths::Root;

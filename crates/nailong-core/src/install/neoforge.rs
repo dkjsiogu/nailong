@@ -3,6 +3,7 @@ use crate::http::{FileSpec, Http};
 use crate::install::vanilla;
 use crate::java;
 use crate::paths::Root;
+use crate::progress::{Progress, Sink, noop};
 use std::io::Write;
 use std::process::{Command, Stdio};
 
@@ -20,27 +21,37 @@ pub fn installer_url(version: &str) -> (String, String) {
 }
 
 pub fn install(root: &Root, mc: &str, version: &str, mirror: &str) -> Result<()> {
-    root.ensure()?;
-    // 1) 原版必须先就位
-    if !root.version_json(mc).exists() || !root.client_jar(mc).exists() {
-        println!("→ 先安装原版 {mc}");
-        vanilla::install(root, mc, mirror)?;
-    }
+    install_with(root, mc, version, mirror, &noop())
+}
 
-    // 2) 下载官方 installer
+pub fn install_with(root: &Root, mc: &str, version: &str, mirror: &str, sink: &Sink) -> Result<()> {
+    root.ensure()?;
+
+    // Always run the vanilla pass: it verifies and completes missing resources.
+    // This is what makes "继续安装" repair an interrupted download.
+    (sink)(Progress::stage("检查原版资源"));
+    println!("→ 检查 / 补全原版 {mc}");
+    vanilla::install_with(root, mc, mirror, sink)?;
+
+    // Download the official installer once.
     let (url, file) = installer_url(version);
     let dest = root.cache().join("installers").join(&file);
     let http = Http::new(mirror)?;
+    (sink)(Progress::stage("下载 NeoForge 安装器"));
     println!("→ 获取 NeoForge {version} 安装器…");
-    http.download(&FileSpec {
-        url,
-        dest: dest.clone(),
-        sha1: None,
-        size: None,
-        verify_existing: false,
-    })?;
+    http.download_with(
+        FileSpec {
+            url,
+            dest: dest.clone(),
+            sha1: None,
+            size: None,
+            verify_existing: false,
+        },
+        "下载 NeoForge 安装器",
+        sink,
+    )?;
 
-    // 3) 运行安装器（一次性；启动器本体仍然是原生程序）
+    // Run the official installer (one-time; the launcher stays native).
     let javas = java::find_all();
     let java = javas
         .iter()
@@ -48,6 +59,7 @@ pub fn install(root: &Root, mc: &str, version: &str, mirror: &str) -> Result<()>
         .or_else(|| javas.iter().find(|j| j.major >= 21))
         .or_else(|| javas.first())
         .ok_or(Error::JavaNotFound(21))?;
+    (sink)(Progress::stage("运行 NeoForge 安装器"));
     println!("→ 使用 {} 运行 NeoForge 安装器…", java.label());
 
     let profiles = root.dir().join("launcher_profiles.json");
@@ -94,6 +106,14 @@ pub fn install(root: &Root, mc: &str, version: &str, mirror: &str) -> Result<()>
             log_path.display()
         )));
     }
+    (sink)(Progress {
+        stage: "安装完成".into(),
+        files_done: 1,
+        files_total: 1,
+        bytes_done: 1,
+        bytes_total: 1,
+        indeterminate: false,
+    });
     println!("✓ NeoForge {version} 安装完成（profile: {profile_id}）");
     Ok(())
 }

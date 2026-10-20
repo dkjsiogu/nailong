@@ -441,10 +441,11 @@ fn prepare_natives(root: &Root, resolved: &Resolved, ctx: &Context) -> Result<Pa
     // 26.x: -Djava.library.path=${natives_directory}/java
     for arg in expand_args(&resolved.arguments.jvm, ctx) {
         if let Some(v) = arg.strip_prefix("-Djava.library.path=${natives_directory}") {
-            if let Some(sub) = v.strip_prefix('/') {
-                if !sub.is_empty() && !sub.contains("..") {
-                    target = root_dir.join(sub.replace('/', std::path::MAIN_SEPARATOR_STR));
-                }
+            if let Some(sub) = v.strip_prefix('/')
+                && !sub.is_empty()
+                && !sub.contains("..")
+            {
+                target = root_dir.join(sub.replace('/', std::path::MAIN_SEPARATOR_STR));
             }
             break;
         }
