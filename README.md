@@ -55,7 +55,7 @@ sudo apt remove nailong
 - **安装 Minecraft 原版**（已验证 1.21.1）
 - **安装 Fabric / NeoForge / Forge**（已验证 1.21.1：Fabric 0.19.5、NeoForge 21.1.209、Forge 52.1.20）
 - **Forge / NeoForge 原生安装**：Rust 读取安装描述并逐个执行客户端 processor，不再调用官方安装器
-- **安装数据按需读取**：只取 `install_profile`、`version.json` 和客户端补丁（约 3 MB），不再下载 7–9 MB 的完整安装器；镜像不支持分段读取时自动回退
+- **安装数据按需读取**：只取 `install_profile`、`version.json` 和客户端补丁（约 3 MB），不再下载 6–9 MB 的完整安装器；镜像不支持分段读取时自动回退
 - **四种安装方式**：安装页按 Minecraft → Fabric → NeoForge → Forge → 原版排列，版本全部下拉选择
 - **Modrinth 整合包**：拖入或选择 `.mrpack`，自动装加载器、模组和覆盖文件，生成独立游戏目录
 - **离线账户启动**（单人 / 局域网）

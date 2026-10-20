@@ -13,7 +13,7 @@ const MAX_ENTRY: u64 = 128 * 1024 * 1024;
 
 /// Fetch only the data a modern Forge/NeoForge install needs.
 ///
-/// The official installer is a 7–9 MB zip, but a client install uses just
+/// The official installer is a 6–9 MB zip, but a client install uses just
 /// `install_profile.json`, `version.json` and the client binary patch.  Read
 /// those entries with HTTP ranges, cache a small zip, and never keep the full
 /// installer.  Servers that do not implement ranges (some mirrors) fall back
