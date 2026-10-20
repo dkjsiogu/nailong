@@ -34,7 +34,7 @@
 | CLI（list/java/info/install/launch） | `nailong-cli` | 完成 | 打包产物冒烟 |
 | GUI（实例列表、用户名/内存、安装、启动、日志） | `nailong-ui` | 可用原型 | Xvfb 下启动；xdotool 点击启动成功 |
 | Windows 交叉编译 | `x86_64-pc-windows-gnu` | 通过 | 无 MinGW DLL 依赖，仅系统 DLL |
-| 发布包 | `dist/` | 完成 | 6.9 MB zip / 7.2 MB tar.gz |
+| 发布包 | GitHub Release `v0.1.0` | 完成 | 单 exe 11.4 MB / deb 4.2 MB |
 
 ### 2.1 实测记录
 
@@ -43,7 +43,7 @@
   `Setting user: Steve`、`Backend library: LWJGL version 3.3.3+5`、`Created: ... texture atlas`。
   无显示器环境用 Xvfb；音频设备缺失只产生 ALSA 警告，不影响进入游戏。
 - **GUI**：打包后的 `nailong` 在 Xvfb 中持续运行；通过 xdotool 点击“启动”后游戏进程到达主菜单。
-- **体积**：Linux GUI 11.6 MB / CLI 4.9 MB；Windows GUI 10.5 MB / CLI 4.8 MB（未压缩）。
+- **体积**：Linux GUI 11.6 MB / CLI 4.9 MB；Windows GUI 11.4 MB（CI 原生 MSVC 构建）/ CLI 4.8 MB（未压缩）。
 - **内存**：Linux + Xvfb + llvmpipe 下 GUI 空闲 RSS 约 **135 MB**。这是软件渲染上界，未达到 120 MB 目标；Windows 真实 GPU 待测。
 
 ### 2.2 关键实现细节
