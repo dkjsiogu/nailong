@@ -47,10 +47,8 @@ install -Dm644 README.md "$stage/usr/share/doc/nailong/README.md"
 install -Dm644 LICENSE "$stage/usr/share/doc/nailong/LICENSE"
 
 for size in 16 24 32 48 64 128 256 512; do
-  icon_dir="$stage/usr/share/icons/hicolor/${size}x${size}/apps"
-  mkdir -p "$icon_dir"
-  convert -background none packaging/linux/io.github.dkjsiogu.nailong.svg \
-    -resize "${size}x${size}" -depth 8 "$icon_dir/io.github.dkjsiogu.nailong.png"
+  install -Dm644 "packaging/linux/icons/io.github.dkjsiogu.nailong-${size}.png" \
+    "$stage/usr/share/icons/hicolor/${size}x${size}/apps/io.github.dkjsiogu.nailong.png"
 done
 
 cat > "$stage/usr/share/doc/nailong/changelog.Debian" <<EOF

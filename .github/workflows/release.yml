@@ -36,7 +36,7 @@ jobs:
             libgl1-mesa-dev libegl1-mesa-dev \
             libx11-dev libxext-dev libxcursor-dev libxi-dev libxrandr-dev \
             libxkbcommon-dev libxkbcommon-x11-dev \
-            imagemagick binutils dpkg-dev
+            binutils dpkg-dev
 
       - uses: dtolnay/rust-toolchain@stable
 
