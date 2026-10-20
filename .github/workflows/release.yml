@@ -1,0 +1,123 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to create or update (e.g. v0.1.0)"
+        required: true
+        default: "v0.1.0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    name: Linux deb
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config \
+            libgl1-mesa-dev libegl1-mesa-dev \
+            libx11-dev libxext-dev libxcursor-dev libxi-dev libxrandr-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev \
+            imagemagick binutils dpkg-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-linux-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build .deb
+        run: ./scripts/build-deb.sh
+
+      - name: Show package
+        run: |
+          ls -lh dist/nailong_*.deb
+          dpkg-deb --info dist/nailong_*.deb | sed -n '1,18p'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nailong-linux-deb
+          path: dist/nailong_*.deb
+          if-no-files-found: error
+          retention-days: 7
+
+  windows:
+    name: Windows exe
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-windows-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build GUI
+        run: cargo build --release -p nailong-ui
+
+      - name: Stage single exe
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/release/nailong-ui.exe dist/nailong.exe
+          Get-Item dist/nailong.exe | Format-List Name,Length,VersionInfo
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nailong-windows-exe
+          path: dist/nailong.exe
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish release
+    needs: [linux, windows]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Assemble assets
+        run: |
+          mkdir -p release
+          cp artifacts/nailong-linux-deb/*.deb release/
+          cp artifacts/nailong-windows-exe/nailong.exe release/
+          cd release
+          sha256sum nailong.exe ./*.deb > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create or update GitHub release
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" release/* --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" release/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "nailong ${TAG#v}" \
+              --generate-notes
+          fi

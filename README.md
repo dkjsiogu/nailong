@@ -1,5 +1,7 @@
 # nailong
 
+[![CI](https://github.com/dkjsiogu/nailong/actions/workflows/ci.yml/badge.svg)](https://github.com/dkjsiogu/nailong/actions/workflows/ci.yml)
+
 轻量的 Minecraft 启动器，使用 Rust 编写。
 
 > 当前版本：**0.1.0 · NeoForge 预览版**
@@ -77,7 +79,15 @@ deb 只装了 GUI；如果你自己构建，会同时得到 CLI：
 ./target/release/nailong --root /path/to/.minecraft launch neoforge-21.1.209 --print-plan --dry-run
 ```
 
-## 从源码构建
+## 构建
+
+发布产物由 GitHub Actions 构建，不占本机性能：
+
+- **CI**：`fmt + clippy + test`，每次 push / PR 自动跑
+- **Release**：手动运行 `Release` workflow（或 push `v*` tag），自动构建 Windows exe 和 Linux deb，并上传到对应 Release
+
+本地构建：
+
 
 ```bash
 # GUI + CLI
