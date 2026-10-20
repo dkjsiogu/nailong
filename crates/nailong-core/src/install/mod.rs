@@ -3,4 +3,5 @@ pub mod fabric;
 pub mod forge;
 pub mod health;
 pub mod neoforge;
+pub mod processors;
 pub mod vanilla;

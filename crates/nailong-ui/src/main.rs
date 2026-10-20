@@ -11,6 +11,8 @@ use std::time::Duration;
 
 const ACCENT: egui::Color32 = egui::Color32::from_rgb(242, 193, 78);
 const CARD: egui::Color32 = egui::Color32::from_rgb(24, 27, 33);
+const PANEL: egui::Color32 = egui::Color32::from_rgb(20, 22, 27);
+const LINE: egui::Color32 = egui::Color32::from_rgb(42, 46, 56);
 const MUTED: egui::Color32 = egui::Color32::from_rgb(145, 148, 156);
 const WARN: egui::Color32 = egui::Color32::from_rgb(242, 160, 90);
 
@@ -354,7 +356,6 @@ impl App {
                     .map_err(|e| e.to_string()),
                 LoaderKind::NeoForge => {
                     neoforge::install_with(&root, &mc, &version, "official", &sink)
-                        .map(|()| target.clone())
                         .map_err(|e| e.to_string())
                 }
                 LoaderKind::Forge => forge::install_with(&root, &mc, &version, "official", &sink)
@@ -486,29 +487,34 @@ impl App {
     }
 
     fn top_bar(&mut self, ui: &mut egui::Ui) {
-        egui::Panel::top("top").default_size(62.0).show(ui, |ui| {
-            ui.horizontal_centered(|ui| {
-                ui.add_space(20.0);
-                ui.label(
-                    egui::RichText::new("nailong")
-                        .size(23.0)
-                        .strong()
-                        .color(ACCENT),
-                );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.add_space(20.0);
-                    if matches!(self.busy, Some(Task::Launch)) {
-                        ui.spinner();
-                    } else if !self.show_install
-                        && !self.rows.is_empty()
-                        && self.busy.is_none()
-                        && ui.button("+ 安装").clicked()
-                    {
-                        self.open_install();
-                    }
+        egui::Panel::top("top")
+            .default_size(64.0)
+            .frame(egui::Frame::new().fill(PANEL))
+            .show(ui, |ui| {
+                ui.horizontal_centered(|ui| {
+                    ui.add_space(22.0);
+                    logo_mark(ui);
+                    ui.add_space(9.0);
+                    ui.label(
+                        egui::RichText::new("nailong")
+                            .size(23.0)
+                            .strong()
+                            .color(ACCENT),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.add_space(22.0);
+                        if matches!(self.busy, Some(Task::Launch)) {
+                            ui.spinner();
+                        } else if !self.show_install
+                            && !self.rows.is_empty()
+                            && self.busy.is_none()
+                            && ghost_button(ui, "+ 安装").clicked()
+                        {
+                            self.open_install();
+                        }
+                    });
                 });
             });
-        });
     }
 
     fn main_view(&mut self, ui: &mut egui::Ui) {
@@ -524,13 +530,14 @@ impl App {
             ui.vertical(|ui| {
                 ui.set_width(width);
 
+                ui.label(egui::RichText::new("游戏版本").size(12.0).color(MUTED));
+                ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("版本").color(MUTED));
                     let mut chosen = row.id.clone();
                     let rows = self.rows.clone();
                     egui::ComboBox::from_id_salt("installed_version")
-                        .selected_text(row.label.clone())
-                        .width(360.0)
+                        .selected_text(egui::RichText::new(&row.label).size(17.0).strong())
+                        .width(430.0)
                         .show_ui(ui, |ui| {
                             for r in &rows {
                                 ui.selectable_value(&mut chosen, r.id.clone(), r.label.clone());
@@ -541,11 +548,10 @@ impl App {
                     }
                 });
 
-                ui.add_space(26.0);
+                ui.add_space(30.0);
                 if row.health.missing > 0 {
-                    egui::Frame::group(ui.style())
-                        .inner_margin(egui::Margin::same(16))
-                        .show(ui, |ui| {
+                    card().show(ui, |ui| {
+                        ui.vertical_centered(|ui| {
                             ui.label(
                                 egui::RichText::new(format!(
                                     "资源不完整，缺少 {} 个文件",
@@ -554,24 +560,26 @@ impl App {
                                 .size(15.0)
                                 .color(WARN),
                             );
-                            ui.add_space(12.0);
-                            let mut repair = false;
+                            ui.add_space(14.0);
                             if primary_button(ui, "补全资源", true) {
-                                repair = true;
-                            }
-                            if repair {
                                 self.start_repair(row.clone());
                             }
                         });
+                    });
                 } else {
                     let launching = matches!(self.busy, Some(Task::Launch));
                     if launching {
-                        ui.horizontal(|ui| {
+                        ui.vertical_centered(|ui| {
                             ui.spinner();
+                            ui.add_space(6.0);
                             ui.label(egui::RichText::new("正在启动游戏…").size(15.0));
                         });
-                    } else if primary_button(ui, "启动游戏", self.busy.is_none()) {
-                        self.start_launch();
+                    } else {
+                        ui.vertical_centered(|ui| {
+                            if primary_button(ui, "启动游戏", self.busy.is_none()) {
+                                self.start_launch();
+                            }
+                        });
                     }
                 }
 
@@ -591,24 +599,20 @@ impl App {
                     );
                 }
 
-                ui.add_space(30.0);
-                egui::Frame::group(ui.style())
-                    .inner_margin(egui::Margin::same(16))
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("玩家名").color(MUTED));
-                            ui.add(
-                                egui::TextEdit::singleline(&mut self.username).desired_width(170.0),
-                            );
-                            ui.add_space(24.0);
-                            ui.label(egui::RichText::new("内存").color(MUTED));
-                            ui.add(
-                                egui::DragValue::new(&mut self.memory)
-                                    .range(1024..=16384)
-                                    .suffix(" MB"),
-                            );
-                        });
+                ui.add_space(36.0);
+                card().show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("玩家名").color(MUTED));
+                        ui.add(egui::TextEdit::singleline(&mut self.username).desired_width(170.0));
+                        ui.add_space(24.0);
+                        ui.label(egui::RichText::new("内存").color(MUTED));
+                        ui.add(
+                            egui::DragValue::new(&mut self.memory)
+                                .range(1024..=16384)
+                                .suffix(" MB"),
+                        );
                     });
+                });
                 if !self.java_ok {
                     java_warning(ui);
                 }
@@ -645,34 +649,38 @@ impl App {
                 ui.set_width(width);
 
                 if let Some(target) = self.repair_target.clone() {
-                    ui.label(egui::RichText::new("安装未完成").size(26.0).strong());
+                    ui.label(egui::RichText::new("安装未完成").size(28.0).strong());
                     ui.add_space(6.0);
                     ui.label(egui::RichText::new(target.label()).color(MUTED));
-                    ui.add_space(18.0);
-                    if let Some(err) = &self.error {
-                        ui.add(
-                            egui::Label::new(
-                                egui::RichText::new(err)
-                                    .color(egui::Color32::from_rgb(230, 120, 110)),
-                            )
-                            .wrap(),
-                        );
-                        ui.add_space(16.0);
-                    }
-                    if primary_button(ui, "继续安装", self.busy.is_none()) {
-                        self.start_install_worker(target.mc, target.loader, target.version);
-                    }
-                    ui.add_space(8.0);
-                    if ui.button("返回").clicked() {
-                        self.show_install = false;
-                        self.repair_target = None;
-                        self.error = None;
-                    }
+                    ui.add_space(20.0);
+                    card().show(ui, |ui| {
+                        if let Some(err) = &self.error {
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(err)
+                                        .color(egui::Color32::from_rgb(230, 120, 110)),
+                                )
+                                .wrap(),
+                            );
+                            ui.add_space(16.0);
+                        }
+                        ui.vertical_centered(|ui| {
+                            if primary_button(ui, "继续安装", self.busy.is_none()) {
+                                self.start_install_worker(target.mc, target.loader, target.version);
+                            }
+                            ui.add_space(6.0);
+                            if ui.button("返回").clicked() {
+                                self.show_install = false;
+                                self.repair_target = None;
+                                self.error = None;
+                            }
+                        });
+                    });
                     return;
                 }
 
-                ui.label(egui::RichText::new("安装游戏").size(26.0).strong());
-                ui.add_space(18.0);
+                ui.label(egui::RichText::new("安装游戏").size(28.0).strong());
+                ui.add_space(20.0);
 
                 let catalog = self
                     .catalog
@@ -684,104 +692,104 @@ impl App {
                 let mut nv = self.install_neoforge.clone();
                 let mut gv = self.install_forge.clone();
 
-                egui::Frame::group(ui.style())
-                    .inner_margin(egui::Margin::same(20))
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.add_sized([110.0, 24.0], egui::Label::new("Minecraft"));
-                            egui::ComboBox::from_id_salt("install_mc")
-                                .selected_text(mc.clone())
-                                .width(250.0)
-                                .show_ui(ui, |ui| {
-                                    for v in &catalog.minecraft {
-                                        ui.selectable_value(&mut mc, v.clone(), v);
-                                    }
-                                });
-                        });
-                        if mc != self.install_mc {
-                            self.install_mc = mc.clone();
-                            fv = preferred_fabric(&catalog);
-                            nv = preferred_neoforge(&catalog, &mc);
-                            gv = preferred_forge(&catalog, &mc);
-                            if !available(&catalog, kind, &mc) {
-                                kind = preferred_kind(&catalog, &mc);
-                            }
-                        }
-
-                        ui.add_space(8.0);
-                        loader_row_fabric(ui, &catalog, &mc, &mut kind, &mut fv);
-                        ui.add_space(6.0);
-                        loader_row_neoforge(ui, &catalog, &mc, &mut kind, &mut nv);
-                        ui.add_space(6.0);
-                        loader_row_forge(ui, &catalog, &mc, &mut kind, &mut gv);
-                        ui.add_space(6.0);
-                        ui.horizontal(|ui| {
-                            if ui
-                                .add_sized(
-                                    [110.0, 24.0],
-                                    egui::RadioButton::new(kind == LoaderKind::Vanilla, "原版"),
-                                )
-                                .clicked()
-                            {
-                                kind = LoaderKind::Vanilla;
-                            }
-                            ui.label(egui::RichText::new("不装加载器").color(MUTED).size(12.0));
-                        });
-
-                        // Reserve the status line so loading / error text does not
-                        // move the install button while the user is aiming at it.
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(ui.available_width(), 24.0),
-                            egui::Layout::left_to_right(egui::Align::Center),
-                            |ui| {
-                                if self.catalog_loading {
-                                    ui.spinner();
-                                    ui.label(egui::RichText::new("获取版本…").color(MUTED));
-                                } else if let Some(err) = &self.catalog_error {
-                                    ui.label(egui::RichText::new(err).size(11.5).color(MUTED));
+                card().inner_margin(22).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.add_sized([110.0, 24.0], egui::Label::new("Minecraft"));
+                        egui::ComboBox::from_id_salt("install_mc")
+                            .selected_text(mc.clone())
+                            .width(250.0)
+                            .show_ui(ui, |ui| {
+                                for v in &catalog.minecraft {
+                                    ui.selectable_value(&mut mc, v.clone(), v);
                                 }
-                            },
-                        );
+                            });
+                    });
+                    if mc != self.install_mc {
+                        self.install_mc = mc.clone();
+                        fv = preferred_fabric(&catalog);
+                        nv = preferred_neoforge(&catalog, &mc);
+                        gv = preferred_forge(&catalog, &mc);
+                        if !available(&catalog, kind, &mc) {
+                            kind = preferred_kind(&catalog, &mc);
+                        }
+                    }
 
-                        // Persist selector changes every frame. Otherwise clicking a
-                        // radio/combo would be reverted on the next repaint.
-                        self.install_kind = kind;
-                        self.install_fabric = fv.clone();
-                        self.install_neoforge = nv.clone();
-                        self.install_forge = gv.clone();
+                    ui.add_space(8.0);
+                    loader_row_fabric(ui, &catalog, &mc, &mut kind, &mut fv);
+                    ui.add_space(6.0);
+                    loader_row_neoforge(ui, &catalog, &mc, &mut kind, &mut nv);
+                    ui.add_space(6.0);
+                    loader_row_forge(ui, &catalog, &mc, &mut kind, &mut gv);
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_sized(
+                                [110.0, 24.0],
+                                egui::RadioButton::new(kind == LoaderKind::Vanilla, "原版"),
+                            )
+                            .clicked()
+                        {
+                            kind = LoaderKind::Vanilla;
+                        }
+                        ui.label(egui::RichText::new("不装加载器").color(MUTED).size(12.0));
+                    });
 
-                        let version = match kind {
-                            LoaderKind::Vanilla => String::new(),
-                            LoaderKind::Fabric => fv.clone(),
-                            LoaderKind::NeoForge => nv.clone(),
-                            LoaderKind::Forge => gv.clone(),
-                        };
-                        let can_install = self.busy.is_none()
-                            && !mc.is_empty()
-                            && available(&catalog, kind, &mc)
-                            && (kind == LoaderKind::Vanilla || !version.is_empty());
+                    // Reserve the status line so loading / error text does not
+                    // move the install button while the user is aiming at it.
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(ui.available_width(), 24.0),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            if self.catalog_loading {
+                                ui.spinner();
+                                ui.label(egui::RichText::new("获取版本…").color(MUTED));
+                            } else if let Some(err) = &self.catalog_error {
+                                ui.label(egui::RichText::new(err).size(11.5).color(MUTED));
+                            }
+                        },
+                    );
 
-                        ui.add_space(20.0);
-                        let mut go = false;
+                    // Persist selector changes every frame. Otherwise clicking a
+                    // radio/combo would be reverted on the next repaint.
+                    self.install_kind = kind;
+                    self.install_fabric = fv.clone();
+                    self.install_neoforge = nv.clone();
+                    self.install_forge = gv.clone();
+
+                    let version = match kind {
+                        LoaderKind::Vanilla => String::new(),
+                        LoaderKind::Fabric => fv.clone(),
+                        LoaderKind::NeoForge => nv.clone(),
+                        LoaderKind::Forge => gv.clone(),
+                    };
+                    let can_install = self.busy.is_none()
+                        && !mc.is_empty()
+                        && available(&catalog, kind, &mc)
+                        && (kind == LoaderKind::Vanilla || !version.is_empty());
+
+                    ui.add_space(22.0);
+                    let mut go = false;
+                    ui.vertical_centered(|ui| {
                         if primary_button(ui, "安装", can_install) {
                             go = true;
                         }
                         if !self.rows.is_empty() {
-                            ui.add_space(8.0);
+                            ui.add_space(6.0);
                             if ui.button("返回").clicked() {
                                 self.show_install = false;
                                 self.error = None;
                             }
                         }
-                        if go {
-                            self.install_mc = mc.clone();
-                            self.install_kind = kind;
-                            self.install_fabric = fv.clone();
-                            self.install_neoforge = nv.clone();
-                            self.install_forge = gv.clone();
-                            self.start_install_worker(mc, kind, version);
-                        }
                     });
+                    if go {
+                        self.install_mc = mc.clone();
+                        self.install_kind = kind;
+                        self.install_fabric = fv.clone();
+                        self.install_neoforge = nv.clone();
+                        self.install_forge = gv.clone();
+                        self.start_install_worker(mc, kind, version);
+                    }
+                });
 
                 if !self.java_ok {
                     java_warning(ui);
@@ -1043,6 +1051,37 @@ fn mc_key(v: &str) -> Vec<u64> {
         .collect()
 }
 
+fn card() -> egui::Frame {
+    egui::Frame::new()
+        .fill(CARD)
+        .stroke(egui::Stroke::new(1.0, LINE))
+        .corner_radius(14)
+        .inner_margin(egui::Margin::same(18))
+}
+
+fn ghost_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    ui.add(
+        egui::Button::new(egui::RichText::new(text).size(13.0).color(MUTED))
+            .fill(PANEL)
+            .stroke(egui::Stroke::new(1.0, LINE))
+            .corner_radius(8)
+            .min_size(egui::vec2(72.0, 30.0)),
+    )
+}
+
+fn logo_mark(ui: &mut egui::Ui) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::hover());
+    ui.painter()
+        .rect_filled(rect, egui::CornerRadius::same(8), ACCENT);
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        "N",
+        egui::FontId::proportional(17.0),
+        egui::Color32::BLACK,
+    );
+}
+
 fn java_warning(ui: &mut egui::Ui) {
     ui.add_space(12.0);
     ui.label(
@@ -1060,7 +1099,8 @@ fn primary_button(ui: &mut egui::Ui, text: &str, enabled: bool) -> bool {
             .color(egui::Color32::BLACK),
     )
     .fill(ACCENT)
-    .min_size(egui::vec2(180.0, 44.0));
+    .corner_radius(10)
+    .min_size(egui::vec2(200.0, 46.0));
     ui.add_enabled(enabled, button).clicked()
 }
 

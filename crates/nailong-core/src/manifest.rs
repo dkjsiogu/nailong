@@ -772,7 +772,11 @@ fn spec_from_artifact(root: &Root, lib: &Library, a: &Artifact) -> crate::http::
             .map(|c| c.rel_path().to_string_lossy().replace('\\', "/"))
             .unwrap_or_default()
     });
-    let url = if a.url.starts_with("http") {
+    let url = if a.url.is_empty() {
+        // Processor outputs (Forge/NeoForge patched client) have no URL;
+        // the processor engine creates the file locally.
+        String::new()
+    } else if a.url.starts_with("http") {
         a.url.clone()
     } else {
         let base = lib

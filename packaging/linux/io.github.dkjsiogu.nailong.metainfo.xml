@@ -25,7 +25,7 @@
   <url type="bugtracker">https://github.com/dkjsiogu/nailong/issues</url>
   <content_rating type="oars-1.1"/>
   <releases>
-    <release version="0.3.0" date="2026-10-20">
+    <release version="0.3.1" date="2026-10-20">
       <description>
         <p>Fabric, NeoForge, Forge and vanilla installs, with version pickers, progress and repair.</p>
       </description>

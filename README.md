@@ -4,7 +4,7 @@
 
 轻量的 Minecraft 启动器，使用 Rust 编写。
 
-> 当前版本：**0.3.0 · 四加载器预览版**
+> 当前版本：**0.3.1 · 四加载器预览版**
 > 目标：单文件、无额外运行时、低内存、快速启动；版本可选、安装可见、中断可补。
 
 ## 下载
@@ -14,7 +14,7 @@
 | 平台 | 文件 | 说明 |
 |---|---|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | **单个 exe，不用解压**，双击即用 |
-| Linux x64 (deb) | [nailong_0.3.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.3.0_amd64.deb) | amd64，兼容 Ubuntu 24.04+ |
+| Linux x64 (deb) | [nailong_0.3.1_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.3.1_amd64.deb) | amd64，兼容 Ubuntu 24.04+ |
 
 校验值：[SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS)。
 
@@ -31,7 +31,7 @@
 ### Linux（Debian / Ubuntu）
 
 ```bash
-sudo apt install ./nailong_0.3.0_amd64.deb
+sudo apt install ./nailong_0.3.1_amd64.deb
 nailong
 ```
 
@@ -54,6 +54,7 @@ sudo apt remove nailong
 
 - **安装 Minecraft 原版**（已验证 1.21.1）
 - **安装 Fabric / NeoForge / Forge**（已验证 1.21.1：Fabric 0.19.5、NeoForge 21.1.209、Forge 52.1.20）
+- **Forge / NeoForge 原生安装**：Rust 读取安装包里的 processor 描述并逐个执行，不再调用官方安装器
 - **四种安装方式**：安装页按 Minecraft → Fabric → NeoForge → Forge → 原版排列，版本全部下拉选择
 - **离线账户启动**（单人 / 局域网）
 - **版本选择**：Minecraft 和三种加载器都是下拉框，自动从官方清单读取，不用手输
@@ -67,7 +68,7 @@ sudo apt remove nailong
 |---|---:|---|
 | Windows GUI `nailong.exe` | 约 12 MB | 单文件，无额外运行库 |
 | Linux GUI（deb 内） | 约 11.6 MB | 单二进制 |
-| `nailong_0.3.0_amd64.deb` | 约 4.2 MB | 含桌面图标、菜单项、GPL 许可 |
+| `nailong_0.3.1_amd64.deb` | 约 4.2 MB | 含桌面图标、菜单项、GPL 许可 |
 
 > 实机验证：Linux（Xvfb + Mesa）下 Fabric / NeoForge / Forge 1.21.1 均启动到游戏渲染/主菜单；删除资源后会提示缺失并可补全。Windows 由 CI 原生编译，尚未在 Windows 实机启动，欢迎帮忙试。
 
@@ -110,10 +111,9 @@ cargo build --release -p nailong-ui -p nailong-cli
 ## 这一版刻意没做
 
 - 微软正版登录（client id / 审批未就绪；先离线）
-- 整合包、正版登录、自动更新
+- 整合包
 - 自动更新、模组管理、皮肤
-- 安装取消按钮（关闭窗口即可中断；下次启动会检测并补全）
-- NeoForge / Forge 安装内置化：当前复用两家官方 installer 做一次性安装（Fabric 已是原生 profile），启动器本体运行时不依赖它们；下一步换成内置 processors
+- 安装取消按钮（关闭窗口可中断；下次启动会检测并补全）
 
 ## 代码结构
 

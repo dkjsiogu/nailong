@@ -1,7 +1,7 @@
 # 14 · 原型实现状态（0.1 → 0.3）
 
 > 日期：2026-10-20
-> 对应发布：GitHub Release `v0.3.0` 的 `nailong.exe`、`nailong_0.3.0_amd64.deb`
+> 对应发布：GitHub Release `v0.3.1` 的 `nailong.exe`、`nailong_0.3.1_amd64.deb`
 > 目的：把「设计稿」和「已经跑起来的代码」分开记账，避免把计划当成已完成。
 
 ## 1. 一句话结论
@@ -37,7 +37,7 @@
 | CLI（list/java/info/install/launch） | `nailong-cli` | 完成 | 打包产物冒烟 |
 | GUI（版本下拉、安装进度、缺文件补全、启动、设置） | `nailong-ui` | 可用 | Xvfb 下走完安装 / 补全 / 启动；实际 NeoForge 到主菜单 |
 | Windows 交叉编译 | `x86_64-pc-windows-gnu` | 通过 | 无 MinGW DLL 依赖，仅系统 DLL |
-| 发布包 | GitHub Release `v0.3.0` | 完成（CI 构建） | 单 exe 约 12 MB / deb 约 4.2 MB |
+| 发布包 | GitHub Release `v0.3.1` | 完成（CI 构建） | 单 exe 约 12 MB / deb 约 4.2 MB |
 
 ### 2.1 实测记录
 
@@ -67,7 +67,7 @@
 
 | 设计稿 | 原型实际 | 影响 / 下一步 |
 |---|---|---|
-| Forge/NeoForge 原生 processors，外部 installer 仅兜底 | **直接调用官方 installer** | 安装阶段需要系统 Java、进度不可控、镜像不可控；下一步实现 processors 并保留兜底 |
+| Forge/NeoForge 原生 processors，外部 installer 仅兜底 | **Rust 原生驱动 processor 链** | 安装包只作数据；不执行官方 GUI installer |
 | 托管 JRE（Mojang runtime） | 只用系统 Java 21 | 用户需预装 Java；这是“开箱即用”目标的主要缺口 |
 | 异步 runtime + 事件总线 + 可取消任务 | 阻塞调用 + 线程 + 进度回调；暂无取消 | 下载与安装已有阶段/字节进度；下一步做取消令牌 |
 | 实例（Instance）抽象、配置存储 | 直接以版本目录为单位；无配置文件 | 目前只能切版本，不能多实例隔离 |
@@ -92,7 +92,7 @@
 
 1. **Windows 实机验证**：在一台 Windows 10/11 + Java 21 上跑安装与启动，记录失败点。
 2. **安装取消**：增加取消令牌，让用户在下载/安装中安全停止。
-3. **NeoForge / Forge 原生安装**：实现 processors（downloads、srg 合并、patch、outputs 校验），官方 installer 保留为开关。
+3. **processor 校验增强**：outputs SHA1 校验、取消令牌、失败断点续跑。
 5. **测试与 CI**：版本 JSON 夹具、规则/合并/argv 快照、mock HTTP（重试/哈希失败）、`fmt/clippy/test`。
 6. **托管 JRE**：至少做“检测缺失 → 引导安装/下载 Temurin”的闭环。
 7. **实例与配置**：TOML 配置、每实例 game dir/Java/内存，脱离“版本即实例”。
