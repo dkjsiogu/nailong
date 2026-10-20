@@ -1,0 +1,5 @@
+/target
+/.minecraft
+/data
+*.log
+/dist

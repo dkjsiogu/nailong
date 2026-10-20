@@ -1,0 +1,602 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>nailong · 设计说明</title>
+<style>
+  @page { size: 338.66mm 190.5mm; margin: 0; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #dfd8c9; }
+  body {
+    font-family: "Noto Sans CJK SC", "Noto Sans SC", "Source Han Sans SC", "Microsoft YaHei", sans-serif;
+    color: #1b1d22;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .slide {
+    width: 1280px; height: 720px;
+    position: relative; overflow: hidden;
+    background: #f7f3e9;
+    padding: 54px 64px 48px;
+    page-break-after: always;
+    break-after: page;
+  }
+  .slide:last-child { page-break-after: auto; break-after: auto; }
+  @media screen {
+    body { padding: 28px 0; }
+    .slide { margin: 0 auto 28px; box-shadow: 0 16px 44px rgba(30, 24, 12, .18); }
+  }
+  @media print {
+    html, body { background: #fff; }
+    .slide { margin: 0; box-shadow: none; }
+  }
+
+  :root {
+    --ink: #1b1d22;
+    --muted: #6d6a61;
+    --line: #e3dcce;
+    --card: #fffdf8;
+    --accent: #f2c14e;
+    --accent-deep: #c98f00;
+    --green: #3f8f68;
+    --yellow: #c98f00;
+    --grey: #8b8b8b;
+    --red: #c0503f;
+  }
+
+  .eyebrow {
+    font-size: 13px; letter-spacing: .18em; text-transform: uppercase;
+    color: var(--muted); font-weight: 700;
+  }
+  .page {
+    position: absolute; right: 40px; bottom: 26px;
+    font-size: 13px; color: #9a9488; letter-spacing: .08em;
+  }
+  .brandline {
+    position: absolute; left: 64px; bottom: 26px;
+    font-size: 13px; color: #9a9488; letter-spacing: .08em;
+  }
+  h1 { font-size: 54px; line-height: 1.2; margin: 14px 0 18px; letter-spacing: -.02em; }
+  h2 { font-size: 40px; line-height: 1.22; margin: 8px 0 10px; letter-spacing: -.02em; }
+  .sub { font-size: 18px; line-height: 1.6; color: var(--muted); margin: 0; }
+  .mark { background: linear-gradient(transparent 62%, #f2c14e 62%); padding: 0 4px; }
+
+  /* cover */
+  .cover {
+    background: #171a20; color: #f7f3e9;
+    padding-top: 64px;
+  }
+  .cover .eyebrow { color: #b9b3a6; }
+  .cover h1 { font-size: 58px; margin-top: 20px; line-height: 1.18; }
+  .cover .lead { font-size: 21px; color: #cfc8b9; line-height: 1.65; max-width: 620px; }
+  .cover .mark { color: #171a20; background: #f2c14e; padding: 0 8px; }
+  .cover-stats { display: flex; gap: 14px; margin-top: 34px; }
+  .cover-stat {
+    width: 178px; padding: 16px 16px 14px;
+    border: 1px solid rgba(247,243,233,.18);
+    border-radius: 14px; background: rgba(255,255,255,.045);
+  }
+  .cover-stat b { display: block; font-size: 27px; color: #f2c14e; letter-spacing: -.02em; }
+  .cover-stat span { display: block; font-size: 13px; color: #bdb7aa; margin-top: 5px; line-height: 1.4; }
+  .cover-note { margin-top: 22px; font-size: 14px; color: #9a9385; letter-spacing: .06em; }
+  .cover .footnote { position: absolute; left: 64px; bottom: 28px; font-size: 12px; color: #817b70; letter-spacing: .04em; }
+
+  .mock {
+    position: absolute; right: 58px; top: 118px;
+    width: 500px; height: 336px;
+    background: #f7f3e9; color: #1b1d22;
+    border-radius: 16px; overflow: hidden;
+    box-shadow: 0 24px 60px rgba(0,0,0,.35);
+    transform: rotate(-1.2deg);
+  }
+  .mock-top { height: 34px; display: flex; align-items: center; gap: 6px; padding: 0 12px; background: #e8e1d2; }
+  .mock-top i { width: 8px; height: 8px; border-radius: 50%; background: #c9c1b1; display: block; }
+  .mock-top .mtitle { margin-left: 8px; font-size: 11px; color: #777064; letter-spacing: .06em; }
+  .mock-body { display: flex; height: 302px; }
+  .mock-side { width: 70px; background: #efe8da; padding: 12px 10px; }
+  .mock-side .sitem { height: 7px; border-radius: 4px; background: #d3cbb9; margin: 0 0 9px; }
+  .mock-side .sitem.on { background: #f2c14e; width: 80%; }
+  .mock-main { flex: 1; padding: 15px 16px; }
+  .mock-head { display: flex; justify-content: space-between; align-items: center; font-size: 14px; font-weight: 700; }
+  .mock-head span { font-size: 10px; color: #8d8577; font-weight: 400; }
+  .mock-cards { display: flex; gap: 8px; margin-top: 14px; }
+  .mock-card {
+    width: 138px; height: 114px; border-radius: 10px; background: #fffdf8;
+    border: 1px solid #e8e1d2; padding: 11px 12px;
+  }
+  .mock-card .mc-ico { width: 26px; height: 26px; border-radius: 7px; background: #f2c14e; margin-bottom: 10px; }
+  .mock-card .mc-t { font-size: 11px; font-weight: 700; line-height: 1.3; }
+  .mock-card .mc-s { font-size: 9px; color: #8d8577; margin-top: 3px; }
+  .mock-card .mc-btn { margin-top: 9px; width: 54px; height: 18px; border-radius: 5px; background: #f2c14e; font-size: 8px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+  .mock-new {
+    width: 100px; height: 114px; border-radius: 10px;
+    border: 1px dashed #cfc6b4; color: #a59c8a;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    font-size: 10px; gap: 4px;
+  }
+  .mock-new b { font-size: 22px; font-weight: 400; color: #b8ae9b; }
+
+  /* generic content */
+  .kicker { color: var(--accent-deep); font-weight: 700; font-size: 14px; letter-spacing: .12em; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 16px;
+    padding: 22px 22px 20px;
+    box-shadow: 0 8px 22px rgba(30,24,12,.045);
+  }
+  .card h3 { font-size: 22px; margin: 8px 0 8px; line-height: 1.25; }
+  .card p { font-size: 15px; line-height: 1.65; color: var(--muted); margin: 0; }
+  .num {
+    width: 38px; height: 38px; border-radius: 50%;
+    background: #f2c14e; color: #1b1d22;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 17px; font-weight: 800;
+  }
+  .num.ghost { background: #f0eadc; color: #8c8372; }
+
+  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 24px; }
+  .step { min-height: 238px; }
+  .step .num { margin-bottom: 18px; width: 46px; height: 46px; font-size: 20px; }
+  .step h3 { font-size: 25px; margin: 0 0 8px; }
+  .step p { font-size: 16px; line-height: 1.65; }
+
+  .beforeafter {
+    margin-top: 20px; display: flex; gap: 14px; align-items: stretch;
+  }
+  .ba {
+    flex: 1; border-radius: 14px; padding: 14px 18px;
+    border: 1px solid var(--line); background: #fbf7ed;
+  }
+  .ba .tag { font-size: 12px; font-weight: 700; letter-spacing: .08em; color: #9a9488; }
+  .ba .txt { font-size: 15px; line-height: 1.55; margin-top: 4px; }
+  .ba.now { background: #1b1d22; border-color: #1b1d22; color: #f7f3e9; }
+  .ba.now .tag { color: #f2c14e; }
+  .ba.now .txt { font-size: 16px; }
+
+  /* metrics */
+  .metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 18px; }
+  .metric { padding: 18px 20px 16px; }
+  .metric b { display: block; font-size: 34px; letter-spacing: -.03em; line-height: 1.08; }
+  .metric span { display: block; font-size: 13px; color: var(--muted); margin-top: 7px; line-height: 1.45; }
+  .metric small { display: block; font-size: 11px; color: #a39b8c; margin-top: 8px; }
+
+  .chart { margin-top: 22px; }
+  .chart-title { font-size: 13px; color: var(--muted); letter-spacing: .06em; margin-bottom: 10px; }
+  .bar-row { display: grid; grid-template-columns: 150px 1fr 78px; align-items: center; gap: 12px; margin: 7px 0; }
+  .bar-name { font-size: 13px; color: #4c4a44; text-align: right; }
+  .bar-track { height: 15px; background: #ece6d8; border-radius: 8px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 8px; background: #c9c1b1; }
+  .bar-fill.us { background: #f2c14e; }
+  .bar-val { font-size: 12px; color: #6d6a61; font-variant-numeric: tabular-nums; }
+  .chart-note { margin-top: 11px; font-size: 12px; line-height: 1.55; color: #8f887a; }
+  .chart-note b { color: #4c4a44; }
+
+  /* architecture */
+  .arch-wrap { margin-top: 12px; background: #fffdf8; border: 1px solid var(--line); border-radius: 18px; padding: 10px 14px 6px; }
+  .arch svg { width: 100%; height: auto; display: block; }
+  .arch-note { display: flex; gap: 14px; margin-top: 14px; }
+  .arch-note div { flex: 1; font-size: 13px; line-height: 1.55; color: var(--muted); border-left: 3px solid #f2c14e; padding-left: 10px; }
+
+  /* 5 steps */
+  .flow { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-top: 26px; }
+  .flow .f {
+    background: #fffdf8; border: 1px solid var(--line); border-radius: 14px;
+    padding: 16px 14px; position: relative; min-height: 220px;
+  }
+  .flow .f .fn { font-size: 12px; font-weight: 800; letter-spacing: .1em; color: #b39a5c; }
+  .flow .f h3 { font-size: 19px; margin: 7px 0 8px; line-height: 1.25; }
+  .flow .f p { font-size: 13px; line-height: 1.6; color: var(--muted); margin: 0; }
+  .flow .f.hot { border-color: #e2bb5b; background: #fff8e6; }
+  .flow .f:after { content: "→"; position: absolute; right: -12px; top: 50%; transform: translateY(-50%); color: #c8bda8; font-size: 15px; }
+  .flow .f:last-child:after { content: ""; }
+
+  /* tradeoffs */
+  .trade { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 20px; }
+  .trade .t { min-height: 250px; }
+  .trade .t h3 { font-size: 21px; }
+  .trade .t .pro, .trade .t .con { font-size: 13.5px; line-height: 1.55; margin-top: 10px; }
+  .trade .t .pro b { color: var(--green); }
+  .trade .t .con b { color: #a26a00; }
+  .trade .t .quote { font-size: 15px; line-height: 1.6; color: #34322d; margin: 8px 0 0; }
+
+  /* risk */
+  .risk-table { margin-top: 18px; border-top: 1px solid var(--line); }
+  .risk-row { display: grid; grid-template-columns: 210px 120px 1fr; gap: 14px; align-items: center; padding: 13px 4px; border-bottom: 1px solid var(--line); }
+  .risk-row .rname { font-size: 16px; font-weight: 700; }
+  .risk-row .rwhat { font-size: 14px; color: var(--muted); line-height: 1.5; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; padding: 4px 9px; border-radius: 999px; width: fit-content; }
+  .chip:before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .chip.g { color: #2f7d57; background: #e8f3ec; }
+  .chip.y { color: #9a6a00; background: #fff3d6; }
+  .chip.grey { color: #6f6f6f; background: #efefec; }
+  .risk-bottom { margin-top: 18px; font-size: 15px; color: #4c4a44; background: #fff8e6; border: 1px solid #edd9a8; border-radius: 12px; padding: 12px 15px; }
+
+  /* timeline */
+  .timeline { margin-top: 22px; }
+  .tl-row { display: grid; grid-template-columns: 160px 1fr; gap: 14px; align-items: center; margin: 9px 0; }
+  .tl-label { text-align: right; }
+  .tl-label b { display: block; font-size: 15px; }
+  .tl-label span { font-size: 11px; color: #9a9488; }
+  .tl-track { position: relative; height: 36px; background: #eee8da; border-radius: 9px; }
+  .tl-bar { position: absolute; top: 0; height: 36px; border-radius: 9px; background: #1b1d22; color: #f7f3e9; font-size: 12px; display: flex; align-items: center; padding-left: 10px; white-space: nowrap; }
+  .tl-bar.us { background: #f2c14e; color: #1b1d22; font-weight: 700; }
+  .tl-bar.soft { background: #d8d0bf; color: #5c574c; }
+  .tl-optional { margin: 10px 0 0 174px; font-size: 12px; color: #8f887a; }
+  .tl-axis { display: flex; justify-content: space-between; margin: 8px 0 0 174px; font-size: 11px; color: #a59d8e; }
+  .timeline-note { margin-top: 12px; font-size: 13px; color: var(--muted); line-height: 1.55; }
+
+  /* decisions */
+  .decisions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 22px; }
+  .decision { min-height: 248px; }
+  .decision .tag { font-size: 12px; font-weight: 800; letter-spacing: .1em; color: #b39a5c; }
+  .decision h3 { font-size: 21px; margin: 6px 0 8px; }
+  .decision p { font-size: 14px; line-height: 1.6; color: var(--muted); }
+  .decision .rec { margin-top: 12px; font-size: 13.5px; line-height: 1.55; color: #34322d; background: #fff8e6; border-radius: 9px; padding: 9px 11px; }
+  .closing {
+    margin-top: 26px; padding-top: 20px; border-top: 1px solid var(--line);
+    display: flex; justify-content: space-between; align-items: flex-end;
+  }
+  .closing .big { font-size: 27px; font-weight: 800; letter-spacing: -.02em; }
+  .closing .small { font-size: 13px; color: var(--muted); text-align: right; line-height: 1.5; }
+
+  .tiny { font-size: 12px; color: #9a9488; }
+</style>
+</head>
+<body>
+
+<!-- 1 -->
+<section class="slide cover">
+  <div class="eyebrow">NAILONG · 设计说明 · 2026-10-20</div>
+  <h1>把复杂留在里面，<br>把简单留给用户。</h1>
+  <p class="lead">一个更轻、更稳的 Minecraft 启动器。用户不用装 Java、不用配环境，选个版本，点开始。</p>
+
+  <div class="cover-stats">
+    <div class="cover-stat"><b>10–15 MB</b><span>一个文件，双击就用</span></div>
+    <div class="cover-stat"><b>≤ 120 MB</b><span>启动器内存目标</span></div>
+    <div class="cover-stat"><b>3 步</b><span>选版本 → 安装 → 开始</span></div>
+  </div>
+  <div class="cover-note">原型 0.1 已跑通 NeoForge · 托管 Java / 正版登录 / Fabric 按计划推进</div>
+
+  <div class="mock">
+    <div class="mock-top"><i></i><i></i><i></i><span class="mtitle">nailong</span></div>
+    <div class="mock-body">
+      <div class="mock-side">
+        <div class="sitem on"></div><div class="sitem"></div><div class="sitem"></div><div class="sitem"></div>
+      </div>
+      <div class="mock-main">
+        <div class="mock-head">实例 <span>+ 新建</span></div>
+        <div class="mock-cards">
+          <div class="mock-card">
+            <div class="mc-ico"></div>
+            <div class="mc-t">1.21.11</div>
+            <div class="mc-s">Fabric · 2 小时前</div>
+            <div class="mc-btn">开始</div>
+          </div>
+          <div class="mock-card">
+            <div class="mc-ico" style="background:#3e8f68"></div>
+            <div class="mc-t">1.20.1</div>
+            <div class="mc-s">Forge · 昨天</div>
+            <div class="mc-btn" style="background:#e8e1d2">开始</div>
+          </div>
+          <div class="mock-new"><b>+</b>新建实例</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="footnote">给老板看的版本 · 一页看懂我们要做什么</div>
+</section>
+
+<!-- 2 -->
+<section class="slide">
+  <div class="eyebrow">用户旅程</div>
+  <h2>用户只需要三步</h2>
+  <p class="sub">第一版先把这三步做顺，其他功能围绕它生长。</p>
+
+  <div class="steps">
+    <div class="card step">
+      <div class="num">1</div>
+      <h3>选版本</h3>
+      <p>正式版、快照，或者直接导入一个整合包。不用自己找 Java，也不用对版本号。</p>
+    </div>
+    <div class="card step">
+      <div class="num">2</div>
+      <h3>点安装</h3>
+      <p>缺什么自动补，进度看得见，随时能取消。下完会验货，坏文件不会被留下。</p>
+    </div>
+    <div class="card step">
+      <div class="num">3</div>
+      <h3>点开始</h3>
+      <p>启动器自己准备运行环境、检查内存和路径；失败会说清原因，并给出下一步。</p>
+    </div>
+  </div>
+
+  <div class="beforeafter">
+    <div class="ba">
+      <div class="tag">以前</div>
+      <div class="txt">找 Java、对版本、装 Forge、改内存、看报错——每一步都可能卡住。</div>
+    </div>
+    <div class="ba now">
+      <div class="tag">现在</div>
+      <div class="txt">选、装、玩。剩下的交给启动器。</div>
+    </div>
+  </div>
+
+  <div class="brandline">nailong · 设计说明</div>
+  <div class="page">02 / 09</div>
+</section>
+
+<!-- 3 -->
+<section class="slide">
+  <div class="eyebrow">为什么是“轻”</div>
+  <h2>轻，是算出来的</h2>
+  <p class="sub">不是口号。体积、内存、打开速度都有明确预算，发布前会实测。</p>
+
+  <div class="metrics">
+    <div class="card metric"><b>10–15 MB</b><span>安装包目标</span><small>一个文件，不需要额外运行库</small></div>
+    <div class="card metric"><b>≤ 120 MB</b><span>内存目标</span><small>Windows 预计 40–80 MB</small></div>
+    <div class="card metric"><b>≤ 0.4 秒</b><span>打开窗口目标</span><small>空窗口实测约 0.04 秒</small></div>
+  </div>
+
+  <div class="chart">
+    <div class="chart-title">安装包大小对比（越小越好，单位 MB）</div>
+    <div class="bar-row"><div class="bar-name">PCL</div><div class="bar-track"><div class="bar-fill" style="width:10.7%"></div></div><div class="bar-val">5.7</div></div>
+    <div class="bar-row"><div class="bar-name">Quantum</div><div class="bar-track"><div class="bar-fill" style="width:15.2%"></div></div><div class="bar-val">8.1</div></div>
+    <div class="bar-row"><div class="bar-name">nailong（目标）</div><div class="bar-track"><div class="bar-fill us" style="width:23.4%"></div></div><div class="bar-val">10–15</div></div>
+    <div class="bar-row"><div class="bar-name">Prism</div><div class="bar-track"><div class="bar-fill" style="width:36.5%"></div></div><div class="bar-val">19.5</div></div>
+    <div class="bar-row"><div class="bar-name">Modrinth App</div><div class="bar-track"><div class="bar-fill" style="width:47.0%"></div></div><div class="bar-val">25.1</div></div>
+    <div class="bar-row"><div class="bar-name">Pandora</div><div class="bar-track"><div class="bar-fill" style="width:100%"></div></div><div class="bar-val">53.4</div></div>
+  </div>
+
+  <div class="chart-note"><b>为什么不做成 PCL 那么小？</b> PCL 只支持 Windows，并且把运行库交给系统自带的 .NET；我们要同时支持 Windows、Linux、macOS，所以把运行库打进一个文件，体积略大，但用户少一层安装门槛。这是有意的取舍。</div>
+
+  <div class="brandline">nailong · 设计说明</div>
+  <div class="page">03 / 09</div>
+</section>
+
+<!-- 4 -->
+<section class="slide">
+  <div class="eyebrow">内部结构</div>
+  <h2>里面怎么分工</h2>
+  <p class="sub">像一家店：前台、后厨、仓库、门卫。各干各的，才不会互相拖累。</p>
+
+  <div class="arch-wrap">
+    <div class="arch">
+      <svg viewBox="0 0 1140 330" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="启动器分工示意图">
+        <defs>
+          <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L9,3 z" fill="#c8bda8"/>
+          </marker>
+        </defs>
+        <rect x="10" y="34" width="240" height="126" rx="14" fill="#fff8e6" stroke="#e2bb5b"/>
+        <text x="130" y="72" text-anchor="middle" font-size="23" font-weight="700" fill="#1b1d22">前台</text>
+        <text x="130" y="99" text-anchor="middle" font-size="14" fill="#6d6a61">窗口、按钮、进度</text>
+        <text x="130" y="122" text-anchor="middle" font-size="14" fill="#6d6a61">只负责好用，不干重活</text>
+
+        <rect x="300" y="34" width="240" height="126" rx="14" fill="#fffdf8" stroke="#e3dcce"/>
+        <text x="420" y="72" text-anchor="middle" font-size="23" font-weight="700" fill="#1b1d22">调度大脑</text>
+        <text x="420" y="99" text-anchor="middle" font-size="14" fill="#6d6a61">读版本说明、算清单</text>
+        <text x="420" y="122" text-anchor="middle" font-size="14" fill="#6d6a61">决定先做什么、后做什么</text>
+
+        <rect x="590" y="34" width="240" height="126" rx="14" fill="#fffdf8" stroke="#e3dcce"/>
+        <text x="710" y="72" text-anchor="middle" font-size="23" font-weight="700" fill="#1b1d22">仓库</text>
+        <text x="710" y="99" text-anchor="middle" font-size="14" fill="#6d6a61">下载、验货、入库</text>
+        <text x="710" y="122" text-anchor="middle" font-size="14" fill="#6d6a61">缺什么补什么，坏了能修</text>
+
+        <rect x="880" y="34" width="250" height="126" rx="14" fill="#fffdf8" stroke="#e3dcce"/>
+        <text x="1005" y="72" text-anchor="middle" font-size="23" font-weight="700" fill="#1b1d22">门卫</text>
+        <text x="1005" y="99" text-anchor="middle" font-size="14" fill="#6d6a61">账户、钥匙、隐私</text>
+        <text x="1005" y="122" text-anchor="middle" font-size="14" fill="#6d6a61">不该看的东西看不见</text>
+
+        <line x1="252" y1="97" x2="292" y2="97" stroke="#c8bda8" stroke-width="2" marker-end="url(#arrow)"/>
+        <line x1="542" y1="97" x2="582" y2="97" stroke="#c8bda8" stroke-width="2" marker-end="url(#arrow)"/>
+        <line x1="832" y1="97" x2="872" y2="97" stroke="#c8bda8" stroke-width="2" marker-end="url(#arrow)"/>
+
+        <rect x="590" y="222" width="240" height="78" rx="12" fill="#f2efe6" stroke="#e3dcce"/>
+        <text x="710" y="255" text-anchor="middle" font-size="19" font-weight="700" fill="#1b1d22">官方 / 国内镜像</text>
+        <text x="710" y="279" text-anchor="middle" font-size="13" fill="#6d6a61">就近取货，快且可替换</text>
+
+        <rect x="300" y="222" width="240" height="78" rx="12" fill="#1b1d22"/>
+        <text x="420" y="255" text-anchor="middle" font-size="19" font-weight="700" fill="#f2c14e">最后交给游戏</text>
+        <text x="420" y="279" text-anchor="middle" font-size="13" fill="#cfc8b9">用户看到的“开始”就是这一步</text>
+
+        <line x1="710" y1="162" x2="710" y2="214" stroke="#c8bda8" stroke-width="2" marker-end="url(#arrow)"/>
+        <line x1="420" y1="162" x2="420" y2="214" stroke="#c8bda8" stroke-width="2" marker-end="url(#arrow)"/>
+      </svg>
+    </div>
+  </div>
+
+  <div class="arch-note">
+    <div>前台卡了，不影响后台继续下载。</div>
+    <div>后台出错，能定位到具体哪一步。</div>
+    <div>以后换界面，不用重写核心。</div>
+  </div>
+
+  <div class="brandline">nailong · 设计说明</div>
+  <div class="page">04 / 09</div>
+</section>
+
+<!-- 5 -->
+<section class="slide">
+  <div class="eyebrow">一次启动</div>
+  <h2>点下“开始”之后，发生什么</h2>
+  <p class="sub">用户只看到一条进度条；背后是一张可检查的清单。</p>
+
+  <div class="flow">
+    <div class="f">
+      <div class="fn">STEP 01</div>
+      <h3>读配方</h3>
+      <p>这个版本需要哪些文件、用什么方式启动，先算清楚。</p>
+    </div>
+    <div class="f">
+      <div class="fn">STEP 02</div>
+      <h3>备零件</h3>
+      <p>缺的下载，下完验货；已有的不重复下，坏了能补。</p>
+    </div>
+    <div class="f hot">
+      <div class="fn">STEP 03</div>
+      <h3>做体检</h3>
+      <p>运行环境、内存、路径、账户，一项项检查，避免“点开始才崩”。</p>
+    </div>
+    <div class="f">
+      <div class="fn">STEP 04</div>
+      <h3>开游戏</h3>
+      <p>把正确的启动设置交给游戏，窗口出现。</p>
+    </div>
+    <div class="f">
+      <div class="fn">STEP 05</div>
+      <h3>盯现场</h3>
+      <p>记录日志；退出异常时说清原因，并指向崩溃报告。</p>
+    </div>
+  </div>
+
+  <div class="chart-note" style="margin-top:18px; font-size:14px;">
+    <b>关键点：</b>不是“先启动，坏了再说”，而是“先检查，再启动”。检查不过，用户看到的是“缺什么、怎么补”，而不是一串看不懂的报错。
+  </div>
+
+  <div class="risk-bottom" style="background:#f5f1e6; border-color:#e3dcce; margin-top:18px;">
+    用户看到的是“一条进度条 + 一句人话”；背后是一张可检查、可重试的清单。
+  </div>
+
+  <div class="brandline">nailong · 设计说明</div>
+  <div class="page">05 / 09</div>
+</section>
+
+<!-- 6 -->
+<section class="slide">
+  <div class="eyebrow">取舍</div>
+  <h2>三个关键取舍</h2>
+  <p class="sub">每个选择都有代价。先讲清楚，后面才不会反复。</p>
+
+  <div class="trade">
+    <div class="card t">
+      <h3>① 不把命门交给别人</h3>
+      <p class="quote">版本资料直接向官方要，不经过某家启动器的中转站。</p>
+      <div class="pro"><b>好处：</b>新版本不用等第三方，服务挂了也能用。</div>
+      <div class="con"><b>代价：</b>官方格式变了，要自己跟。</div>
+    </div>
+    <div class="card t">
+      <h3>② 难啃的骨头自己啃</h3>
+      <p class="quote">Forge（最常用的模组加载器之一）的安装自己做，不丢给游戏启动时慢慢跑。</p>
+      <div class="pro"><b>好处：</b>进度看得见、国内镜像能用、失败能修。</div>
+      <div class="con"><b>代价：</b>工程量大，先啃一个版本，再扩。</div>
+    </div>
+    <div class="card t">
+      <h3>③ 先让大多数人玩上</h3>
+      <p class="quote">第一版先支持离线 + 原版 / Fabric / Forge；微软正版登录等审批，批了再补。</p>
+      <div class="pro"><b>好处：</b>不被审批卡住发布。</div>
+      <div class="con"><b>代价：</b>首批正版用户要等一等。</div>
+    </div>
+  </div>
+
+  <div class="risk-bottom" style="margin-top:16px; background:#f5f1e6; border-color:#e3dcce;">
+    开源协议定为 <b>GPLv3</b>：成熟项目的经验可以合法借鉴；PCL 的代码不抄，只研究它怎么做。
+  </div>
+
+  <div class="brandline">nailong · 设计说明</div>
+  <div class="page">06 / 09</div>
+</section>
+
+<!-- 7 -->
+<section class="slide">
+  <div class="eyebrow">风险</div>
+  <h2>先把丑话说在前面</h2>
+  <p class="sub">五个风险，三个需要盯，两个已经可控。</p>
+
+  <div class="risk-table">
+    <div class="risk-row"><div class="rname">Forge 兼容</div><div class="chip y">需要盯</div><div class="rwhat">先做 1.20.1，再做新版；准备“备用安装方式”，不让一个版本卡死整条线。</div></div>
+    <div class="risk-row"><div class="rname">微软正版登录</div><div class="chip grey">已延后</div><div class="rwhat">需要微软侧审批，时间不可控。第一版先用离线账户，不挡发布；批了再补。</div></div>
+    <div class="risk-row"><div class="rname">中文输入 / 界面</div><div class="chip y">需要盯</div><div class="rwhat">先做可点击原型，在 Windows 上验证中文输入和布局；不行还有备选界面方案。</div></div>
+    <div class="risk-row"><div class="rname">体积 / 内存</div><div class="chip g">可控</div><div class="rwhat">已经做了最小程序实测；发布前每次自动检查，超标就报警。</div></div>
+    <div class="risk-row"><div class="rname">版权 / 许可</div><div class="chip g">可控</div><div class="rwhat">GPLv3；只研究 PCL，不复制它的代码和素材。</div></div>
+  </div>
+
+  <div class="risk-bottom"><b>最坏情况：</b>Forge 晚一个版本发布；原版和 Fabric 用户不受影响。不会出现“整个产品等一个功能”的情况。</div>
+
+  <div class="brandline">nailong · 设计说明</div>
+  <div class="page">07 / 09</div>
+</section>
+
+<!-- 8 -->
+<section class="slide">
+  <div class="eyebrow">计划</div>
+  <h2>约 18 周，分六段走</h2>
+  <p class="sub">按 1 人全职估算。每周都有能跑的产物，不是最后一天才第一次启动。</p>
+
+  <div class="timeline">
+    <div class="tl-row">
+      <div class="tl-label"><b>第 1 段 · 2 周</b><span>能启动</span></div>
+      <div class="tl-track"><div class="tl-bar us" style="left:0; width:11.1%">骨架</div></div>
+    </div>
+    <div class="tl-row">
+      <div class="tl-label"><b>第 2 段 · 3 周</b><span>能安装</span></div>
+      <div class="tl-track"><div class="tl-bar" style="left:11.1%; width:16.7%">下载 / 校验</div></div>
+    </div>
+    <div class="tl-row">
+      <div class="tl-label"><b>第 3 段 · 4 周</b><span>有界面</span></div>
+      <div class="tl-track"><div class="tl-bar" style="left:27.8%; width:22.2%">界面 + Fabric</div></div>
+    </div>
+    <div class="tl-row">
+      <div class="tl-label"><b>第 4 段 · 4 周</b><span>Forge</span></div>
+      <div class="tl-track"><div class="tl-bar" style="left:50%; width:22.2%">Forge + 诊断</div></div>
+    </div>
+    <div class="tl-row">
+      <div class="tl-label"><b>第 5 段 · 3 周</b><span>整合包</span></div>
+      <div class="tl-track"><div class="tl-bar" style="left:72.2%; width:16.7%">导入 + 打磨</div></div>
+    </div>
+    <div class="tl-row">
+      <div class="tl-label"><b>第 6 段 · 2 周</b><span>发布</span></div>
+      <div class="tl-track"><div class="tl-bar" style="left:88.9%; width:11.1%">加固</div></div>
+    </div>
+    <div class="tl-optional">可选：正版登录 1–2 周（等微软审批，不占关键路径）</div>
+    <div class="tl-axis"><span>0 周</span><span>4 周</span><span>8 周</span><span>12 周</span><span>16 周</span><span>18 周</span></div>
+  </div>
+
+  <div class="timeline-note">当前进度：0.1 原型已跑通 NeoForge 1.21.1（离线账户），比计划提前；托管 Java、正版登录、Fabric 仍在计划内。若每周只能投入 2–3 天，时间按比例延长。</div>
+
+  <div class="brandline">nailong · 设计说明</div>
+  <div class="page">08 / 09</div>
+</section>
+
+<!-- 9 -->
+<section class="slide">
+  <div class="eyebrow">需要你拍板</div>
+  <h2>三件事，定了就开工</h2>
+  <p class="sub">开源协议已定 GPLv3；名字就叫 nailong。剩下三件需要你点头。</p>
+
+  <div class="decisions">
+    <div class="card decision">
+      <div class="tag">DECISION 01</div>
+      <h3>首发平台</h3>
+      <p>先做哪个系统，决定测试和打包的投入。</p>
+      <div class="rec"><b>建议：</b>Windows + Linux 首发；macOS 放到后面的版本。</div>
+    </div>
+    <div class="card decision">
+      <div class="tag">DECISION 02</div>
+      <h3>第一版范围</h3>
+      <p>是先做一个“能玩”的版本，还是等正版登录一起上。</p>
+      <div class="rec"><b>建议：</b>先离线 + 原版 / Fabric / Forge；正版登录审批下来再补，不挡发布。</div>
+    </div>
+    <div class="card decision">
+      <div class="tag">DECISION 03</div>
+      <h3>下一步先看什么</h3>
+      <p>先看界面，还是先看“真的能启动”。</p>
+      <div class="rec"><b>建议：</b>两周做“能启动”的骨架，同时做可点击界面原型；两周后两样都能看到。</div>
+    </div>
+  </div>
+
+  <div class="closing">
+    <div class="big">把复杂留在里面，把简单留给用户。</div>
+    <div class="small">nailong · 设计说明 · 2026-10-20<br>详细文档在 docs/design，给技术同事看</div>
+  </div>
+
+  <div class="page">09 / 09</div>
+</section>
+
+
+
+
+
+
+</body>
+</html>

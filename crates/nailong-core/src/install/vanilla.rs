@@ -1,0 +1,134 @@
+use crate::error::{Error, Result};
+use crate::http::{FileSpec, Http};
+use crate::manifest::{AssetIndex, Context, VersionJson, library_specs_for};
+use crate::paths::{Root, write_atomic};
+use serde::Deserialize;
+use serde_json::Value;
+
+const VERSION_MANIFEST: &str = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
+
+#[derive(Debug, Deserialize)]
+struct Manifest {
+    versions: Vec<ManifestEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ManifestEntry {
+    id: String,
+    url: String,
+}
+
+pub fn install(root: &Root, mc: &str, mirror: &str) -> Result<()> {
+    root.ensure()?;
+    let http = Http::new(mirror)?;
+    let ctx = Context::current();
+    println!("→ 解析 Minecraft {mc} 版本信息…");
+    let manifest: Manifest = serde_json::from_value(http.get_json(VERSION_MANIFEST)?)
+        .map_err(|e| Error::Install(format!("版本清单格式异常: {e}")))?;
+    let entry = manifest
+        .versions
+        .into_iter()
+        .find(|v| v.id == mc)
+        .ok_or_else(|| Error::VersionNotFound(mc.to_string()))?;
+
+    let json_value = http.get_json(&entry.url)?;
+    let vj: VersionJson = serde_json::from_value(json_value)
+        .map_err(|e| Error::Install(format!("版本 JSON 解析失败: {e}")))?;
+    let json_path = root.version_json(mc);
+    write_atomic(
+        &json_path,
+        serde_json::to_vec_pretty(&vj).unwrap().as_slice(),
+    )?;
+
+    // client jar
+    let client = vj
+        .downloads
+        .client
+        .as_ref()
+        .ok_or_else(|| Error::Unsupported("版本没有 client 下载信息".into()))?;
+    let client_spec = FileSpec {
+        url: client.url.clone(),
+        dest: root.client_jar(mc),
+        sha1: client.sha1.clone(),
+        size: client.size,
+        verify_existing: true,
+    };
+    println!("→ 下载客户端…");
+    http.download(&client_spec)?;
+
+    // libraries
+    let lib_specs = library_specs_for(root, &vj.libraries, &ctx);
+    println!("→ 下载依赖库（{} 个）…", lib_specs.len());
+    http.download_many(lib_specs, "libraries")?;
+
+    // asset index
+    let ai = vj
+        .asset_index
+        .as_ref()
+        .ok_or_else(|| Error::Unsupported("版本缺少 assetIndex".into()))?;
+    let index_path = root.indexes().join(format!("{}.json", ai.id));
+    let index_url = ai
+        .url
+        .clone()
+        .ok_or_else(|| Error::Unsupported("assetIndex 缺少 url".into()))?;
+    println!("→ 下载资源索引 {}…", ai.id);
+    http.download(&FileSpec {
+        url: index_url,
+        dest: index_path.clone(),
+        sha1: ai.sha1.clone(),
+        size: ai.size,
+        verify_existing: true,
+    })?;
+
+    // assets
+    let index: Value = serde_json::from_slice(
+        &std::fs::read(&index_path).map_err(|e| crate::error::io(&index_path, e))?,
+    )
+    .map_err(|e| crate::error::json(&index_path, e))?;
+    let objects = index
+        .get("objects")
+        .and_then(|v| v.as_object())
+        .ok_or_else(|| Error::Install("资源索引缺少 objects".into()))?;
+    let mut specs = Vec::with_capacity(objects.len());
+    for (_name, obj) in objects {
+        let Some(hash) = obj.get("hash").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let size = obj.get("size").and_then(|v| v.as_u64());
+        let dest = root.objects().join(&hash[0..2]).join(hash);
+        specs.push(FileSpec {
+            url: format!(
+                "https://resources.download.minecraft.net/{}/{}",
+                &hash[0..2],
+                hash
+            ),
+            dest,
+            sha1: Some(hash.to_string()),
+            size,
+            verify_existing: false,
+        });
+    }
+    println!("→ 下载资源（{} 个文件）…", specs.len());
+    http.download_many(specs, "assets")?;
+
+    // logging config
+    if let Some(logging) = vj.logging.as_ref().and_then(|l| l.client.as_ref()) {
+        let dest = root.assets().join("log_configs").join(&logging.file.id);
+        let _ = http.download(&FileSpec {
+            url: logging.file.url.clone(),
+            dest,
+            sha1: logging.file.sha1.clone(),
+            size: logging.file.size,
+            verify_existing: true,
+        });
+    }
+
+    println!("✓ Minecraft {mc} 安装完成");
+    Ok(())
+}
+
+pub fn asset_index_for(root: &Root, ai: &AssetIndex) -> Result<Value> {
+    let path = root.indexes().join(format!("{}.json", ai.id));
+    let data = std::fs::read(&path).map_err(|e| crate::error::io(&path, e))?;
+    serde_json::from_slice(&data).map_err(|e| crate::error::json(&path, e))
+}
