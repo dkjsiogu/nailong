@@ -1,7 +1,7 @@
 # 14 · 原型实现状态（0.1 → 0.3）
 
 > 日期：2026-10-20
-> 对应发布：GitHub Release `v0.4.0` 的 `nailong.exe`、`nailong_0.4.0_amd64.deb`
+> 对应发布：GitHub Release `v0.4.1` 的 `nailong.exe`、`nailong_0.4.1_amd64.deb`
 > 目的：把「设计稿」和「已经跑起来的代码」分开记账，避免把计划当成已完成。
 
 ## 1. 一句话结论
@@ -39,7 +39,7 @@
 | CLI（list/java/info/install/launch） | `nailong-cli` | 完成 | 打包产物冒烟 |
 | GUI（版本下拉、安装进度、缺文件补全、启动、设置） | `nailong-ui` | 可用 | Xvfb 下走完安装 / 补全 / 启动；实际 NeoForge 到主菜单 |
 | Windows 交叉编译 | `x86_64-pc-windows-gnu` | 通过 | 无 MinGW DLL 依赖，仅系统 DLL |
-| 发布包 | GitHub Release `v0.4.0` | 完成（CI 构建） | 单 exe 约 12 MB / deb 约 4.2 MB |
+| 发布包 | GitHub Release `v0.4.1` | 完成（CI 构建） | 单 exe 约 12 MB / deb 约 4.2 MB |
 
 ### 2.1 实测记录
 

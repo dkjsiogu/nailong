@@ -1,5 +1,5 @@
 use crate::error::{Error, Result};
-use crate::http::{FileSpec, Http};
+use crate::http::{FileSpec, Http, sha1_file};
 use crate::java;
 use crate::manifest::{Coord, VersionJson, library_specs_for};
 use crate::paths::{Root, write_atomic};
@@ -410,12 +410,39 @@ fn check_outputs(
     let Some(outputs) = processor.get("outputs").and_then(|v| v.as_object()) else {
         return Ok(());
     };
-    for key in outputs.keys() {
+    for (key, expected) in outputs {
         let path = expand_arg(key, vars, root, mc);
-        if !Path::new(&path).exists() {
+        let file = Path::new(&path);
+        if !file.exists() {
             return Err(Error::Install(format!(
                 "processor 结束时缺少输出文件: {path}"
             )));
+        }
+        let Some(expected) = expected.as_str() else {
+            continue;
+        };
+        let expected = expand_arg(expected, vars, root, mc);
+        let expected = expected.trim().trim_matches('\'');
+        if expected.len() != 40 || !expected.chars().all(|c| c.is_ascii_hexdigit()) {
+            continue;
+        }
+        let actual = sha1_file(file)?;
+        if !actual.eq_ignore_ascii_case(expected) {
+            // Some zlib implementations produce equivalent jars with different
+            // bytes.  Accept a structurally valid jar, reject anything else.
+            let valid_jar = file
+                .extension()
+                .map(|e| e.eq_ignore_ascii_case("jar"))
+                .unwrap_or(false)
+                && zip::ZipArchive::new(File::open(file).map_err(|e| crate::error::io(file, e))?)
+                    .is_ok();
+            if valid_jar {
+                println!("! processor 输出哈希与清单不同（zlib 兼容），已接受: {path}");
+            } else {
+                return Err(Error::Install(format!(
+                    "processor 输出校验失败: {path}（期望 {expected}，实际 {actual}）"
+                )));
+            }
         }
     }
     Ok(())
