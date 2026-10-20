@@ -8,6 +8,7 @@ cd "$root"
 
 cargo_bin=${CARGO:-$(command -v cargo || true)}
 if [ -z "$cargo_bin" ]; then cargo_bin="$HOME/.cargo/bin/cargo"; fi
+cc_bin=${CC:-cc}
 
 version=$(awk -F'"' '/^version = /{print $2; exit}' Cargo.toml)
 arch=$(dpkg --print-architecture)
@@ -16,8 +17,16 @@ out_dir="$root/dist"
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
 
+# glibc 2.43 added a versioned atan2f symbol.  Route it through atan2 so the
+# package also runs on Ubuntu 24.04 (glibc 2.39); see the C file for details.
+compat_dir="$root/target/deb-compat"
+compat_obj="$compat_dir/atan2f_compat.o"
+mkdir -p "$compat_dir"
+"$cc_bin" -O2 -fPIC -c packaging/linux/atan2f_compat.c -o "$compat_obj"
+
 echo "==> building GUI binary (release)"
-"$cargo_bin" build --release -p nailong-ui
+RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=$compat_obj -C link-arg=-Wl,--wrap=atan2f" \
+  "$cargo_bin" build --release -p nailong-ui
 
 bin="$root/target/release/nailong-ui"
 glibc_req=$(objdump -T "$bin" | grep -o 'GLIBC_[0-9.]*' | sed 's/^GLIBC_//' | sort -V | tail -1)

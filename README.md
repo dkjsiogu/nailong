@@ -12,7 +12,7 @@
 | 平台 | 文件 | 说明 |
 |---|---|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | **单个 exe，不用解压**，双击即用 |
-| Linux x64 (deb) | [nailong_0.1.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.1.0_amd64.deb) | 本机 Ubuntu 26.04 amd64 构建 |
+| Linux x64 (deb) | [nailong_0.1.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.1.0_amd64.deb) | amd64，兼容 Ubuntu 24.04+ |
 
 校验值：[SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS)。
 
@@ -41,7 +41,7 @@ nailong
 sudo apt remove nailong
 ```
 
-> 这个 deb 是 **Ubuntu 26.04 / amd64** 上构建的，要求 glibc ≥ 2.43；Ubuntu 24.04 等旧系统暂时装不上。需要的话可以按下面的“从源码构建”自己打一个。
+> 这个 deb 在 **Ubuntu 26.04 / amd64** 上构建，已做兼容处理，要求 glibc ≥ 2.39；Ubuntu 24.04+ 可以直接安装，22.04 等更旧的系统暂时装不上。
 
 数据目录默认：
 
