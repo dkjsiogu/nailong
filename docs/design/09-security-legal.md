@@ -258,7 +258,7 @@ fn safe_join(root: &Path, entry: &str) -> Result<PathBuf> {
 | BMCLAPI | 遵守其使用说明、不要滥用 | 作为可选镜像；失败回退官方；不绕过限流 |
 | Fabric/Quilt Meta | 合理频率 | 缓存 1 小时 |
 | Modrinth API | 标识 User-Agent、遵守速率限制 | 只读、缓存；不批量抓取 |
-| CurseForge API | 需要 API key、遵守条款 | 用户自备 key；不内置泄漏 |
+| CurseForge API | 可选 API key、遵守条款 | 用户/环境变量优先；构建时可注入获批默认 key；不手拼 CDN、不绕过作者分发开关 |
 | Microsoft OAuth | public client、不共享 secret；Minecraft Services 需 client id allowlist | PKCE/设备码；client id 可配置；M0 提交审批，未获批不宣称正版登录 |
 
 ## 10. 供应链与发布
@@ -289,7 +289,7 @@ fn safe_join(root: &Path, entry: &str) -> Result<PathBuf> {
 ## 12. 待决策
 
 1. ~~最终许可证~~ → 已定 GPL-3.0-or-later。
-2. 是否内置 CurseForge API key（不建议）或要求用户配置。
+2. ~~是否内置 CurseForge API key~~ → 已支持构建时注入；默认不内置，等获批后再决定是否发布默认 key。
 3. 是否在 v1 引入遥测（建议否）。
 4. 代码签名/公证预算。
 5. 图标/插画素材（原创或合规来源）。

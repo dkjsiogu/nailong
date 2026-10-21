@@ -139,7 +139,7 @@
 | 格式 | v1 | 说明 |
 |---|---|---|
 | Modrinth `.mrpack` | ✅ S0 | 无需 API key；文件哈希完整 |
-| CurseForge zip | ✅ S1 | 需 API key；无 key 只导入 overrides |
+| CurseForge zip | ✅ S1 | key 可选；无 key 走 cfwidget + 官方下载页；作者关闭第三方分发时停止导入 |
 | MultiMC/Prism 实例 | ✅ S1 | `mmc-pack.json` + `instance.cfg` + overrides |
 | HMCL 整合包 | S2 | v1.1 |
 | 手动整合包 | S1 | 识别 `minecraft/`/`overrides/` |
@@ -155,7 +155,7 @@
 | BMCLAPI | 镜像 | S1 |
 | 自定义镜像 | 用户配置 | S2 |
 | Modrinth API | 整合包/内容 | S1 |
-| CurseForge API | 整合包 | S1（需 key） |
+| CurseForge API | 整合包 | S1（key 可选） |
 | authlib-injector | 外置登录 | S2 |
 
 ## 10. 测试矩阵

@@ -216,7 +216,7 @@ M0 模型/解析 ──► M1 下载/安装 ──► M2 GUI ──► M3 Forge/
 | R7 | 误用 PCL 受限代码 | 中 | 高 | 许可证已定 GPLv3；Prism/HMCL 可移植；PCL 只研究行为、不复制 | 代码来源审查发现 PCL 片段 |
 | R8 | 范围蔓延（模组浏览/服务器管理） | 高 | 中 | 明确非目标；feature gate；v2 再说 | 需求列表膨胀 |
 | R9 | Windows 旧版 LWJGL 中文路径 | 中 | 中 | ASCII natives 临时目录；文档；JLW 评估 | 用户崩溃报告 |
-| R10 | CurseForge API key 限制 | 中 | 低 | 用户自备；无 key 仅导入 overrides | API 403/限流 |
+| R10 | CurseForge API key 限制 | 中 | 低 | 可选用户 key / 构建时内置；无 key 走官方下载页；作者限制停止导入 | API 403/限流 |
 | R11 | 单人开发进度 | 高 | 中 | 里程碑可独立发布；0.x 先行 | 连续两周无进度 |
 | R12 | macOS 公证/签名成本 | 高 | 低 | 未公证说明；后续购买 | 用户无法打开 |
 | R13 | 许可证义务未履行 | 低 | 高 | 发布前检查 LICENSE/NOTICE/源码提供 | 发布审核 |
@@ -269,7 +269,7 @@ M0 模型/解析 ──► M1 下载/安装 ──► M2 GUI ──► M3 Forge/
 | Q2 | 首发平台 | Windows x64 + Linux x64 | 测试/打包范围 |
 | Q3 | Azure client id + Minecraft Services 审批 | **暂缓**；v1.0 不阻塞，M3.5 再启用 | 正版登录上线时间 |
 | Q4 | 图标/插画素材 | 原创或合规来源 | 视觉素材来源 |
-| Q5 | CurseForge | 用户自备 API key | 整合包体验 |
+| Q5 | CurseForge | 可选：用户 key、环境变量或构建时内置默认 key | 整合包体验 |
 | Q6 | 遥测 | 默认关闭 | 隐私/运营 |
 | Q7 | 自动更新渠道 | GitHub Releases + 签名 | 分发/国内访问 |
 | Q8 | 模组浏览 | 不做（v1） | 范围 |
