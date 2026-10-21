@@ -1,32 +1,83 @@
 # nailong
 
 [![CI](https://github.com/dkjsiogu/nailong/actions/workflows/ci.yml/badge.svg)](https://github.com/dkjsiogu/nailong/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/dkjsiogu/nailong?label=release)](https://github.com/dkjsiogu/nailong/releases/latest)
+[![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
 
-轻量的 Minecraft 启动器，使用 Rust 编写。
+轻量、原生的 Minecraft: Java Edition 启动器，使用 Rust 编写。Windows 只有一个 exe，Linux 只有一个 deb；不捆绑 Java 运行时，Windows 端也不需要安装器。
 
-> 当前版本：**0.7.2 · 四加载器预览版**
-> 目标：单文件、无额外运行时、低内存、快速启动；版本可选、安装可见、中断可补。
+**简体中文** | [English](README.en.md)
+
+> 当前版本：**0.7.2**（预览版）
+>
+> 目标：小体积、少依赖、安装过程可见、中断可补。功能边界见 [实现状态](docs/design/14-implementation-status.md)。
+
+## 为什么是 nailong
+
+装 Minecraft 本身不难，难的是装完以后干干净净：版本 JSON、资源索引、加载器 processor、Java 参数、整合包里的几百个文件，任何一环出错，玩家看到的都只是“启动失败”。
+
+nailong 的思路很直：
+
+- Rust 编写，启动器自身不运行在 JVM 上；Windows 是单文件，Linux 是一个 deb。
+- 安装过程拆成可见的阶段；中途断了，重新打开会检查缺什么再补，不用从头再来。
+- Forge / NeoForge 直接执行客户端 processor，不调用官方 installer，也不会把完整安装器留在磁盘上。
+- 整合包拖进来就能识别，装加载器、下文件、解压覆盖一步到位。
+
+它不是“万能启动器”，也还不是 1.0。能做和不能做的，下文列清楚了。
+
+## 特性
+
+### 安装与启动
+
+- 原版、Fabric、NeoForge、Forge 都支持，版本从官方清单读，不用手输。
+- Forge / NeoForge 走原生安装：只取 `install_profile`、`version.json` 和客户端补丁（约 3 MB），完整安装器不落盘。
+- 安装拆成阶段：版本 JSON 就绪后，资源、client/libraries、加载器补丁和 processor 并行推进。
+- 大文件按 4 段 Range 下载，段文件可续传；主源失败自动切备用源。
+- 本机补丁缓存；客户端和运行库按 SHA1 存 blob，硬链接到目标路径；已有文件只做轻量检查。
+- 本机现成的 patched client 也能复用：自动扫官方 / PCL / HMCL / Prism / MultiMC / Modrinth 和相邻 `.minecraft`，SHA1 匹配（NeoForge 走 JAR 结构校验）后直接复用，跳过补丁和 processor。
+- 已完整安装的 Forge / NeoForge 再装一次等于 no-op，不会重复下载、重跑 processor。
+- 资源缺失时明确提示“补全资源”，修完再启动。
+
+### 整合包
+
+支持六种格式，自动识别，不需要先选格式：
+
+| 格式 | 入口文件 | 说明 |
+|---|---|---|
+| Modrinth | `.mrpack` | 直链 + SHA1 |
+| CurseForge | `manifest.json` 的 zip | 按 project/file ID 解析；可选 API key 校验 |
+| Prism / MultiMC | `mmc-pack.json` | 读取组件和 overrides |
+| MCBBS | `mcbbs.packmeta` | addons + files + overrides |
+| HMCL | `modpack.json` + `minecraft/pack.json` | 内嵌 manifest 转实例 |
+| ATLauncher | `instance.json` | 内嵌 manifest 转实例 |
+
+把 `.mrpack` 或 `.zip` 拖进窗口即可开始导入。单个 mod `.jar` 目前不会被当成整合包处理。
+
+### 日常使用
+
+- 离线账户启动（单人 / 局域网）。
+- 版本管理：加载器依赖的原版自动隐藏；被依赖的版本不能误删。
+- 安装进度：阶段、百分比、已下载 / 总大小、文件数。
+- GUI 和 CLI 共用同一套 core；CLI 适合脚本和排障。
 
 ## 下载
 
-前往 [Releases](https://github.com/dkjsiogu/nailong/releases/latest) 下载：
-
-| 平台 | 文件 | 说明 |
-|---|---|---|
-| Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | **单个 exe，不用解压**，双击即用 |
-| Linux x64 (deb) | [nailong_0.7.2_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.7.2_amd64.deb) | amd64，兼容 Ubuntu 24.04+ |
+| 平台 | 文件 | 大小 | 要求 |
+|---|---|---:|---|
+| Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | 约 7.7 MB | Windows 10/11，Java 21 |
+| Linux x64 (deb) | [nailong_0.7.2_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.7.2_amd64.deb) | 约 3.2 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
 
 校验值：[SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS)。
 
 ### Windows
 
-1. 下载 `nailong.exe`，放到任意目录，双击运行；
-2. 第一次打开就是安装页：选 Minecraft 版本，再在 Fabric / NeoForge / Forge / 原版中选一个，点“安装”；
-3. 进度条走完后会自动回到主页，点“启动游戏”。
+1. 下载 `nailong.exe`，放到任意目录，双击运行。
+2. 第一次打开就是安装页：选 Minecraft 版本，再选 Fabric / NeoForge / Forge / 原版，点“安装”。
+3. 进度走完后回到主页，点“启动游戏”。
 
-需要系统里有 **Java 21**。启动器会自动查找；没找到时界面上会提示。
+需要系统里有 **Java 21**。启动器会自动查找；没找到时界面会提示。
 
-> exe 未做代码签名，Windows SmartScreen 可能提示“未知发布者”；选择“更多信息 → 仍要运行”即可。杀毒软件误报也偶有发生。
+> exe 没有代码签名，Windows SmartScreen 可能提示“未知发布者”。选择“更多信息 → 仍要运行”即可。杀毒软件误报也偶有发生。
 
 ### Linux（Debian / Ubuntu）
 
@@ -35,7 +86,7 @@ sudo apt install ./nailong_0.7.2_amd64.deb
 nailong
 ```
 
-也可以双击 deb 用软件中心安装。安装后开始菜单里会有 **nailong**。
+也可以双击 deb 用软件中心安装。安装后应用菜单里会有 **nailong**。
 
 卸载：
 
@@ -43,48 +94,44 @@ nailong
 sudo apt remove nailong
 ```
 
-> 这个 deb 在 **Ubuntu 26.04 / amd64** 上构建，已做兼容处理，要求 glibc ≥ 2.39；Ubuntu 24.04+ 可以直接安装，22.04 等更旧的系统暂时装不上。
+> deb 在 Ubuntu 26.04 / amd64 上构建，要求 glibc ≥ 2.39；Ubuntu 24.04+ 可以直接安装，22.04 等更旧的系统暂时装不上。
 
-数据目录默认：
+### 数据目录
 
-- Windows：`nailong.exe` 同目录下的 `.minecraft`（便携）
-- Linux：`~/.local/share/nailong/.minecraft`
+- Windows：`nailong.exe` 同目录下的 `.minecraft`（便携）。
+- Linux：`~/.local/share/nailong/.minecraft`。
 
-## 现在能做什么
+可以用 `--root` 指定其他目录。
 
-- **安装 Minecraft 原版**（已验证 1.21.1）
-- **安装 Fabric / NeoForge / Forge**（已验证 1.21.1：Fabric 0.19.5、NeoForge 21.1.209、Forge 52.1.20）
-- **Forge / NeoForge 原生安装**：Rust 读取安装描述并逐个执行客户端 processor，不再调用官方安装器
-- **安装数据按需读取**：只取 `install_profile`、`version.json` 和客户端补丁（约 3 MB），不再下载 6–9 MB 的完整安装器；补丁分 4 段并行读取，镜像不支持分段时自动回退
-- **并行安装流水线**：版本 JSON 就绪后，游戏资源、客户端/运行库、加载器补丁和 processor 同时推进，不再串行等资源下完
-- **大文件 4 段并发**：26 MB 的 client jar 自动切成 4 段 Range 下载，段文件可续传；主源失败自动切备用源
-- **本机补丁共享缓存**：同一个加载器补丁在一台机器上只下一次；第二个便携目录/数据目录直接复用
-- **本机客户端复用（CAS）**：扫描官方 / PCL / HMCL / Prism / MultiMC / Modrinth 和相邻 `.minecraft`，找到同 SHA1 的 patched client 就直接硬链接复用，跳过 3 MB 补丁和 processor；NeoForge 无官方输出哈希时按 JAR 结构校验，并可用 `NAILONG_REUSE_ROOTS` 指定额外目录
-- **内容寻址下载**：客户端和运行库先落 `cache/nailong/blobs/<sha1>`，再硬链接到最终路径；已有文件保持轻量 size 检查，不重复哈希/下载
-- **重复安装秒完成**：已完整安装的 Forge / NeoForge 直接复用，不再下载补丁、不再重跑 processor
-- **四种安装方式**：安装页按 Minecraft → Fabric → NeoForge → Forge → 原版排列，版本全部下拉选择
-- **整合包导入（6 种）**：Modrinth `.mrpack`、CurseForge `manifest.json` zip、Prism/MultiMC、MCBBS、HMCL、ATLauncher；自动识别、安装加载器、下载模组并解压覆盖文件
-- **CurseForge 可选校验**：在右上角“设置”里填 API Key（或设环境变量 `CURSEFORGE_API_KEY`）后走官方 API，校验文件名/大小/SHA1；不填也能导入，走 cfwidget 文件名 + CurseForge 官方下载页，但没有官方 SHA1。作者关闭第三方分发的文件会停止导入并列出，绝不手拼 CDN 链接绕过。Key 保存在数据目录的 `nailong.json`（Unix 0600），不写日志；环境变量优先，适合 CI
-- **离线账户启动**（单人 / 局域网）
-- **版本选择**：Minecraft 和三种加载器都是下拉框，自动从官方清单读取，不用手输
-- **版本管理**：加载器依赖的原版自动隐藏，不再和 NeoForge 并排显示；管理页可删除版本/整合包，被依赖的版本会阻止误删
-- **安装进度**：阶段、百分比、已下载 / 总大小、文件数
-- **中断可补**：启动时检查缺哪些文件；缺资源会显示“补全资源”，修完再启动
-- **图形界面**：一屏完成选版本、安装、启动；玩家名/内存收在下方一行
-- **命令行**：安装、启动、查看 Java、打印启动计划
-- **Windows + Linux**：Windows 为单 exe；Linux 提供 deb，安装后可直接从应用菜单启动
+## CurseForge API Key（可选）
 
-| 产物 | 大小 | 说明 |
-|---|---:|---|
-| Windows GUI `nailong.exe` | 约 7.7 MB | 单文件，无额外运行库 |
-| Linux GUI（deb 内） | 约 8.8 MB | 单二进制 |
-| `nailong_0.7.2_amd64.deb` | 约 3.2 MB | 含桌面图标、菜单项、GPL 许可 |
+**普通用户留空即可。** 这不是 CurseForge 账号密码，而是应用级 API key；没有它也能导入 CurseForge 整合包。
 
-> 实机验证：Linux（Xvfb + Mesa）下 Fabric / NeoForge / Forge 1.21.1 均启动到游戏渲染/主菜单；Forge / NeoForge 只缓存约 3 MB 的精简安装数据，完整安装器不再落盘；原版基础版本已从主列表隐藏，管理页可删除；重复安装走快速路径；导入 Fabulously Optimized `.mrpack` 后加载 151 个模组并启动；CurseForge 真实文件（无 key 官方下载页回退）、Prism、MCBBS、HMCL、ATLauncher 均已用合成/样例包跑通格式识别与实例创建；Windows 由 CI 原生编译，尚未在 Windows 实机启动，欢迎帮忙试。
+- 有 key：官方 API 返回文件名、大小、SHA1 和下载地址，下载后可以校验。
+- 没有 key：cfwidget 取文件名 + CurseForge 官方下载页；没有官方 SHA1。
+- 作者关闭第三方分发：停止导入并列出文件，不会手拼 CDN 链接绕过。
+- 填写位置：右上角 **设置**；也可以设环境变量 `CURSEFORGE_API_KEY`。
+- 存储位置：数据目录的 `nailong.json`；Unix 下权限 `0600`，不写日志。它是**本机明文存储**，不要分享这个文件。
+- 优先级：运行时环境变量 > 设置文件 > 构建时默认 key（维护者用 `NAILONG_CURSEFORGE_API_KEY` 注入）。
 
-## 命令行（可选）
+## 验证范围
 
-deb 只装了 GUI；如果你自己构建，会同时得到 CLI：
+已经实际跑过的：
+
+- Linux（Xvfb + Mesa）：Fabric 0.19.5、NeoForge 21.1.209、Forge 52.1.20 在 1.21.1 启动到主菜单。
+- Fabulously Optimized `.mrpack`：151 个模组加载并启动。
+- CurseForge：真实文件通过无 key 的官方下载页回退下载成功。
+- Prism、MCBBS、HMCL、ATLauncher：真实或合成样例包跑通格式识别与实例创建。
+
+还没验证的：
+
+- Windows 由 CI 原生编译，但尚未在 Windows 实机启动。
+- 微软正版登录还没做，需要先拿到 Minecraft Services 的 client id allowlist。
+- macOS 未支持，也没有验证。
+
+## 命令行
+
+deb 只装 GUI；自己构建会同时得到 CLI：
 
 ```bash
 ./target/release/nailong --root /path/to/.minecraft list
@@ -94,52 +141,55 @@ deb 只装了 GUI；如果你自己构建，会同时得到 CLI：
 ./target/release/nailong --root /path/to/.minecraft launch neoforge-21.1.209 --username Steve --memory 4096
 ```
 
-## 构建
+## 从源码构建
 
-发布产物由 GitHub Actions 构建，不占本机性能：
-
-- **CI**：`fmt + clippy + test`，每次 push / PR 自动跑
-- **Release**：手动运行 `Release` workflow（或 push `v*` tag），自动构建 Windows exe 和 Linux deb，并上传到对应 Release
-
-本地构建（Rust 1.95+）：
-
+需要 Rust 1.95+。Linux 还需要编译 egui 的系统依赖：
 
 ```bash
-# GUI + CLI
-cargo build --release -p nailong-ui -p nailong-cli
-
-# Linux: target/release/nailong-ui 是 GUI，target/release/nailong 是 CLI
-# Windows (GNU 交叉编译示例): --target x86_64-pc-windows-gnu
+sudo apt install build-essential pkg-config \
+  libgl1-mesa-dev libegl1-mesa-dev \
+  libx11-dev libxext-dev libxcursor-dev libxi-dev libxrandr-dev \
+  libxkbcommon-dev libxkbcommon-x11-dev
 ```
 
-打 deb：
+构建 GUI + CLI：
+
+```bash
+cargo build --release -p nailong-ui -p nailong-cli
+```
+
+Linux 构建 deb：
 
 ```bash
 ./scripts/build-deb.sh
 # 产物: dist/nailong_<version>_<arch>.deb
 ```
 
-## 这一版刻意没做
+Windows 发布版由 GitHub Actions 使用 MSVC + 静态 CRT 构建；也可以用 `x86_64-pc-windows-gnu` 交叉编译做本地检查。
 
-- 微软正版登录（client id / 审批未就绪；先离线）
-- 自动更新、模组管理、皮肤
-- 安装取消按钮（关闭窗口可中断；下次启动会检测并补全）
+## 还没做
+
+- 微软正版登录（client id / Minecraft Services allowlist 审批未就绪）。
+- 自动更新、模组管理、皮肤。
+- 安装取消按钮（关闭窗口可中断，下次打开会检测并补全）。
+- Windows 实机验证、macOS 支持。
+- 单个 mod `.jar` 直接导入。
 
 ## 代码结构
 
 ```text
 crates/
-  nailong-core/   版本解析、下载、Java 检测、启动、Fabric/NeoForge/Forge 安装
+  nailong-core/   版本解析、下载、Java 检测、启动、加载器安装、整合包导入
   nailong-cli/    命令行
   nailong-ui/     egui 图形界面
 packaging/linux/  desktop、图标、AppStream 元数据、版权文件
 scripts/          deb 打包脚本
 docs/
   design/         架构与设计文档
-  brief/          给老板看的 9 页简报
+  brief/          9 页项目简报
 ```
 
-详细设计见 [设计文档索引](docs/design/00-overview.md)；当前实现进度与已知偏差见 [实现状态](docs/design/14-implementation-status.md)；给非技术读者的版本见 [9 页简报](docs/brief/nailong-brief.pdf)。
+详细设计见 [设计文档索引](docs/design/00-overview.md)；实现进度与已知偏差见 [实现状态](docs/design/14-implementation-status.md)。
 
 ## 许可
 
