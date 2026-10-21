@@ -893,6 +893,17 @@ impl App {
                             .size(11.0)
                             .color(WARN),
                         );
+                    } else if config::builtin_curseforge_key().is_some()
+                        && self.curseforge_key.trim().is_empty()
+                    {
+                        ui.add_space(6.0);
+                        ui.label(
+                            egui::RichText::new(
+                                "此构建已内置默认 key；这里留空即可，填写会覆盖内置值。",
+                            )
+                            .size(11.0)
+                            .color(MUTED),
+                        );
                     }
                     ui.add_space(10.0);
                     ui.add(

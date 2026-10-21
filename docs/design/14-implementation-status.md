@@ -1,7 +1,7 @@
-# 14 · 原型实现状态（0.1 → 0.7.1）
+# 14 · 原型实现状态（0.1 → 0.7.2）
 
 > 日期：2026-10-21
-> 对应发布：GitHub Release `v0.7.1` 的 `nailong.exe`、`nailong_0.7.1_amd64.deb`
+> 对应发布：GitHub Release `v0.7.2` 的 `nailong.exe`、`nailong_0.7.2_amd64.deb`
 > 目的：把「设计稿」和「已经跑起来的代码」分开记账，避免把计划当成已完成。
 
 ## 1. 一句话结论
@@ -25,6 +25,8 @@
 0.7.0 补齐 MCBBS、HMCL、ATLauncher：MCBBS 用 addons + files + overrides；HMCL 读 `modpack.json` + `minecraft/pack.json`，ATLauncher 读 `instance.json`，把内嵌 manifest 转成实例 profile 并安装基础版本。CurseForge 支持 `CURSEFORGE_API_KEY` 官方 API 校验 SHA1/大小；所有下载增加 Content-Length 大小检查。
 
 0.7.1 增加设置页：CurseForge API Key 可掩码查看、保存、清除，写入 `<数据目录>/nailong.json`（Unix 0600），环境变量优先；无 key 的 cfwidget 回退不变。设置页在版本列表为空时也可进入。
+
+0.7.2 修正 CurseForge 合规路径：官方 API 的 `downloadUrl` 为 null（作者关闭第三方分发）时停止导入并列出文件，不再手拼 CDN 链接；无 key 回退改用官方下载页。元数据查询加入 120 ms 间隔，并支持用 `NAILONG_CURSEFORGE_API_KEY` 在发布构建中内置默认 key（运行时环境变量和设置文件仍优先）。
 
 发布形态刻意保持简单：Windows 只发一个 `nailong.exe`；Linux 只发一个可双击/`apt install` 的 `.deb`。
 
@@ -61,7 +63,7 @@
 | 大文件分段下载 | `core::http` | 完成 | client jar 4 段并行、段续传、源回退 |
 | 重复安装快速路径 | `core::install::forge` / `neoforge` | 完成 | health 通过则 0 下载、0 processor |
 | Windows 交叉编译 | `x86_64-pc-windows-gnu` | 通过 | 无 MinGW DLL 依赖，仅系统 DLL |
-| 发布包 | GitHub Release `v0.7.1` | 完成（CI 构建） | 单 exe 约 7.7 MB / deb 约 3.2 MB |
+| 发布包 | GitHub Release `v0.7.2` | 完成（CI 构建） | 单 exe 约 7.7 MB / deb 约 3.2 MB |
 
 ### 2.1 实测记录
 
@@ -102,7 +104,7 @@
 | 正版登录 / 自动更新 | 未实现 | 下一步做账户与更新 |
 | 微软正版登录 | 未实现（离线） | 按决定推迟到 M3.5 |
 | 自动更新 / 签名 / 崩溃报告 | 未实现 | 发布前补齐 |
-| 单元/集成测试体系 | **30 个测试** | 缺夹具、mock HTTP、启动 argv 快照、Windows CI |
+| 单元/集成测试体系 | **34 个测试** | 缺夹具、mock HTTP、启动 argv 快照、Windows CI |
 
 ## 4. 已知问题与风险
 

@@ -65,8 +65,19 @@ fn write_private(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
     write_atomic(path, bytes)
 }
 
-/// Environment variable wins for CI/power users; the saved setting is the
-/// normal desktop path.
+/// Build-time fallback for release builds. Set `NAILONG_CURSEFORGE_API_KEY`
+/// in CI to bake in a project key; an empty variable is ignored. The key is
+/// still extractable from a desktop binary, so runtime/user values win.
+const BUILTIN_CURSEFORGE_API_KEY: Option<&str> = option_env!("NAILONG_CURSEFORGE_API_KEY");
+
+pub fn builtin_curseforge_key() -> Option<String> {
+    BUILTIN_CURSEFORGE_API_KEY
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+/// Priority: runtime environment, saved setting, then the build-time default.
 pub fn curseforge_api_key(root: &Root) -> Option<String> {
     std::env::var("CURSEFORGE_API_KEY")
         .ok()
@@ -79,6 +90,7 @@ pub fn curseforge_api_key(root: &Root) -> Option<String> {
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty())
         })
+        .or_else(builtin_curseforge_key)
 }
 
 #[cfg(test)]

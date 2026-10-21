@@ -12,6 +12,8 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{Read, Seek};
 use std::path::{Component, Path, PathBuf};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstanceMeta {
@@ -38,6 +40,17 @@ enum PackFormat {
     Mcbbs,
     Hmcl,
     Atl,
+}
+
+enum CurseFileLookup {
+    Ready(FileSpec),
+    Blocked(String),
+}
+
+enum CurseApiLookup {
+    File(ResolvedCurseFile),
+    Blocked(String),
+    Failed,
 }
 
 #[derive(Debug, Deserialize)]
@@ -509,7 +522,12 @@ fn import_mcbbs_files(
                     file_id: *file_id,
                     required: Some(true),
                 };
-                specs.push(curse_file_spec(&http, &curse, game_dir, api_key.as_deref()));
+                match curse_file_spec(&http, &curse, game_dir, api_key.as_deref()) {
+                    CurseFileLookup::Ready(spec) => specs.push(spec),
+                    CurseFileLookup::Blocked(label) => {
+                        return Err(curse_blocked_error(&[label]));
+                    }
+                }
             }
             McbbsFile::Addon { path, hash } => {
                 let Some(base) = manifest.file_api.as_deref() else {
@@ -857,15 +875,66 @@ fn import_curse_files(
     (sink)(Progress::stage("解析 CurseForge 文件"));
     let http = Http::new(mirror)?;
     let api_key = config::curseforge_api_key(root);
-    (sink)(Progress::stage("解析 CurseForge 文件"));
-    let specs: Vec<FileSpec> = files
+    let lookups: Vec<CurseFileLookup> = files
         .par_iter()
         .filter(|file| file.required != Some(false))
         .map(|file| curse_file_spec(&http, file, game_dir, api_key.as_deref()))
         .collect();
+    let mut specs = Vec::new();
+    let mut blocked = Vec::new();
+    for lookup in lookups {
+        match lookup {
+            CurseFileLookup::Ready(spec) => specs.push(spec),
+            CurseFileLookup::Blocked(label) => blocked.push(label),
+        }
+    }
+    if !blocked.is_empty() {
+        return Err(curse_blocked_error(&blocked));
+    }
+    if specs.is_empty() {
+        return Ok(());
+    }
     (sink)(Progress::stage("下载整合包文件"));
     http.download_many_with(specs, "下载整合包文件", sink)?;
     Ok(())
+}
+
+const CURSE_LOOKUP_INTERVAL: Duration = Duration::from_millis(120);
+static CURSE_LOOKUP_GATE: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// CurseForge metadata is fetched from a shared worker pool. Space the starts
+/// out so a large pack does not turn into a burst against the API or cfwidget.
+fn throttle_curse_lookup() {
+    let mut last = CURSE_LOOKUP_GATE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(at) = *last {
+        let elapsed = at.elapsed();
+        if elapsed < CURSE_LOOKUP_INTERVAL {
+            std::thread::sleep(CURSE_LOOKUP_INTERVAL - elapsed);
+        }
+    }
+    *last = Some(Instant::now());
+}
+
+fn curse_blocked_error(blocked: &[String]) -> Error {
+    let shown = blocked
+        .iter()
+        .take(6)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("；");
+    let more = if blocked.len() > 6 {
+        format!("；另有 {} 个", blocked.len() - 6)
+    } else {
+        String::new()
+    };
+    Error::Install(format!(
+        "有 {} 个 CurseForge 文件被作者关闭了第三方分发，已停止导入：{}{}。请使用 CurseForge 官方启动器，或手动下载这些文件后重试。",
+        blocked.len(),
+        shown,
+        more
+    ))
 }
 
 fn curse_file_spec(
@@ -873,18 +942,26 @@ fn curse_file_spec(
     file: &CurseFile,
     game_dir: &Path,
     api_key: Option<&str>,
-) -> FileSpec {
+) -> CurseFileLookup {
+    throttle_curse_lookup();
+    let resolved = match curse_api_file(http, file, api_key) {
+        CurseApiLookup::File(resolved) => Some(resolved),
+        CurseApiLookup::Blocked(name) => {
+            return CurseFileLookup::Blocked(format!(
+                "{name} (project {}, file {})",
+                file.project_id, file.file_id
+            ));
+        }
+        CurseApiLookup::Failed => None,
+    };
+    let (name, size, direct, sha1) = match resolved {
+        Some(resolved) => resolved,
+        None => match curse_widget_file(http, file) {
+            Some((name, size)) => (name, size, None, None),
+            None => (String::new(), None, None, None),
+        },
+    };
     let fallback = format!("mods/{}-{}.jar", file.project_id, file.file_id);
-    let (name, size, direct, sha1) = curse_api_file(http, file, api_key)
-        .or_else(|| {
-            let widget = curse_widget_file(http, file);
-            if widget.0.is_empty() {
-                None
-            } else {
-                Some((widget.0, widget.1, widget.2, None))
-            }
-        })
-        .unwrap_or_else(|| (String::new(), None, None, None));
     let rel = if name.is_empty() {
         fallback
     } else {
@@ -895,42 +972,54 @@ fn curse_file_spec(
             .join("mods")
             .join(format!("{}-{}.jar", file.project_id, file.file_id))
     });
-    let url = direct.unwrap_or_else(|| {
-        if name.is_empty() {
-            format!(
-                "https://www.curseforge.com/api/v1/mods/{}/files/{}/download",
-                file.project_id, file.file_id
-            )
-        } else {
-            curse_cdn_url(file.file_id, &name)
-        }
-    });
-    FileSpec {
+    // Never synthesize a CDN path. Without an official download URL the
+    // website endpoint is the only fallback, and it enforces the author's
+    // distribution setting (including returning an error when disabled).
+    let url = direct.unwrap_or_else(|| curse_download_page_url(file.project_id, file.file_id));
+    CurseFileLookup::Ready(FileSpec {
         url,
         dest,
         sha1,
         size,
         verify_existing: true,
-    }
+    })
 }
 
 type ResolvedCurseFile = (String, Option<u64>, Option<String>, Option<String>);
 
-fn curse_api_file(
-    http: &Http,
-    file: &CurseFile,
-    api_key: Option<&str>,
-) -> Option<ResolvedCurseFile> {
-    let key = api_key?;
+fn curse_api_file(http: &Http, file: &CurseFile, api_key: Option<&str>) -> CurseApiLookup {
+    let Some(key) = api_key else {
+        return CurseApiLookup::Failed;
+    };
     let url = format!(
         "https://api.curseforge.com/v1/mods/{}/files/{}",
         file.project_id, file.file_id
     );
-    let value = http
-        .get_json_with_headers(&url, &[("x-api-key", key), ("Accept", "application/json")])
-        .ok()?;
-    let data = value.get("data")?;
-    let name = data.get("fileName")?.as_str()?.to_string();
+    let Ok(value) =
+        http.get_json_with_headers(&url, &[("x-api-key", key), ("Accept", "application/json")])
+    else {
+        return CurseApiLookup::Failed;
+    };
+    curse_api_value(value)
+}
+
+fn curse_api_value(value: Value) -> CurseApiLookup {
+    let Some(data) = value.get("data") else {
+        return CurseApiLookup::Failed;
+    };
+    let Some(name) = data.get("fileName").and_then(|v| v.as_str()) else {
+        return CurseApiLookup::Failed;
+    };
+    let Some(direct) = data
+        .get("downloadUrl")
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.trim().is_empty())
+    else {
+        return CurseApiLookup::Blocked(name.to_string());
+    };
+    if !direct.starts_with("https://") {
+        return CurseApiLookup::Failed;
+    }
     let size = data.get("fileLength").and_then(|v| v.as_u64());
     let sha1 = data
         .get("hashes")
@@ -942,33 +1031,21 @@ fn curse_api_file(
                 .and_then(|item| item.get("value").and_then(|v| v.as_str()))
                 .map(str::to_string)
         });
-    let direct = data
-        .get("downloadUrl")
-        .and_then(|v| v.as_str())
-        .filter(|v| !v.is_empty())
-        .map(str::to_string)
-        .or_else(|| Some(curse_cdn_url(file.file_id, &name)));
-    Some((name, size, direct, sha1))
+    CurseApiLookup::File((name.to_string(), size, Some(direct.to_string()), sha1))
 }
 
-fn curse_cdn_url(file_id: u64, name: &str) -> String {
-    let first = file_id / 1000;
-    let last = file_id % 1000;
-    format!("https://mediafilez.forgecdn.net/files/{first}/{last:03}/{name}")
+fn curse_download_page_url(project_id: u64, file_id: u64) -> String {
+    format!("https://www.curseforge.com/api/v1/mods/{project_id}/files/{file_id}/download")
 }
 
-fn curse_widget_file(http: &Http, file: &CurseFile) -> (String, Option<u64>, Option<String>) {
+fn curse_widget_file(http: &Http, file: &CurseFile) -> Option<(String, Option<u64>)> {
     let url = format!(
         "https://cfwidget.com/{}?version={}",
         file.project_id, file.file_id
     );
-    let Ok(html) = http.get_text(&url) else {
-        return (String::new(), None, None);
-    };
-    let Some(name) = find_jar_name(&html) else {
-        return (String::new(), None, None);
-    };
-    (name.clone(), None, Some(curse_cdn_url(file.file_id, &name)))
+    let html = http.get_text(&url).ok()?;
+    let name = find_jar_name(&html)?;
+    Some((name, None))
 }
 
 fn find_jar_name(html: &str) -> Option<String> {
@@ -1249,6 +1326,55 @@ mod tests {
         assert_eq!(manifest.files[0].project_id, 238222);
         assert_eq!(manifest.files[0].required, Some(true));
         assert!(manifest.minecraft.mod_loaders[0].primary);
+    }
+
+    #[test]
+    fn curse_fallback_uses_site_download_endpoint() {
+        assert_eq!(
+            curse_download_page_url(238222, 9268986),
+            "https://www.curseforge.com/api/v1/mods/238222/files/9268986/download"
+        );
+    }
+
+    #[test]
+    fn curse_api_without_download_url_is_blocked() {
+        let value = serde_json::json!({
+            "data": {"fileName": "restricted.jar", "downloadUrl": null}
+        });
+        assert!(matches!(
+            curse_api_value(value),
+            CurseApiLookup::Blocked(name) if name == "restricted.jar"
+        ));
+    }
+
+    #[test]
+    fn curse_api_with_download_url_is_ready() {
+        let value = serde_json::json!({
+            "data": {
+                "fileName": "allowed.jar",
+                "fileLength": 123,
+                "downloadUrl": "https://edge.forgecdn.net/files/1/2/allowed.jar?api-key=x",
+                "hashes": [{"algo": 1, "value": "abc"}]
+            }
+        });
+        match curse_api_value(value) {
+            CurseApiLookup::File((name, size, url, sha1)) => {
+                assert_eq!(name, "allowed.jar");
+                assert_eq!(size, Some(123));
+                assert!(url.as_deref().is_some_and(|u| u.starts_with("https://")));
+                assert_eq!(sha1.as_deref(), Some("abc"));
+            }
+            _ => panic!("expected a ready file"),
+        }
+    }
+
+    #[test]
+    fn blocked_curse_files_produce_actionable_error() {
+        let message =
+            curse_blocked_error(&["example.jar (project 1, file 2)".to_string()]).to_string();
+        assert!(message.contains("example.jar"));
+        assert!(message.contains("第三方分发"));
+        assert!(message.contains("CurseForge 官方启动器"));
     }
 
     #[test]
