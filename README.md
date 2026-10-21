@@ -4,7 +4,7 @@
 
 轻量的 Minecraft 启动器，使用 Rust 编写。
 
-> 当前版本：**0.7.0 · 四加载器预览版**
+> 当前版本：**0.7.1 · 四加载器预览版**
 > 目标：单文件、无额外运行时、低内存、快速启动；版本可选、安装可见、中断可补。
 
 ## 下载
@@ -14,7 +14,7 @@
 | 平台 | 文件 | 说明 |
 |---|---|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | **单个 exe，不用解压**，双击即用 |
-| Linux x64 (deb) | [nailong_0.7.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.7.0_amd64.deb) | amd64，兼容 Ubuntu 24.04+ |
+| Linux x64 (deb) | [nailong_0.7.1_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.7.1_amd64.deb) | amd64，兼容 Ubuntu 24.04+ |
 
 校验值：[SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS)。
 
@@ -31,7 +31,7 @@
 ### Linux（Debian / Ubuntu）
 
 ```bash
-sudo apt install ./nailong_0.7.0_amd64.deb
+sudo apt install ./nailong_0.7.1_amd64.deb
 nailong
 ```
 
@@ -64,7 +64,7 @@ sudo apt remove nailong
 - **重复安装秒完成**：已完整安装的 Forge / NeoForge 直接复用，不再下载补丁、不再重跑 processor
 - **四种安装方式**：安装页按 Minecraft → Fabric → NeoForge → Forge → 原版排列，版本全部下拉选择
 - **整合包导入（6 种）**：Modrinth `.mrpack`、CurseForge `manifest.json` zip、Prism/MultiMC、MCBBS、HMCL、ATLauncher；自动识别、安装加载器、下载模组并解压覆盖文件
-- **CurseForge 可选校验**：设置 `CURSEFORGE_API_KEY` 后走官方 API，校验文件名/大小/SHA1；不设置也能导入，但只有 HTTPS/大小检查
+- **CurseForge 可选校验**：在右上角“设置”里填 API Key（或设环境变量 `CURSEFORGE_API_KEY`）后走官方 API，校验文件名/大小/SHA1；不填也能导入，但只有 HTTPS/大小检查。Key 保存在数据目录的 `nailong.json`（Unix 0600），不写日志；环境变量优先，适合 CI
 - **离线账户启动**（单人 / 局域网）
 - **版本选择**：Minecraft 和三种加载器都是下拉框，自动从官方清单读取，不用手输
 - **版本管理**：加载器依赖的原版自动隐藏，不再和 NeoForge 并排显示；管理页可删除版本/整合包，被依赖的版本会阻止误删
@@ -77,8 +77,8 @@ sudo apt remove nailong
 | 产物 | 大小 | 说明 |
 |---|---:|---|
 | Windows GUI `nailong.exe` | 约 7.6 MB | 单文件，无额外运行库 |
-| Linux GUI（deb 内） | 约 8.7 MB | 单二进制 |
-| `nailong_0.7.0_amd64.deb` | 约 3.1 MB | 含桌面图标、菜单项、GPL 许可 |
+| Linux GUI（deb 内） | 约 8.5 MB | 单二进制 |
+| `nailong_0.7.1_amd64.deb` | 约 3.2 MB | 含桌面图标、菜单项、GPL 许可 |
 
 > 实机验证：Linux（Xvfb + Mesa）下 Fabric / NeoForge / Forge 1.21.1 均启动到游戏渲染/主菜单；Forge / NeoForge 只缓存约 3 MB 的精简安装数据，完整安装器不再落盘；原版基础版本已从主列表隐藏，管理页可删除；重复安装走快速路径；导入 Fabulously Optimized `.mrpack` 后加载 151 个模组并启动；CurseForge 真实 CDN 文件、Prism、MCBBS、HMCL、ATLauncher 均已用合成/样例包跑通格式识别与实例创建；Windows 由 CI 原生编译，尚未在 Windows 实机启动，欢迎帮忙试。
 

@@ -562,11 +562,10 @@ shared/jre/
 ### 8.4 CurseForge 细节
 
 - `manifest.json` 的 `files[{projectID, fileID, required}]` 只有 ID，没有文件名/URL。
-- 解析文件：优先 `cfwidget.com/{projectID}?version={fileID}` 的 HTML 取出文件名，构造 `mediafilez.forgecdn.net/files/{id/1000}/{id%1000:03}/{name}`；失败再尝试 CurseForge 官方 JSON。
-- 需要 API key（用户自备或项目内置受限 key）；API 有速率限制，需缓存与退避。
-- 不需要 API Key；拿不到文件名时回退 `<projectID>-<fileID>.jar`，不阻断 overrides 导入。
-- 设置 `CURSEFORGE_API_KEY` 时改用官方 API，优先取 `fileName/fileLength/hashes` 并校验 SHA1；无 key 时只有 HTTPS + 可选大小检查。
-- 不接受从第三方网页抓取（违反 ToS 且脆弱）。
+- 解析文件：有 API Key 时先走 `api.curseforge.com/v1/mods/{projectID}/files/{fileID}`，取官方 `fileName/fileLength/hashes`；无 key 或官方失败时，读 `cfwidget.com/{projectID}?version={fileID}` 的 HTML 取出文件名，构造 `mediafilez.forgecdn.net/files/{id/1000}/{id%1000:03}/{name}`。
+- API Key 可选，不阻断导入；GUI 右上角“设置”可填写、显示/隐藏、保存和清除，也支持环境变量 `CURSEFORGE_API_KEY`（优先于配置文件）。
+- Key 存在数据目录的 `nailong.json`，Unix 权限 0600；不写日志、不进入启动参数。官方 API 有速率限制，失败会回退到 cfwidget。
+- 无 key 时只有 HTTPS + 可选大小检查，没有官方 SHA1；拿不到文件名时回退 `<projectID>-<fileID>.jar`，不阻断 overrides 导入。
 
 ### 8.5 安全
 

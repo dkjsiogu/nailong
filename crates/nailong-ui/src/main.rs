@@ -4,7 +4,7 @@ use eframe::egui;
 use nailong_core::install::{catalog, fabric, forge, health, modpack, neoforge, vanilla};
 use nailong_core::launch::{self, LaunchOptions};
 use nailong_core::progress::{Progress, Sink, from_fn};
-use nailong_core::{Root, java};
+use nailong_core::{Root, config, java};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
@@ -117,7 +117,11 @@ struct App {
     java_ok: bool,
     show_install: bool,
     show_manage: bool,
+    show_settings: bool,
     show_base: bool,
+    curseforge_key: String,
+    show_key: bool,
+    settings_notice: Option<String>,
     delete_confirm: Option<String>,
     catalog: Option<catalog::Catalog>,
     catalog_loading: bool,
@@ -142,6 +146,10 @@ struct App {
 impl App {
     fn new(root: Root) -> Self {
         let java_ok = java::find_all().iter().any(|j| j.major >= 21);
+        let curseforge_key = config::load(&root)
+            .ok()
+            .and_then(|cfg| cfg.curseforge_api_key)
+            .unwrap_or_default();
         let mut app = Self {
             root,
             rows: Vec::new(),
@@ -151,7 +159,11 @@ impl App {
             java_ok,
             show_install: false,
             show_manage: false,
+            show_settings: false,
             show_base: false,
+            curseforge_key,
+            show_key: false,
+            settings_notice: None,
             delete_confirm: None,
             catalog: None,
             catalog_loading: false,
@@ -302,6 +314,7 @@ impl App {
     fn open_install(&mut self) {
         self.show_install = true;
         self.show_manage = false;
+        self.show_settings = false;
         self.error = None;
         self.notice = None;
         self.repair_target = None;
@@ -367,6 +380,7 @@ impl App {
         self.notice = None;
         self.show_install = true;
         self.show_manage = false;
+        self.show_settings = false;
         self.show_log = false;
         self.busy = Some(Task::Install);
         self.progress = Some(Progress::stage("准备导入整合包"));
@@ -420,6 +434,7 @@ impl App {
         self.notice = None;
         self.show_install = true;
         self.show_manage = false;
+        self.show_settings = false;
         if loader == LoaderKind::Vanilla {
             self.show_base = true;
         }
@@ -613,27 +628,43 @@ impl App {
                         ui.add_space(22.0);
                         if matches!(self.busy, Some(Task::Launch)) {
                             ui.spinner();
+                        } else if self.show_settings {
+                            if ghost_button(ui, "返回").clicked() {
+                                self.show_settings = false;
+                                self.settings_notice = None;
+                            }
                         } else if self.show_manage {
                             if ghost_button(ui, "返回").clicked() {
                                 self.show_manage = false;
                                 self.delete_confirm = None;
                             }
-                        } else if !self.show_install && !self.rows.is_empty() && self.busy.is_none()
-                        {
-                            if ghost_button(ui, "版本管理").clicked() {
-                                self.show_manage = true;
-                                self.delete_confirm = None;
+                        } else if self.busy.is_none() {
+                            if ghost_button(ui, "设置").clicked() {
+                                self.show_settings = true;
+                                self.settings_notice = None;
                                 self.error = None;
+                                self.delete_confirm = None;
                             }
-                            ui.add_space(4.0);
-                            if ghost_button(ui, "+ 安装").clicked() {
-                                self.open_install();
-                            }
-                            ui.add_space(4.0);
-                            if ghost_button(ui, "导入整合包").clicked()
-                                && let Some(path) = pick_modpack()
-                            {
-                                self.start_modpack(path);
+                            if !self.show_install {
+                                if !self.rows.is_empty() {
+                                    ui.add_space(4.0);
+                                    if ghost_button(ui, "版本管理").clicked() {
+                                        self.show_manage = true;
+                                        self.show_settings = false;
+                                        self.delete_confirm = None;
+                                        self.error = None;
+                                    }
+                                }
+                                ui.add_space(4.0);
+                                if ghost_button(ui, "+ 安装").clicked() {
+                                    self.open_install();
+                                }
+                                ui.add_space(4.0);
+                                if ghost_button(ui, "导入整合包").clicked()
+                                    && let Some(path) = pick_modpack()
+                                {
+                                    self.start_modpack(path);
+                                }
                             }
                         }
                     });
@@ -789,6 +820,133 @@ impl App {
                 self.delete_confirm = None;
             }
         }
+    }
+
+    fn save_curseforge_key(&mut self, clear: bool) {
+        let mut cfg = match config::load(&self.root) {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                self.settings_notice = None;
+                self.error = Some(format!("读取设置失败: {e}"));
+                return;
+            }
+        };
+        let key = if clear {
+            None
+        } else {
+            let key = self.curseforge_key.trim();
+            (!key.is_empty()).then(|| key.to_string())
+        };
+        let had_key = key.is_some();
+        cfg.curseforge_api_key = key;
+        match config::save(&self.root, &cfg) {
+            Ok(()) => {
+                if !had_key {
+                    self.curseforge_key.clear();
+                }
+                self.settings_notice = Some(if had_key {
+                    "已保存。下一次导入 CurseForge 整合包时生效。".into()
+                } else {
+                    "已清除 CurseForge API Key".into()
+                });
+                self.error = None;
+            }
+            Err(e) => {
+                self.settings_notice = None;
+                self.error = Some(format!("保存设置失败: {e}"));
+            }
+        }
+    }
+
+    fn settings_view(&mut self, ui: &mut egui::Ui) {
+        let width = ui.available_width().min(600.0);
+        let pad = ((ui.available_width() - width) / 2.0).max(24.0);
+        ui.add_space(30.0);
+        ui.horizontal(|ui| {
+            ui.add_space(pad);
+            ui.vertical(|ui| {
+                ui.set_width(width);
+                ui.label(egui::RichText::new("设置").size(28.0).strong());
+                ui.add_space(6.0);
+                ui.label(
+                    egui::RichText::new("只保存启动器需要的最小配置，不写日志、不进入游戏参数。")
+                        .size(12.0)
+                        .color(MUTED),
+                );
+                ui.add_space(18.0);
+                card().show(ui, |ui| {
+                    ui.label(egui::RichText::new("CurseForge API Key（可选）").size(15.0).strong());
+                    ui.add_space(6.0);
+                    ui.label(
+                        egui::RichText::new(
+                            "不填：cfwidget 文件名 + HTTPS。填写：官方 API 校验文件名、大小、SHA1。",
+                        )
+                        .size(12.0)
+                        .color(MUTED),
+                    );
+                    if std::env::var("CURSEFORGE_API_KEY").is_ok_and(|v| !v.trim().is_empty()) {
+                        ui.add_space(6.0);
+                        ui.label(
+                            egui::RichText::new(
+                                "当前进程已设置环境变量 CURSEFORGE_API_KEY，它优先于这里保存的值。",
+                            )
+                            .size(11.0)
+                            .color(WARN),
+                        );
+                    }
+                    ui.add_space(10.0);
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.curseforge_key)
+                            .password(!self.show_key)
+                            .desired_width(430.0)
+                            .hint_text("粘贴 CurseForge API Key"),
+                    );
+                    ui.add_space(4.0);
+                    ui.checkbox(&mut self.show_key, "显示密钥");
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("保存").clicked() {
+                            self.save_curseforge_key(false);
+                        }
+                        if ui.button("清除").clicked() {
+                            self.save_curseforge_key(true);
+                        }
+                    });
+                    ui.add_space(8.0);
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "保存位置: {}",
+                            config::path(&self.root).display()
+                        ))
+                        .size(11.0)
+                        .color(MUTED),
+                    );
+                    ui.label(
+                        egui::RichText::new(
+                            "Key 为本机明文存储；Unix 下仅当前用户可读（0600）。不要分享 nailong.json。",
+                        )
+                        .size(11.0)
+                        .color(MUTED),
+                    );
+                });
+                if let Some(note) = &self.settings_notice {
+                    ui.add_space(10.0);
+                    ui.label(
+                        egui::RichText::new(note)
+                            .size(12.0)
+                            .color(egui::Color32::from_rgb(120, 190, 140)),
+                    );
+                }
+                if let Some(err) = &self.error {
+                    ui.add_space(10.0);
+                    ui.label(
+                        egui::RichText::new(err)
+                            .size(12.0)
+                            .color(egui::Color32::from_rgb(230, 120, 110)),
+                    );
+                }
+            });
+        });
     }
 
     fn manage_view(&mut self, ui: &mut egui::Ui) {
@@ -1196,6 +1354,8 @@ impl eframe::App for App {
         egui::CentralPanel::default_margins().show(ui, |ui| {
             if matches!(self.busy, Some(Task::Install)) {
                 self.progress_view(ui);
+            } else if self.show_settings {
+                self.settings_view(ui);
             } else if self.show_manage {
                 self.manage_view(ui);
             } else if self.show_install {

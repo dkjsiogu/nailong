@@ -1,3 +1,4 @@
+use crate::config;
 use crate::error::{Error, Result};
 use crate::http::{FileSpec, Http};
 use crate::install::{fabric, forge, neoforge, vanilla};
@@ -299,7 +300,7 @@ fn import_curseforge(
         create_instance(root, &name, &profile, "curseforge", archive)?;
 
     let result = (|| -> Result<()> {
-        import_curse_files(&manifest.files, &game_dir, mirror, sink)?;
+        import_curse_files(root, &manifest.files, &game_dir, mirror, sink)?;
         let overrides = manifest
             .overrides
             .clone()
@@ -415,7 +416,7 @@ fn import_mcbbs(
     let (id, instance_dir, game_dir) = create_instance(root, &name, &profile, "mcbbs", archive)?;
 
     let result = (|| -> Result<()> {
-        import_mcbbs_files(&manifest, &game_dir, mirror, sink)?;
+        import_mcbbs_files(root, &manifest, &game_dir, mirror, sink)?;
         extract_prefixes(
             &mut zip,
             &game_dir,
@@ -484,6 +485,7 @@ fn install_mcbbs_loader(
 }
 
 fn import_mcbbs_files(
+    root: &Root,
     manifest: &McbbsManifest,
     game_dir: &Path,
     mirror: &str,
@@ -493,6 +495,7 @@ fn import_mcbbs_files(
         return Ok(());
     }
     let http = Http::new(mirror)?;
+    let api_key = config::curseforge_api_key(root);
     (sink)(Progress::stage("解析 MCBBS 文件"));
     let mut specs = Vec::new();
     for file in &manifest.files {
@@ -506,7 +509,7 @@ fn import_mcbbs_files(
                     file_id: *file_id,
                     required: Some(true),
                 };
-                specs.push(curse_file_spec(&http, &curse, game_dir));
+                specs.push(curse_file_spec(&http, &curse, game_dir, api_key.as_deref()));
             }
             McbbsFile::Addon { path, hash } => {
                 let Some(base) = manifest.file_api.as_deref() else {
@@ -842,6 +845,7 @@ fn normalize_loader_version(mc: &str, version: &str) -> String {
 }
 
 fn import_curse_files(
+    root: &Root,
     files: &[CurseFile],
     game_dir: &Path,
     mirror: &str,
@@ -852,20 +856,26 @@ fn import_curse_files(
     }
     (sink)(Progress::stage("解析 CurseForge 文件"));
     let http = Http::new(mirror)?;
+    let api_key = config::curseforge_api_key(root);
     (sink)(Progress::stage("解析 CurseForge 文件"));
     let specs: Vec<FileSpec> = files
         .par_iter()
         .filter(|file| file.required != Some(false))
-        .map(|file| curse_file_spec(&http, file, game_dir))
+        .map(|file| curse_file_spec(&http, file, game_dir, api_key.as_deref()))
         .collect();
     (sink)(Progress::stage("下载整合包文件"));
     http.download_many_with(specs, "下载整合包文件", sink)?;
     Ok(())
 }
 
-fn curse_file_spec(http: &Http, file: &CurseFile, game_dir: &Path) -> FileSpec {
+fn curse_file_spec(
+    http: &Http,
+    file: &CurseFile,
+    game_dir: &Path,
+    api_key: Option<&str>,
+) -> FileSpec {
     let fallback = format!("mods/{}-{}.jar", file.project_id, file.file_id);
-    let (name, size, direct, sha1) = curse_api_file(http, file)
+    let (name, size, direct, sha1) = curse_api_file(http, file, api_key)
         .or_else(|| {
             let widget = curse_widget_file(http, file);
             if widget.0.is_empty() {
@@ -906,17 +916,18 @@ fn curse_file_spec(http: &Http, file: &CurseFile, game_dir: &Path) -> FileSpec {
 
 type ResolvedCurseFile = (String, Option<u64>, Option<String>, Option<String>);
 
-fn curse_api_file(http: &Http, file: &CurseFile) -> Option<ResolvedCurseFile> {
-    let key = std::env::var("CURSEFORGE_API_KEY").ok()?;
+fn curse_api_file(
+    http: &Http,
+    file: &CurseFile,
+    api_key: Option<&str>,
+) -> Option<ResolvedCurseFile> {
+    let key = api_key?;
     let url = format!(
         "https://api.curseforge.com/v1/mods/{}/files/{}",
         file.project_id, file.file_id
     );
     let value = http
-        .get_json_with_headers(
-            &url,
-            &[("x-api-key", key.as_str()), ("Accept", "application/json")],
-        )
+        .get_json_with_headers(&url, &[("x-api-key", key), ("Accept", "application/json")])
         .ok()?;
     let data = value.get("data")?;
     let name = data.get("fileName")?.as_str()?.to_string();
