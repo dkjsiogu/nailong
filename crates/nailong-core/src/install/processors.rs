@@ -256,14 +256,6 @@ pub fn install_client(
         return Err(Error::Install(format!("安装完成但找不到 {id} 版本文件")));
     }
     let _ = std::fs::remove_dir_all(&work);
-    (sink)(Progress {
-        stage: "安装完成".into(),
-        files_done: 1,
-        files_total: 1,
-        bytes_done: 1,
-        bytes_total: 1,
-        indeterminate: false,
-    });
     Ok(id)
 }
 

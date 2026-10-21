@@ -1,7 +1,8 @@
 use crate::error::Result;
-use crate::install::{health, processors, slim, vanilla};
+use crate::install::{health, join_install, processors, slim, vanilla};
 use crate::paths::Root;
 use crate::progress::{Progress, Sink, noop};
+use std::thread;
 
 pub fn installer_url(version: &str) -> (String, String) {
     // 1.20.1 的 NeoForge 走 net.neoforged:forge 的旧坐标
@@ -34,23 +35,63 @@ pub fn install_with(
         && health::inspect(root, &installed_id).is_healthy()
     {
         println!("✓ NeoForge {version}（{mc}）已安装，跳过下载");
+        (sink)(Progress {
+            stage: "安装完成".into(),
+            files_done: 1,
+            files_total: 1,
+            bytes_done: 1,
+            bytes_total: 1,
+            indeterminate: false,
+        });
         return Ok(installed_id);
     }
 
-    // Always run the vanilla pass: it verifies and completes missing resources.
-    // This is what makes "继续安装" repair an interrupted download.
-    (sink)(Progress::stage("检查原版资源"));
-    println!("→ 检查 / 补全原版 {mc}");
-    vanilla::install_with(root, mc, mirror, sink)?;
-
-    // The installer is data only; fetch just the profile, version and client
-    // patch instead of the whole 6–9 MB package.
     let (url, file) = installer_url(version);
+    (sink)(Progress::stage("准备安装"));
+    println!("→ 检查 / 补全原版 {mc}");
+    let vj = vanilla::prepare_version(root, mc, mirror, sink)?;
+    let assets = {
+        let root = root.clone();
+        let mc = mc.to_string();
+        let mirror = mirror.to_string();
+        let sink = sink.clone();
+        thread::spawn(move || vanilla::install_assets_with(&root, &mc, &mirror, &sink))
+    };
+    let slim_job = {
+        let root = root.clone();
+        let url = url.clone();
+        let file = file.clone();
+        let mirror = mirror.to_string();
+        let sink = sink.clone();
+        thread::spawn(move || slim::prepare(&root, &url, &file, &mirror, "NeoForge", &sink))
+    };
+
+    if let Err(e) = vanilla::install_client_libs(root, mc, mirror, &vj, sink) {
+        let _ = join_install(assets, "游戏资源");
+        return Err(e);
+    }
     println!("→ 读取 NeoForge {version} 安装信息…");
-    let dest = slim::prepare(root, &url, &file, mirror, "NeoForge", sink)?;
+    let dest = match join_install(slim_job, "NeoForge 安装数据") {
+        Ok(path) => path,
+        Err(e) => {
+            let _ = join_install(assets, "游戏资源");
+            return Err(e);
+        }
+    };
 
     (sink)(Progress::stage("安装 NeoForge"));
-    let id = processors::install_client(root, mc, &dest, mirror, "NeoForge", sink)?;
+    let processed = processors::install_client(root, mc, &dest, mirror, "NeoForge", sink);
+    let assets_result = join_install(assets, "游戏资源");
+    let id = processed?;
+    assets_result?;
+    (sink)(Progress {
+        stage: "安装完成".into(),
+        files_done: 1,
+        files_total: 1,
+        bytes_done: 1,
+        bytes_total: 1,
+        indeterminate: false,
+    });
     println!("✓ NeoForge {version}（{mc}）安装完成（profile: {id}）");
     Ok(id)
 }

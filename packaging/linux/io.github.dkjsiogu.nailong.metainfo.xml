@@ -25,6 +25,11 @@
   <url type="bugtracker">https://github.com/dkjsiogu/nailong/issues</url>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.4.5" date="2026-10-21">
+      <description>
+        <p>Parallel install pipeline: assets, client/libraries, loader patch and processors now run concurrently where dependencies allow.</p>
+      </description>
+    </release>
     <release version="0.4.4" date="2026-10-21">
       <description>
         <p>Size-optimized release (about 7.6 MB), a machine-wide patch cache, and the version management from 0.4.3.</p>

@@ -308,13 +308,14 @@ pub enum InstallStage {
 这是唯一需要"运行外部 JVM"的安装器。流程：
 
 ```text
-1. 按需读取 installer jar 的核心条目（约 3 MB）
-2. 读取 install_profile.json + version.json + data/client.*
-3. 安装 profile.libraries（Forge 的 universal/shim 从 maven 直接下载）
-4. 解析 data 变量表
-5. 逐个执行客户端 processors（跳过已满足 outputs）
-6. 写 version.json 到 shared/versions/<id>/
-7. 校验最终 profile 的库齐全
+1. 解析原版 version.json（只依赖这一步的元数据）
+2. 并行推进：原版 client/libraries、游戏资源、installer 核心条目（约 3 MB）
+3. 读取 install_profile.json + version.json + data/client.*
+4. 安装 profile.libraries（Forge 的 universal/shim 从 maven 直接下载）
+5. 解析 data 变量表
+6. 逐个执行客户端 processors（只等 client/libraries，不等资源下完）
+7. 写 version.json 到 shared/versions/<id>/
+8. 等游戏资源与 processors 都完成，校验最终 profile 的库齐全
 ```
 
 #### 轻量读取（0.4.2）

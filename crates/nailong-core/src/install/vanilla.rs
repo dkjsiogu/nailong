@@ -1,6 +1,6 @@
 use crate::error::{Error, Result};
 use crate::http::{FileSpec, Http};
-use crate::manifest::{AssetIndex, Context, VersionJson, library_specs_for};
+use crate::manifest::{self, AssetIndex, Context, VersionJson, library_specs_for};
 use crate::paths::{Root, write_atomic};
 use crate::progress::{Progress, Sink, noop};
 use serde::Deserialize;
@@ -24,9 +24,26 @@ pub fn install(root: &Root, mc: &str, mirror: &str) -> Result<()> {
 }
 
 pub fn install_with(root: &Root, mc: &str, mirror: &str, sink: &Sink) -> Result<()> {
+    install_runtime_with(root, mc, mirror, sink)?;
+    install_assets_with(root, mc, mirror, sink)?;
+    (sink)(Progress {
+        stage: "安装完成".into(),
+        files_done: 1,
+        files_total: 1,
+        bytes_done: 1,
+        bytes_total: 1,
+        indeterminate: false,
+    });
+    println!("✓ Minecraft {mc} 安装完成");
+    Ok(())
+}
+
+/// Resolve the vanilla version JSON and write it to disk.  This is the only
+/// step that needs the remote version manifest; everything else can be
+/// downloaded from the URLs in this JSON.
+pub fn prepare_version(root: &Root, mc: &str, mirror: &str, sink: &Sink) -> Result<VersionJson> {
     root.ensure()?;
     let http = Http::new(mirror)?;
-    let ctx = Context::current();
     (sink)(Progress::stage("读取版本信息"));
     println!("→ 解析 Minecraft {mc} 版本信息…");
     let manifest: Manifest = serde_json::from_value(http.get_json(VERSION_MANIFEST)?)
@@ -40,13 +57,30 @@ pub fn install_with(root: &Root, mc: &str, mirror: &str, sink: &Sink) -> Result<
     let json_value = http.get_json(&entry.url)?;
     let vj: VersionJson = serde_json::from_value(json_value)
         .map_err(|e| Error::Install(format!("版本 JSON 解析失败: {e}")))?;
-    let json_path = root.version_json(mc);
     write_atomic(
-        &json_path,
+        &root.version_json(mc),
         serde_json::to_vec_pretty(&vj).unwrap().as_slice(),
     )?;
+    Ok(vj)
+}
 
-    // client jar
+pub fn install_runtime_with(root: &Root, mc: &str, mirror: &str, sink: &Sink) -> Result<()> {
+    let vj = prepare_version(root, mc, mirror, sink)?;
+    install_client_libs(root, mc, mirror, &vj, sink)
+}
+
+/// Client jar + libraries.  Loader processors need these, but assets do not.
+pub fn install_client_libs(
+    root: &Root,
+    mc: &str,
+    mirror: &str,
+    vj: &VersionJson,
+    sink: &Sink,
+) -> Result<()> {
+    root.ensure()?;
+    let http = Http::new(mirror)?;
+    let ctx = Context::current();
+
     let client = vj
         .downloads
         .client
@@ -63,13 +97,20 @@ pub fn install_with(root: &Root, mc: &str, mirror: &str, sink: &Sink) -> Result<
     println!("→ 下载客户端…");
     http.download_with(client_spec, "下载客户端", sink)?;
 
-    // libraries
     let lib_specs = library_specs_for(root, &vj.libraries, &ctx);
     (sink)(Progress::stage("下载运行库"));
     println!("→ 下载依赖库（{} 个）…", lib_specs.len());
     http.download_many_with(lib_specs, "下载运行库", sink)?;
+    Ok(())
+}
 
-    // asset index
+/// Asset index, asset objects and logging config.  Safe to run concurrently
+/// with loader processor installation once the version JSON exists.
+pub fn install_assets_with(root: &Root, mc: &str, mirror: &str, sink: &Sink) -> Result<()> {
+    root.ensure()?;
+    let vj = manifest::load(root, mc)?;
+    let http = Http::new(mirror)?;
+
     let ai = vj
         .asset_index
         .as_ref()
@@ -93,7 +134,6 @@ pub fn install_with(root: &Root, mc: &str, mirror: &str, sink: &Sink) -> Result<
         sink,
     )?;
 
-    // assets
     let index: Value = serde_json::from_slice(
         &std::fs::read(&index_path).map_err(|e| crate::error::io(&index_path, e))?,
     )
@@ -124,7 +164,6 @@ pub fn install_with(root: &Root, mc: &str, mirror: &str, sink: &Sink) -> Result<
     println!("→ 下载资源（{} 个文件）…", specs.len());
     http.download_many_with(specs, "下载游戏资源", sink)?;
 
-    // logging config
     if let Some(logging) = vj.logging.as_ref().and_then(|l| l.client.as_ref()) {
         let dest = root.assets().join("log_configs").join(&logging.file.id);
         (sink)(Progress::stage("下载日志配置"));
@@ -140,16 +179,6 @@ pub fn install_with(root: &Root, mc: &str, mirror: &str, sink: &Sink) -> Result<
             sink,
         );
     }
-
-    (sink)(Progress {
-        stage: "安装完成".into(),
-        files_done: 1,
-        files_total: 1,
-        bytes_done: 1,
-        bytes_total: 1,
-        indeterminate: false,
-    });
-    println!("✓ Minecraft {mc} 安装完成");
     Ok(())
 }
 
