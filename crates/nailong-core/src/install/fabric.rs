@@ -1,3 +1,4 @@
+use crate::blob;
 use crate::error::{Error, Result};
 use crate::http::Http;
 use crate::install::vanilla;
@@ -37,7 +38,7 @@ pub fn install_with(
     let ctx = Context::current();
     let specs = library_specs_for(root, &profile.libraries, &ctx);
     (sink)(Progress::stage("下载 Fabric 运行库"));
-    http.download_many_with(specs, "下载 Fabric 运行库", sink)?;
+    blob::download_specs(root, &http, specs, "下载 Fabric 运行库", sink)?;
 
     (sink)(Progress {
         stage: "安装完成".into(),

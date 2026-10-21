@@ -318,6 +318,25 @@ pub enum InstallStage {
 8. 等游戏资源与 processors 都完成，校验最终 profile 的库齐全
 ```
 
+#### 本机复用与 CAS（0.5.0）
+
+安装前先只读取 `install_profile.json` / `version.json`（约 130 KB），从 `data.PATCHED` 得到最终 patched client 的相对路径。然后在以下位置找同路径文件：
+
+- 当前数据目录；
+- 相邻 `.minecraft`；
+- 官方 `.minecraft`；
+- PrismLauncher / MultiMC / Modrinth 的实例目录；
+- `NAILONG_REUSE_ROOTS` 指定的额外目录。
+
+Forge 用 `data.PATCHED_SHA.client` 严格校验 SHA1；NeoForge 当前上游没有这个字段，退化为“可读 JAR + 包含 `net/minecraft/client/main/Main.class` + 至少 1 MB”的结构校验。找到后：
+
+1. 存入 `cache/nailong/blobs/<sha1>`；
+2. 硬链接（失败则复制）到 `libraries/...`；
+3. 只写 loader version JSON、下载 launch libraries；
+4. 跳过 3 MB 补丁和所有 processor。
+
+这是当前 CAS：patched client 按内容寻址；新下载的 client/libraries 也先进入 `blobs/<sha1>` 再硬链接到目标路径；assets 本身已经按 hash 分目录，天然内容寻址。已有文件仍走轻量的 size 检查，不会为了 CAS 重新哈希整个 libraries。
+
 #### 轻量读取（0.4.2）
 
 官方 installer 是 6–9 MB 的 zip，但客户端安装真正需要的只有：

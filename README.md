@@ -4,7 +4,7 @@
 
 轻量的 Minecraft 启动器，使用 Rust 编写。
 
-> 当前版本：**0.4.5 · 四加载器预览版**
+> 当前版本：**0.5.0 · 四加载器预览版**
 > 目标：单文件、无额外运行时、低内存、快速启动；版本可选、安装可见、中断可补。
 
 ## 下载
@@ -14,7 +14,7 @@
 | 平台 | 文件 | 说明 |
 |---|---|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | **单个 exe，不用解压**，双击即用 |
-| Linux x64 (deb) | [nailong_0.4.5_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.4.5_amd64.deb) | amd64，兼容 Ubuntu 24.04+ |
+| Linux x64 (deb) | [nailong_0.5.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.5.0_amd64.deb) | amd64，兼容 Ubuntu 24.04+ |
 
 校验值：[SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS)。
 
@@ -31,7 +31,7 @@
 ### Linux（Debian / Ubuntu）
 
 ```bash
-sudo apt install ./nailong_0.4.5_amd64.deb
+sudo apt install ./nailong_0.5.0_amd64.deb
 nailong
 ```
 
@@ -58,6 +58,8 @@ sudo apt remove nailong
 - **安装数据按需读取**：只取 `install_profile`、`version.json` 和客户端补丁（约 3 MB），不再下载 6–9 MB 的完整安装器；补丁分 4 段并行读取，镜像不支持分段时自动回退
 - **并行安装流水线**：版本 JSON 就绪后，游戏资源、客户端/运行库、加载器补丁和 processor 同时推进，不再串行等资源下完
 - **本机补丁共享缓存**：同一个加载器补丁在一台机器上只下一次；第二个便携目录/数据目录直接复用
+- **本机客户端复用（CAS）**：扫描官方 / PCL / HMCL / Prism / MultiMC / Modrinth 和相邻 `.minecraft`，找到同 SHA1 的 patched client 就直接硬链接复用，跳过 3 MB 补丁和 processor；NeoForge 无官方输出哈希时按 JAR 结构校验，并可用 `NAILONG_REUSE_ROOTS` 指定额外目录
+- **内容寻址下载**：客户端和运行库先落 `cache/nailong/blobs/<sha1>`，再硬链接到最终路径；已有文件保持轻量 size 检查，不重复哈希/下载
 - **重复安装秒完成**：已完整安装的 Forge / NeoForge 直接复用，不再下载补丁、不再重跑 processor
 - **四种安装方式**：安装页按 Minecraft → Fabric → NeoForge → Forge → 原版排列，版本全部下拉选择
 - **Modrinth 整合包**：拖入或选择 `.mrpack`，自动装加载器、模组和覆盖文件，生成独立游戏目录
@@ -74,7 +76,7 @@ sudo apt remove nailong
 |---|---:|---|
 | Windows GUI `nailong.exe` | 约 7.6 MB | 单文件，无额外运行库 |
 | Linux GUI（deb 内） | 约 8.7 MB | 单二进制 |
-| `nailong_0.4.5_amd64.deb` | 约 3.1 MB | 含桌面图标、菜单项、GPL 许可 |
+| `nailong_0.5.0_amd64.deb` | 约 3.1 MB | 含桌面图标、菜单项、GPL 许可 |
 
 > 实机验证：Linux（Xvfb + Mesa）下 Fabric / NeoForge / Forge 1.21.1 均启动到游戏渲染/主菜单；Forge / NeoForge 只缓存约 3 MB 的精简安装数据，完整安装器不再落盘；原版基础版本已从主列表隐藏，管理页可删除；重复安装走快速路径；导入 Fabulously Optimized `.mrpack` 后加载 151 个模组并启动；删除资源后会提示缺失并可补全。Windows 由 CI 原生编译，尚未在 Windows 实机启动，欢迎帮忙试。
 

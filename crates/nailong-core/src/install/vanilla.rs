@@ -1,3 +1,4 @@
+use crate::blob;
 use crate::error::{Error, Result};
 use crate::http::{FileSpec, Http};
 use crate::manifest::{self, AssetIndex, Context, VersionJson, library_specs_for};
@@ -95,12 +96,12 @@ pub fn install_client_libs(
     };
     (sink)(Progress::stage("下载客户端"));
     println!("→ 下载客户端…");
-    http.download_with(client_spec, "下载客户端", sink)?;
+    blob::download_specs(root, &http, vec![client_spec], "下载客户端", sink)?;
 
     let lib_specs = library_specs_for(root, &vj.libraries, &ctx);
     (sink)(Progress::stage("下载运行库"));
     println!("→ 下载依赖库（{} 个）…", lib_specs.len());
-    http.download_many_with(lib_specs, "下载运行库", sink)?;
+    blob::download_specs(root, &http, lib_specs, "下载运行库", sink)?;
     Ok(())
 }
 

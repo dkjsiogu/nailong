@@ -1,3 +1,4 @@
+pub mod blob;
 pub mod error;
 pub mod http;
 pub mod install;

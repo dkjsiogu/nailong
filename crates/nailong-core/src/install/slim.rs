@@ -138,6 +138,65 @@ fn slim_name(file: &str) -> String {
     format!("{}.slim.zip", name.trim_end_matches(".jar"))
 }
 
+/// Fetch only `install_profile.json` and `version.json` (no binary patch).
+/// Used by the local-reuse path to discover the expected patched-client hash
+/// without paying for the 3 MB patch.
+pub fn fetch_metadata_any(url: &str, mirror: &str) -> Result<(Value, String)> {
+    match fetch_metadata(url, mirror) {
+        Ok(value) => Ok(value),
+        Err(first) if mirror != "official" => fetch_metadata(url, "official").map_err(|second| {
+            Error::Install(format!(
+                "镜像元数据读取失败（{first}）；官方源也失败（{second}）"
+            ))
+        }),
+        Err(error) => Err(error),
+    }
+}
+
+pub fn fetch_metadata(url: &str, mirror: &str) -> Result<(Value, String)> {
+    let http = Http::new(mirror)?;
+    let total = http
+        .range_len(url)?
+        .ok_or_else(|| Error::Unsupported(format!("服务器不支持按需读取: {url}")))?;
+    if total < 22 {
+        return Err(Error::Install(format!("安装包太小: {url}")));
+    }
+    let tail_start = total.saturating_sub(EOCD_MAX);
+    let tail = required_range(&http, url, tail_start, total - 1)?;
+    let eocd = find_eocd(&tail, total)?;
+    let central = if eocd.cd_offset >= tail_start && eocd.cd_offset + eocd.cd_size <= total {
+        let start = (eocd.cd_offset - tail_start) as usize;
+        let end = start + eocd.cd_size as usize;
+        tail[start..end].to_vec()
+    } else {
+        required_range(
+            &http,
+            url,
+            eocd.cd_offset,
+            eocd.cd_offset + eocd.cd_size - 1,
+        )?
+    };
+    let entries = parse_central_directory(&central)?;
+    let profile_entry = entries
+        .get("install_profile.json")
+        .ok_or_else(|| Error::Install("安装包缺少 install_profile.json".into()))?;
+    let profile_bytes = fetch_entry(&http, url, profile_entry, total)?;
+    let profile: Value = serde_json::from_slice(&profile_bytes)
+        .map_err(|e| Error::Install(format!("install_profile.json 解析失败: {e}")))?;
+    let version_name = profile
+        .get("json")
+        .and_then(|v| v.as_str())
+        .unwrap_or("version.json");
+    let version_name = safe_entry_name(version_name)?;
+    let version_entry = entries
+        .get(&version_name)
+        .ok_or_else(|| Error::Install(format!("安装包缺少 {version_name}")))?;
+    let version_bytes = fetch_entry(&http, url, version_entry, total)?;
+    let version_text = String::from_utf8(version_bytes)
+        .map_err(|e| Error::Install(format!("{version_name} 不是 UTF-8: {e}")))?;
+    Ok((profile, version_text))
+}
+
 fn range_slim(http: &Http, url: &str, dest: &Path, label: &str, sink: &Sink) -> Result<bool> {
     let total = http
         .range_len(url)?

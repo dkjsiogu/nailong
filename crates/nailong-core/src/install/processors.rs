@@ -1,3 +1,4 @@
+use crate::blob;
 use crate::error::{Error, Result};
 use crate::http::{FileSpec, Http, sha1_file};
 use crate::java;
@@ -62,11 +63,11 @@ pub fn install_client(
     );
     // Libraries whose artifact has an empty URL are produced by processors.
     version_specs.retain(|s| !s.url.is_empty());
-    http.download_many_with(version_specs, "下载版本依赖", sink)?;
+    blob::download_specs(root, &http, version_specs, "下载版本依赖", sink)?;
 
     (sink)(Progress::stage("下载安装依赖"));
     let install_specs = installer_specs(root, &profile)?;
-    http.download_many_with(install_specs, "下载安装依赖", sink)?;
+    blob::download_specs(root, &http, install_specs, "下载安装依赖", sink)?;
     let library_paths = installer_paths(root, &profile)?;
 
     let work = root
