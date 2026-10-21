@@ -337,6 +337,18 @@ Forge 用 `data.PATCHED_SHA.client` 严格校验 SHA1；NeoForge 当前上游没
 
 这是当前 CAS：patched client 按内容寻址；新下载的 client/libraries 也先进入 `blobs/<sha1>` 再硬链接到目标路径；assets 本身已经按 hash 分目录，天然内容寻址。已有文件仍走轻量的 size 检查，不会为了 CAS 重新哈希整个 libraries。
 
+#### 大文件分段（0.5.1）
+
+`download_with` 的单文件批（client jar 等）在满足以下条件时走 4 段 Range：
+
+- 已知文件大小 ≥ 8 MB；
+- 有 SHA1；
+- 批内文件数 ≤ 2（避免 16 个文件 × 4 段的连接爆炸）。
+
+段文件使用稳定名字 `<dest>.dlpart-<n>`：中断后下次从已有长度继续，不重新下整段。合并后校验大小与 SHA1，再原子替换目标。服务器不支持 Range 时，探测失败直接回退单连接；单段失败也会回退，不会卡死安装。
+
+源回退：每个文件先走当前镜像；失败后自动尝试官方/镜像的另一侧，再进入下一次重试。
+
 #### 轻量读取（0.4.2）
 
 官方 installer 是 6–9 MB 的 zip，但客户端安装真正需要的只有：

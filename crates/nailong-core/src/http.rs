@@ -4,7 +4,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use reqwest::header::{ACCEPT_ENCODING, CONTENT_RANGE, RANGE};
 use sha1::{Digest, Sha1};
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -25,6 +25,9 @@ pub struct Http {
     mirror: String,
 }
 
+const SEGMENT_THRESHOLD: u64 = 8 * 1024 * 1024;
+const SEGMENT_COUNT: u64 = 4;
+
 #[derive(Debug)]
 pub struct RangeResponse {
     pub bytes: Vec<u8>,
@@ -41,7 +44,7 @@ impl Http {
         });
         let client = reqwest::blocking::Client::builder()
             .user_agent(format!("nailong/{}", env!("CARGO_PKG_VERSION")))
-            .timeout(Duration::from_secs(60))
+            .timeout(Duration::from_secs(180))
             .connect_timeout(Duration::from_secs(15))
             .build()
             .map_err(|e| Error::Net {
@@ -56,6 +59,26 @@ impl Http {
 
     pub fn url(&self, url: &str) -> String {
         rewrite_mirror(url, &self.mirror)
+    }
+
+    /// Primary URL plus a cross-source fallback.  Mirrors are useful most of
+    /// the time but occasionally 404/rate-limit; trying the other side costs
+    /// one request only after a real failure.
+    fn candidate_urls(&self, original: &str) -> Vec<String> {
+        let primary = self.url(original);
+        let mut out = vec![primary.clone()];
+        if primary != original {
+            out.push(original.to_string());
+        } else {
+            let mirror = rewrite_mirror(original, "bmcl");
+            if mirror != original {
+                out.push(mirror);
+            }
+        }
+        if out.len() > 1 && out[0] == out[1] {
+            out.pop();
+        }
+        out
     }
 
     pub fn get_text(&self, url: &str) -> Result<String> {
@@ -168,6 +191,79 @@ impl Http {
         }
     }
 
+    fn try_download_segmented(
+        &self,
+        url: &str,
+        dest: &Path,
+        total: u64,
+        expected: &str,
+        batch: Option<&Batch>,
+    ) -> Result<()> {
+        let chunk = total.div_ceil(SEGMENT_COUNT);
+        let results: Vec<Result<()>> = std::thread::scope(|scope| {
+            let mut handles = Vec::new();
+            for index in 0..SEGMENT_COUNT {
+                let start = index * chunk;
+                if start >= total {
+                    break;
+                }
+                let end = (start + chunk - 1).min(total - 1);
+                let part = segment_path(dest, index);
+                let client = &self.client;
+                handles.push(
+                    scope.spawn(move || download_segment(client, url, &part, start, end, batch)),
+                );
+            }
+            handles
+                .into_iter()
+                .map(|handle| {
+                    handle
+                        .join()
+                        .unwrap_or_else(|_| Err(Error::Install("分段下载线程异常退出".into())))
+                })
+                .collect()
+        });
+        for result in results {
+            result?;
+        }
+
+        let merged = dest.with_extension(format!("merged-{}", std::process::id()));
+        let mut out = File::create(&merged).map_err(|e| io(&merged, e))?;
+        for index in 0..SEGMENT_COUNT {
+            let part = segment_path(dest, index);
+            if !part.exists() {
+                continue;
+            }
+            let mut input = File::open(&part).map_err(|e| io(&part, e))?;
+            std::io::copy(&mut input, &mut out).map_err(|e| io(&part, e))?;
+        }
+        out.sync_all().map_err(|e| io(&merged, e))?;
+        let actual_size = merged.metadata().map(|m| m.len()).unwrap_or(0);
+        if actual_size != total {
+            let _ = std::fs::remove_file(&merged);
+            cleanup_parts(dest);
+            return Err(Error::Install(format!(
+                "分段合并后大小不符: 期望 {total}, 实际 {actual_size}"
+            )));
+        }
+        let actual = sha1_file(&merged)?;
+        if !actual.eq_ignore_ascii_case(expected) {
+            let _ = std::fs::remove_file(&merged);
+            cleanup_parts(dest);
+            return Err(Error::Checksum {
+                path: dest.to_path_buf(),
+                expected: expected.into(),
+                actual,
+            });
+        }
+        std::fs::rename(&merged, dest).map_err(|e| {
+            let _ = std::fs::remove_file(&merged);
+            io(dest, e)
+        })?;
+        cleanup_parts(dest);
+        Ok(())
+    }
+
     pub fn download(&self, spec: &FileSpec) -> Result<()> {
         self.download_inner(spec, None)
     }
@@ -207,33 +303,80 @@ impl Http {
         if let Some(parent) = spec.dest.parent() {
             std::fs::create_dir_all(parent).map_err(|e| io(parent, e))?;
         }
-        let url = self.url(&spec.url);
+        // A single large file (the 26 MB client jar is the common case) gets
+        // four parallel ranges.  Batches of many small files stay one request
+        // per file to avoid a 16 x 4 connection explosion.
+        let single_file = batch.is_none_or(|b| b.files_total <= 2);
+        if single_file
+            && let Some(size) = spec.size
+            && size >= SEGMENT_THRESHOLD
+            && let Some(expected) = spec.sha1.as_deref()
+        {
+            let primary = self.url(&spec.url);
+            let before = batch.map(|b| b.bytes_done.load(Ordering::Relaxed));
+            let range_ok = matches!(
+                self.try_get_range(&primary, 0, 0),
+                Ok(Some(response)) if response.total == Some(size)
+            );
+            if range_ok {
+                match self.try_download_segmented(&primary, &spec.dest, size, expected, batch) {
+                    Ok(()) => {
+                        if let Some(batch) = batch {
+                            batch.file_done(0);
+                        }
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        if let (Some(batch), Some(before)) = (batch, before) {
+                            let after = batch.bytes_done.load(Ordering::Relaxed);
+                            batch
+                                .bytes_done
+                                .fetch_sub(after.saturating_sub(before), Ordering::Relaxed);
+                        }
+                        cleanup_parts(&spec.dest);
+                        println!("! 分段下载失败，回退单连接: {e}");
+                    }
+                }
+            }
+        }
+
+        let urls = self.candidate_urls(&spec.url);
         let mut last = None;
         for attempt in 0..3u32 {
             let before = batch.map(|b| b.bytes_done.load(Ordering::Relaxed));
-            match self.try_download(&url, &spec.dest, spec.sha1.as_deref(), batch) {
-                Ok(()) => {
-                    if let Some(batch) = batch {
-                        batch.file_done(0);
-                    }
-                    return Ok(());
+            let mut attempt_error = None;
+            for (index, url) in urls.iter().enumerate() {
+                if index > 0 {
+                    println!("! 切换备用源: {url}");
                 }
-                Err(e) => {
-                    if let (Some(batch), Some(before)) = (batch, before) {
-                        let after = batch.bytes_done.load(Ordering::Relaxed);
-                        batch
-                            .bytes_done
-                            .fetch_sub(after.saturating_sub(before), Ordering::Relaxed);
+                match self.try_download(url, &spec.dest, spec.sha1.as_deref(), batch) {
+                    Ok(()) => {
+                        if let Some(batch) = batch {
+                            batch.file_done(0);
+                        }
+                        return Ok(());
                     }
-                    last = Some(e);
-                    std::thread::sleep(Duration::from_millis(500 * (attempt + 1) as u64));
+                    Err(e) => attempt_error = Some(e),
                 }
             }
+            if let (Some(batch), Some(before)) = (batch, before) {
+                let after = batch.bytes_done.load(Ordering::Relaxed);
+                batch
+                    .bytes_done
+                    .fetch_sub(after.saturating_sub(before), Ordering::Relaxed);
+            }
+            last = attempt_error;
+            std::thread::sleep(Duration::from_millis(500 * (attempt + 1) as u64));
         }
         if let Some(batch) = batch {
             batch.file_done(0);
         }
-        Err(last.unwrap_or_else(|| Error::Install(format!("下载失败: {url}"))))
+        Err(last.unwrap_or_else(|| {
+            Error::Install(format!(
+                "下载失败: {}",
+                urls.first().map(String::as_str).unwrap_or("")
+            ))
+        }))
     }
 
     fn try_download(
@@ -375,6 +518,78 @@ impl Http {
     }
 }
 
+fn segment_path(dest: &Path, index: u64) -> PathBuf {
+    dest.with_extension(format!("dlpart-{index}"))
+}
+
+fn cleanup_parts(dest: &Path) {
+    for index in 0..SEGMENT_COUNT {
+        let _ = std::fs::remove_file(segment_path(dest, index));
+    }
+}
+
+fn download_segment(
+    client: &reqwest::blocking::Client,
+    url: &str,
+    part: &Path,
+    start: u64,
+    end: u64,
+    batch: Option<&Batch>,
+) -> Result<()> {
+    let want = end.saturating_sub(start).saturating_add(1);
+    let mut have = part.metadata().map(|m| m.len()).unwrap_or(0);
+    if have > want {
+        let _ = std::fs::remove_file(part);
+        have = 0;
+    }
+    if have == want {
+        return Ok(());
+    }
+    let from = start + have;
+    let response = client
+        .get(url)
+        .header(RANGE, format!("bytes={from}-{end}"))
+        .header(ACCEPT_ENCODING, "identity")
+        .send()
+        .map_err(|e| Error::Net {
+            url: url.into(),
+            source: e,
+        })?;
+    if response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+        return Err(Error::Install(format!(
+            "分段源未返回 206: {}（{url}）",
+            response.status()
+        )));
+    }
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(part)
+        .map_err(|e| io(part, e))?;
+    let mut reader = response;
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = reader.read(&mut buf).map_err(|e| io(part, e))?;
+        if n == 0 {
+            break;
+        }
+        file.write_all(&buf[..n]).map_err(|e| io(part, e))?;
+        if let Some(batch) = batch {
+            batch.bytes_done.fetch_add(n as u64, Ordering::Relaxed);
+            batch.emit(false);
+        }
+    }
+    file.sync_all().map_err(|e| io(part, e))?;
+    let actual = part.metadata().map(|m| m.len()).unwrap_or(0);
+    if actual != want {
+        return Err(Error::Install(format!(
+            "分段长度不符: 期望 {want}, 实际 {actual}（{}）",
+            part.display()
+        )));
+    }
+    Ok(())
+}
+
 struct Batch<'a> {
     sink: &'a Sink,
     stage: String,
@@ -503,4 +718,36 @@ pub fn rewrite_mirror(url: &str, mirror: &str) -> String {
         }
     }
     url.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mirror_candidates_keep_primary_first() {
+        let http = Http::new("bmcl").unwrap();
+        let original = "https://libraries.minecraft.net/com/example/lib.jar";
+        let urls = http.candidate_urls(original);
+        assert!(urls[0].contains("bmclapi"));
+        assert_eq!(urls[1], original);
+
+        let official = Http::new("official").unwrap();
+        let urls = official.candidate_urls(original);
+        assert_eq!(urls[0], original);
+        assert!(urls[1].contains("bmclapi"));
+    }
+
+    #[test]
+    fn segment_parts_have_stable_names() {
+        let dest = Path::new("/tmp/example/client.jar");
+        assert_eq!(
+            segment_path(dest, 0),
+            Path::new("/tmp/example/client.dlpart-0")
+        );
+        assert_eq!(
+            segment_path(dest, 3),
+            Path::new("/tmp/example/client.dlpart-3")
+        );
+    }
 }

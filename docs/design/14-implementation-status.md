@@ -1,7 +1,7 @@
 # 14 · 原型实现状态（0.1 → 0.4）
 
 > 日期：2026-10-21
-> 对应发布：GitHub Release `v0.5.0` 的 `nailong.exe`、`nailong_0.5.0_amd64.deb`
+> 对应发布：GitHub Release `v0.5.1` 的 `nailong.exe`、`nailong_0.5.1_amd64.deb`
 > 目的：把「设计稿」和「已经跑起来的代码」分开记账，避免把计划当成已完成。
 
 ## 1. 一句话结论
@@ -17,6 +17,8 @@
 0.4.5 把安装从串行改成依赖感知的流水线：版本 JSON 写好后，游戏资源、client/libraries、加载器补丁、processor 并行推进；processor 不再等资源下完才开始，而是只等自己依赖的 client/libraries。
 
 0.5.0 加入 CAS 与本机 patched client 复用：先只读 loader 元数据（约 130 KB），找到官方 / Prism / MultiMC / Modrinth / 相邻 `.minecraft` 中同版本的 patched client，校验后硬链接到当前实例，跳过 3 MB 补丁和全部 processor。Forge 用 `PATCHED_SHA` 严格校验；NeoForge 上游没有输出哈希，按 JAR 结构校验。
+
+0.5.1 把下载器继续往下拆：单个大文件（如 26 MB client jar）自动 4 段 Range 并行，段文件稳定命名、可续传；主源失败自动切备用源；单次传输超时从 60 秒放宽到 180 秒。
 
 发布形态刻意保持简单：Windows 只发一个 `nailong.exe`；Linux 只发一个可双击/`apt install` 的 `.deb`。
 
@@ -50,9 +52,10 @@
 | GUI（版本下拉、安装进度、缺文件补全、启动、设置） | `nailong-ui` | 可用 | Xvfb 下走完安装 / 补全 / 启动；实际 NeoForge 到主菜单 |
 | 版本管理 | `nailong-ui` | 完成 | 基础版本隐藏、版本/整合包删除、被依赖保护 |
 | CAS / patched client 复用 | `core::blob` / `core::install::reuse` | 完成（第一阶段） | client/libraries 新文件走 blob+硬链接；复用后跳过补丁与 processor；Forge 实测 5.3s、NeoForge 3.7s |
+| 大文件分段下载 | `core::http` | 完成 | client jar 4 段并行、段续传、源回退 |
 | 重复安装快速路径 | `core::install::forge` / `neoforge` | 完成 | health 通过则 0 下载、0 processor |
 | Windows 交叉编译 | `x86_64-pc-windows-gnu` | 通过 | 无 MinGW DLL 依赖，仅系统 DLL |
-| 发布包 | GitHub Release `v0.5.0` | 完成（CI 构建） | 单 exe 约 7.6 MB / deb 约 3.2 MB |
+| 发布包 | GitHub Release `v0.5.1` | 完成（CI 构建） | 单 exe 约 7.6 MB / deb 约 3.2 MB |
 
 ### 2.1 实测记录
 
@@ -93,7 +96,7 @@
 | 整合包 / 正版登录 / 自动更新 | 未实现 | 下一步做整合包与账户 |
 | 微软正版登录 | 未实现（离线） | 按决定推迟到 M3.5 |
 | 自动更新 / 签名 / 崩溃报告 | 未实现 | 发布前补齐 |
-| 单元/集成测试体系 | **25 个测试** | 缺夹具、mock HTTP、启动 argv 快照、Windows CI |
+| 单元/集成测试体系 | **27 个测试** | 缺夹具、mock HTTP、启动 argv 快照、Windows CI |
 
 ## 4. 已知问题与风险
 
