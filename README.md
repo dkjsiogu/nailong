@@ -71,7 +71,7 @@ sudo apt remove nailong
 
 | 产物 | 大小 | 说明 |
 |---|---:|---|
-| Windows GUI `nailong.exe` | 约 9 MB | 单文件，无额外运行库 |
+| Windows GUI `nailong.exe` | 约 7.6 MB | 单文件，无额外运行库 |
 | Linux GUI（deb 内） | 约 8.7 MB | 单二进制 |
 | `nailong_0.4.4_amd64.deb` | 约 3.1 MB | 含桌面图标、菜单项、GPL 许可 |
 

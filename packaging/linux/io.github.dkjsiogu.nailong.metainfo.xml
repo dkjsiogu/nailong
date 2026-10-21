@@ -27,7 +27,7 @@
   <releases>
     <release version="0.4.4" date="2026-10-21">
       <description>
-        <p>Size-optimized release (about 9 MB), a machine-wide patch cache, and the version management from 0.4.3.</p>
+        <p>Size-optimized release (about 7.6 MB), a machine-wide patch cache, and the version management from 0.4.3.</p>
       </description>
     </release>
     <release version="0.4.3" date="2026-10-21">
