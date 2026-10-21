@@ -31,19 +31,33 @@ pub fn prepare(
 ) -> Result<PathBuf> {
     let dir = root.cache().join("installers");
     std::fs::create_dir_all(&dir).map_err(|e| io(&dir, e))?;
-    let slim = dir.join(slim_name(file));
+    let name = slim_name(file);
+    let slim = dir.join(&name);
     let full = dir.join(file);
 
     if slim.exists() {
         if slim_is_complete(&slim) {
+            publish_shared(&slim, &name);
             return Ok(slim);
         }
         let _ = std::fs::remove_file(&slim);
+    }
+    // Content-addressed-ish shared cache: installing a second portable copy
+    // on the same machine should not download the same 3 MB patch again.
+    if let Some(shared) = shared_slim_path(&name) {
+        if shared.exists() && !slim_is_complete(&shared) {
+            let _ = std::fs::remove_file(&shared);
+        }
+        if shared.exists() && copy_atomic(&shared, &slim).is_ok() {
+            println!("→ 复用本机已有的 {label} 安装数据缓存");
+            return Ok(slim);
+        }
     }
     if full.exists() {
         match build_slim_from_zip(&full, &slim) {
             Ok(true) => {
                 let _ = std::fs::remove_file(&full);
+                publish_shared(&slim, &name);
                 return Ok(slim);
             }
             Ok(false) => return Ok(full),
@@ -59,7 +73,10 @@ pub fn prepare(
     let mut needs_full = false;
     if let Ok(http) = Http::new(mirror) {
         match range_slim(&http, url, &slim, label, sink) {
-            Ok(true) => return Ok(slim),
+            Ok(true) => {
+                publish_shared(&slim, &name);
+                return Ok(slim);
+            }
             Ok(false) => needs_full = true,
             Err(e) => last_error = Some(e),
         }
@@ -73,6 +90,7 @@ pub fn prepare(
         match range_slim(&http, url, &slim, label, sink) {
             Ok(true) => {
                 println!("→ 当前镜像不支持分段读取，已从官方源只取安装所需数据");
+                publish_shared(&slim, &name);
                 return Ok(slim);
             }
             Ok(false) => {}
@@ -101,6 +119,7 @@ pub fn prepare(
     match build_slim_from_zip(&full, &slim) {
         Ok(true) => {
             let _ = std::fs::remove_file(&full);
+            publish_shared(&slim, &name);
             Ok(slim)
         }
         Ok(false) => Ok(full),
@@ -539,6 +558,36 @@ fn slim_is_complete(path: &Path) -> bool {
         .ok()
         .and_then(|v| v.get("id").and_then(|id| id.as_str()).map(str::to_string))
         .is_some_and(|id| !id.is_empty())
+}
+
+fn shared_slim_path(name: &str) -> Option<PathBuf> {
+    directories::BaseDirs::new()
+        .map(|dirs| dirs.cache_dir().join("nailong").join("patches").join(name))
+}
+
+fn copy_atomic(from: &Path, to: &Path) -> Result<()> {
+    if let Some(parent) = to.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| io(parent, e))?;
+    }
+    let tmp = temp_path(to);
+    // Same-volume caches should share the 3 MB file, not duplicate it.
+    if std::fs::hard_link(from, &tmp).is_err() {
+        std::fs::copy(from, &tmp).map_err(|e| io(from, e))?;
+    }
+    std::fs::rename(&tmp, to).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        io(to, e)
+    })
+}
+
+fn publish_shared(slim: &Path, name: &str) {
+    let Some(shared) = shared_slim_path(name) else {
+        return;
+    };
+    if shared == slim || shared.exists() {
+        return;
+    }
+    let _ = copy_atomic(slim, &shared);
 }
 
 fn temp_path(dest: &Path) -> PathBuf {

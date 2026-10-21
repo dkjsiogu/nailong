@@ -1,7 +1,7 @@
 # 14 · 原型实现状态（0.1 → 0.4）
 
 > 日期：2026-10-21
-> 对应发布：GitHub Release `v0.4.3` 的 `nailong.exe`、`nailong_0.4.3_amd64.deb`
+> 对应发布：GitHub Release `v0.4.4` 的 `nailong.exe`、`nailong_0.4.4_amd64.deb`
 > 目的：把「设计稿」和「已经跑起来的代码」分开记账，避免把计划当成已完成。
 
 ## 1. 一句话结论
@@ -11,6 +11,8 @@
 0.4.2 把 Forge/NeoForge 的安装数据从“整个安装器”改成“按需读取核心条目”：首次安装只取约 3 MB，而不是 6–9 MB；不支持 Range 的镜像自动改用官方源或完整包兜底。
 
 0.4.3 补上两项基础体验：加载器依赖的原版不再出现在主版本列表里（管理页仍可见、可删）；已完整安装的加载器再次点安装会直接复用，不再下载补丁或重跑 processor。3 MB 客户端补丁也改为 4 段并行读取。
+
+0.4.4 把发布体积从约 12 MB 降到约 9 MB（`opt-level=z` + fat LTO + `panic=abort`，保留静态 CRT 和系统字体），并把精简安装包缓存到机器级目录；同一补丁在第二个数据目录中直接复用。
 
 发布形态刻意保持简单：Windows 只发一个 `nailong.exe`；Linux 只发一个可双击/`apt install` 的 `.deb`。
 
@@ -45,7 +47,7 @@
 | 版本管理 | `nailong-ui` | 完成 | 基础版本隐藏、版本/整合包删除、被依赖保护 |
 | 重复安装快速路径 | `core::install::forge` / `neoforge` | 完成 | health 通过则 0 下载、0 processor |
 | Windows 交叉编译 | `x86_64-pc-windows-gnu` | 通过 | 无 MinGW DLL 依赖，仅系统 DLL |
-| 发布包 | GitHub Release `v0.4.3` | 完成（CI 构建） | 单 exe 约 12 MB / deb 约 4.3 MB |
+| 发布包 | GitHub Release `v0.4.4` | 完成（CI 构建） | 单 exe 约 9 MB / deb 约 3.1 MB |
 
 ### 2.1 实测记录
 
@@ -54,7 +56,7 @@
   `Setting user: Steve`、`Backend library: LWJGL version 3.3.3+5`、`Created: ... texture atlas`。
   无显示器环境用 Xvfb；音频设备缺失只产生 ALSA 警告，不影响进入游戏。
 - **GUI**：打包后的 `nailong` 在 Xvfb 中持续运行；通过 xdotool 点击“启动”后游戏进程到达主菜单。
-- **体积**：Linux GUI 11.6 MB / CLI 4.9 MB；Windows GUI 11.4 MB（CI 原生 MSVC 构建）/ CLI 4.8 MB（未压缩）。
+- **体积**：Linux GUI 8.7 MB / CLI 3.1 MB；Windows GUI 约 9 MB（CI 原生 MSVC 构建）。opt-level=z + fat LTO + panic=abort，保留静态 CRT 与系统字体。
 - **内存**：Linux + Xvfb + llvmpipe 下 GUI 空闲 RSS 约 **135 MB**。这是软件渲染上界，未达到 120 MB 目标；Windows 真实 GPU 待测。
 
 ### 2.2 关键实现细节

@@ -25,6 +25,11 @@
   <url type="bugtracker">https://github.com/dkjsiogu/nailong/issues</url>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.4.4" date="2026-10-21">
+      <description>
+        <p>Size-optimized release (about 9 MB), a machine-wide patch cache, and the version management from 0.4.3.</p>
+      </description>
+    </release>
     <release version="0.4.3" date="2026-10-21">
       <description>
         <p>Loader base versions are hidden from the main picker, with a management page for deleting versions and instances. Reinstalling an intact loader is now instant, and the 3 MB core data is fetched in parallel.</p>

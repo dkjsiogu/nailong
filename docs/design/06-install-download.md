@@ -334,7 +334,8 @@ pub enum InstallStage {
 3. 校验每个条目的 CRC32、解压后长度；写入 `cache/nailong/installers/<installer>.slim.zip`。
 4. 大于 1 MB 的条目（客户端补丁）再切成 4 段并行读取，最后按顺序拼接并整体校验。
 5. 成功后删除完整 installer；以后重装/修复直接复用精简 zip。
-6. 若目标版本已安装且 `health` 无缺失，`forge`/`neoforge` 直接返回，不再读安装器、不再跑 processor。
+6. 把精简 zip 再放到机器级缓存（`cache_dir/nailong/patches`）；同一文件系统优先硬链接，否则复制。第二个数据目录直接复用，不再下载 3 MB。
+7. 若目标版本已安装且 `health` 无缺失，`forge`/`neoforge` 直接返回，不再读安装器、不再跑 processor。
 5. 不支持 Range 的镜像先尝试官方 Maven 的同一路径；仍失败才回退完整下载。完整下载成功后也会转成精简 zip（保留完整包仅作为最后兜底）。
 
 > 兼容性：若客户端 processor 的参数里出现 `{INSTALLER}`，说明它可能需要安装器内的其他文件，此时不做精简，直接使用完整包。
