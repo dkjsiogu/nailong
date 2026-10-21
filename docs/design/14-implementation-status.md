@@ -1,7 +1,7 @@
 # 14 · 原型实现状态（0.1 → 0.4）
 
 > 日期：2026-10-21
-> 对应发布：GitHub Release `v0.5.1` 的 `nailong.exe`、`nailong_0.5.1_amd64.deb`
+> 对应发布：GitHub Release `v0.6.0` 的 `nailong.exe`、`nailong_0.6.0_amd64.deb`
 > 目的：把「设计稿」和「已经跑起来的代码」分开记账，避免把计划当成已完成。
 
 ## 1. 一句话结论
@@ -19,6 +19,8 @@
 0.5.0 加入 CAS 与本机 patched client 复用：先只读 loader 元数据（约 130 KB），找到官方 / Prism / MultiMC / Modrinth / 相邻 `.minecraft` 中同版本的 patched client，校验后硬链接到当前实例，跳过 3 MB 补丁和全部 processor。Forge 用 `PATCHED_SHA` 严格校验；NeoForge 上游没有输出哈希，按 JAR 结构校验。
 
 0.5.1 把下载器继续往下拆：单个大文件（如 26 MB client jar）自动 4 段 Range 并行，段文件稳定命名、可续传；主源失败自动切备用源；单次传输超时从 60 秒放宽到 180 秒。
+
+0.6.0 统一整合包导入：按 ZIP 签名识别 Modrinth `.mrpack`、CurseForge `manifest.json`、Prism/MultiMC `mmc-pack.json`；分别走直链/Range、CurseForge 文件解析、组件加载器安装，最后解压 overrides/.minecraft。无法识别的格式明确报错。
 
 发布形态刻意保持简单：Windows 只发一个 `nailong.exe`；Linux 只发一个可双击/`apt install` 的 `.deb`。
 
@@ -46,7 +48,7 @@
 | Fabric 安装 / 启动 | `core::install::fabric` | 完成（原生 profile） | 1.21.1 / 0.19.5 安装并启动到渲染 |
 | Forge 安装 / 启动 | `core::install::forge` | 完成（精简数据 + 原生 processors） | 1.21.1 / 52.1.20 安装并启动到渲染 |
 | 四加载器选择 | `nailong-ui` | 完成 | 安装页按 Minecraft / Fabric / NeoForge / Forge / 原版排列 |
-| Modrinth 整合包导入 | `core::install::modpack` | 完成 | `.mrpack` → 加载器 + 151 模组 + 独立 gameDir |
+| 整合包导入 | `core::install::modpack` | 完成（3 种格式） | Modrinth `.mrpack`、CurseForge zip、Prism/MultiMC zip；真实 CurseForge CDN 文件下载成功 |
 | Windows 便携目录 | `core::paths` | 完成 | 默认使用 exe 同目录 `.minecraft` |
 | CLI（list/java/info/install/launch） | `nailong-cli` | 完成 | 打包产物冒烟 |
 | GUI（版本下拉、安装进度、缺文件补全、启动、设置） | `nailong-ui` | 可用 | Xvfb 下走完安装 / 补全 / 启动；实际 NeoForge 到主菜单 |
@@ -55,7 +57,7 @@
 | 大文件分段下载 | `core::http` | 完成 | client jar 4 段并行、段续传、源回退 |
 | 重复安装快速路径 | `core::install::forge` / `neoforge` | 完成 | health 通过则 0 下载、0 processor |
 | Windows 交叉编译 | `x86_64-pc-windows-gnu` | 通过 | 无 MinGW DLL 依赖，仅系统 DLL |
-| 发布包 | GitHub Release `v0.5.1` | 完成（CI 构建） | 单 exe 约 7.6 MB / deb 约 3.2 MB |
+| 发布包 | GitHub Release `v0.6.0` | 完成（CI 构建） | 单 exe 约 7.6 MB / deb 约 3.2 MB |
 
 ### 2.1 实测记录
 
@@ -93,10 +95,10 @@
 | 异步 runtime + 事件总线 + 可取消任务 | 阻塞调用 + 线程 + 进度回调；暂无取消 | 下载与安装已有阶段/字节进度；下一步做取消令牌 |
 | 实例（Instance）抽象、配置存储 | 直接以版本目录为单位；无配置文件 | 目前只能切版本，不能多实例隔离 |
 | 完整 GUI（路由/向导/设置/下载中心） | 单页、版本下拉、进度页、补全提示 | 核心路径清楚；下载中心/设置页未做 |
-| 整合包 / 正版登录 / 自动更新 | 未实现 | 下一步做整合包与账户 |
+| 正版登录 / 自动更新 | 未实现 | 下一步做账户与更新 |
 | 微软正版登录 | 未实现（离线） | 按决定推迟到 M3.5 |
 | 自动更新 / 签名 / 崩溃报告 | 未实现 | 发布前补齐 |
-| 单元/集成测试体系 | **27 个测试** | 缺夹具、mock HTTP、启动 argv 快照、Windows CI |
+| 单元/集成测试体系 | **29 个测试** | 缺夹具、mock HTTP、启动 argv 快照、Windows CI |
 
 ## 4. 已知问题与风险
 

@@ -45,7 +45,7 @@ flowchart LR
 | NeoForge maven | `https://maven.neoforged.net/releases/` |
 | NeoForge installer | `https://maven.neoforged.net/releases/net/neoforged/neoforge/<v>/neoforge-<v>-installer.jar` |
 | Modrinth API | `https://api.modrinth.com/v2/` |
-| CurseForge API | `https://api.curseforge.com/v1/`（需要 API key） |
+| CurseForge API | `api.curseforge.com`（需要 key） / `www.curseforge.com/api/v1` / cfwidget |
 | authlib-injector（v1.1） | `https://authlib-injector.yushi.moe/artifact/latest.json`（或 BMCLAPI 镜像） |
 
 > 版本清单与 JRE 清单都是**可能变化**的端点；JRE 清单的哈希段是 Mojang 启动器的固定引用，HMCL 也使用同一 URL。设计上把它作为**可配置常量**，镜像可覆盖。
@@ -532,10 +532,10 @@ shared/jre/
 | 顺序 | 格式 | 识别文件 | 说明 |
 |---|---|---|---|
 | 1 | Modrinth `.mrpack` | `modrinth.index.json` | 无需 API key；文件直链 + 哈希 |
-| 2 | CurseForge zip | `manifest.json` + `manifestType=minecraftModpack` | 需要 API key 解析 fileID |
-| 3 | MultiMC/Prism | `mmc-pack.json` + `instance.cfg` | 组件映射到 base+loader |
-| 4 | HMCL | `modpack.json` | v1.1 |
-| 5 | 手动整合包 | `minecraft/` 或 `overrides/` | 尽力而为 |
+| 2 | CurseForge zip | `manifest.json` + `manifestType=minecraftModpack` | 用 cfwidget HTML 解析 fileID 文件名，构造 forgecdn 直链；无需 API key |
+| 3 | Prism/MultiMC zip | `mmc-pack.json` + `.minecraft/` | 组件映射到 base+loader，解压实例目录 |
+| 4 | HMCL | `modpack.json` | 未实现；检测到后明确报错 |
+| 5 | 手动整合包 | `minecraft/` 或 `overrides/` | 未识别时明确报错 |
 
 > 顺序必须固定：多种格式都可能含 `manifest.json`，靠 schema 校验互斥。
 
@@ -560,9 +560,9 @@ shared/jre/
 ### 8.4 CurseForge 细节
 
 - `manifest.json` 的 `files[{projectID, fileID, required}]` 只有 ID，没有文件名/URL。
-- 解析依赖 CurseForge API：`GET /v1/mods/{projectID}/files/{fileID}` → `downloadUrl` + `fileName` + `hashes`。
+- 解析文件：优先 `cfwidget.com/{projectID}?version={fileID}` 的 HTML 取出文件名，构造 `mediafilez.forgecdn.net/files/{id/1000}/{id%1000:03}/{name}`；失败再尝试 CurseForge 官方 JSON。
 - 需要 API key（用户自备或项目内置受限 key）；API 有速率限制，需缓存与退避。
-- 没有 key 时：提示用户"在设置中填入 CurseForge API Key"，或仅导入 overrides（不下载模组）。
+- 不需要 API Key；拿不到文件名时回退 `<projectID>-<fileID>.jar`，不阻断 overrides 导入。
 - 不接受从第三方网页抓取（违反 ToS 且脆弱）。
 
 ### 8.5 安全

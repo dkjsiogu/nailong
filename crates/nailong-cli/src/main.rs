@@ -76,7 +76,7 @@ enum InstallTarget {
     Neoforge { mc: String, version: String },
     /// Forge（先安装原版，再执行客户端 processors）
     Forge { mc: String, version: String },
-    /// Modrinth 整合包（.mrpack）
+    /// 整合包（.mrpack / CurseForge .zip / Prism .zip）
     Modpack { path: PathBuf },
 }
 
@@ -157,7 +157,7 @@ fn main() -> anyhow::Result<()> {
                     forge::install_with(&root, &mc, &version, &cli.mirror, &sink)?;
                 }
                 InstallTarget::Modpack { path } => {
-                    modpack::import_mrpack(&root, &path, &cli.mirror, &sink)?;
+                    modpack::import_pack(&root, &path, &cli.mirror, &sink)?;
                 }
             }
         }

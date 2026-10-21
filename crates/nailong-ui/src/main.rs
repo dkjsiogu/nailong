@@ -387,7 +387,7 @@ impl App {
             })
         };
         std::thread::spawn(move || {
-            let msg = match modpack::import_mrpack(&root, &path, "official", &sink) {
+            let msg = match modpack::import_pack(&root, &path, "official", &sink) {
                 Ok(instance) => Msg::InstallDone(format!("instance:{}", instance.id)),
                 Err(e) => Msg::InstallFailed(e.to_string()),
             };
@@ -1091,7 +1091,7 @@ impl App {
                     .show(ui, |ui| {
                         ui.vertical_centered(|ui| {
                             ui.label(
-                                egui::RichText::new("拖入 Modrinth 整合包 (.mrpack)")
+                                egui::RichText::new("拖入整合包（.mrpack / .zip）")
                                     .size(13.0)
                                     .color(if hovering { ACCENT } else { MUTED }),
                             );
@@ -1172,7 +1172,10 @@ impl eframe::App for App {
             let path = file.path().to_path_buf();
             let is_pack = path
                 .extension()
-                .map(|e| e.to_string_lossy().eq_ignore_ascii_case("mrpack"))
+                .map(|e| {
+                    let ext = e.to_string_lossy();
+                    ext.eq_ignore_ascii_case("mrpack") || ext.eq_ignore_ascii_case("zip")
+                })
                 .unwrap_or(false);
             if is_pack {
                 if self.busy.is_none() {
@@ -1181,7 +1184,7 @@ impl eframe::App for App {
                     self.error = Some("正在安装，请等当前任务结束".into());
                 }
             } else {
-                self.error = Some("只支持 Modrinth 整合包（.mrpack）".into());
+                self.error = Some("只支持 .mrpack / CurseForge .zip / Prism .zip 整合包".into());
             }
         }
         if self.busy.is_some() {
@@ -1478,8 +1481,8 @@ fn ghost_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
 
 fn pick_modpack() -> Option<PathBuf> {
     rfd::FileDialog::new()
-        .set_title("选择 Modrinth 整合包")
-        .add_filter("Modrinth 整合包", &["mrpack"])
+        .set_title("选择整合包")
+        .add_filter("整合包", &["mrpack", "zip"])
         .pick_file()
 }
 
