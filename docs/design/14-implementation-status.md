@@ -1,7 +1,7 @@
 # 14 · 原型实现状态（0.1 → 0.4）
 
 > 日期：2026-10-21
-> 对应发布：GitHub Release `v0.6.0` 的 `nailong.exe`、`nailong_0.6.0_amd64.deb`
+> 对应发布：GitHub Release `v0.7.0` 的 `nailong.exe`、`nailong_0.7.0_amd64.deb`
 > 目的：把「设计稿」和「已经跑起来的代码」分开记账，避免把计划当成已完成。
 
 ## 1. 一句话结论
@@ -21,6 +21,8 @@
 0.5.1 把下载器继续往下拆：单个大文件（如 26 MB client jar）自动 4 段 Range 并行，段文件稳定命名、可续传；主源失败自动切备用源；单次传输超时从 60 秒放宽到 180 秒。
 
 0.6.0 统一整合包导入：按 ZIP 签名识别 Modrinth `.mrpack`、CurseForge `manifest.json`、Prism/MultiMC `mmc-pack.json`；分别走直链/Range、CurseForge 文件解析、组件加载器安装，最后解压 overrides/.minecraft。无法识别的格式明确报错。
+
+0.7.0 补齐 MCBBS、HMCL、ATLauncher：MCBBS 用 addons + files + overrides；HMCL 读 `modpack.json` + `minecraft/pack.json`，ATLauncher 读 `instance.json`，把内嵌 manifest 转成实例 profile 并安装基础版本。CurseForge 支持 `CURSEFORGE_API_KEY` 官方 API 校验 SHA1/大小；所有下载增加 Content-Length 大小检查。
 
 发布形态刻意保持简单：Windows 只发一个 `nailong.exe`；Linux 只发一个可双击/`apt install` 的 `.deb`。
 
@@ -48,7 +50,7 @@
 | Fabric 安装 / 启动 | `core::install::fabric` | 完成（原生 profile） | 1.21.1 / 0.19.5 安装并启动到渲染 |
 | Forge 安装 / 启动 | `core::install::forge` | 完成（精简数据 + 原生 processors） | 1.21.1 / 52.1.20 安装并启动到渲染 |
 | 四加载器选择 | `nailong-ui` | 完成 | 安装页按 Minecraft / Fabric / NeoForge / Forge / 原版排列 |
-| 整合包导入 | `core::install::modpack` | 完成（3 种格式） | Modrinth `.mrpack`、CurseForge zip、Prism/MultiMC zip；真实 CurseForge CDN 文件下载成功 |
+| 整合包导入 | `core::install::modpack` | 完成（6 种格式） | Modrinth、CurseForge、Prism/MultiMC、MCBBS、HMCL、ATLauncher；真实 CurseForge CDN 文件 + 各格式合成包验证 |
 | Windows 便携目录 | `core::paths` | 完成 | 默认使用 exe 同目录 `.minecraft` |
 | CLI（list/java/info/install/launch） | `nailong-cli` | 完成 | 打包产物冒烟 |
 | GUI（版本下拉、安装进度、缺文件补全、启动、设置） | `nailong-ui` | 可用 | Xvfb 下走完安装 / 补全 / 启动；实际 NeoForge 到主菜单 |
@@ -57,7 +59,7 @@
 | 大文件分段下载 | `core::http` | 完成 | client jar 4 段并行、段续传、源回退 |
 | 重复安装快速路径 | `core::install::forge` / `neoforge` | 完成 | health 通过则 0 下载、0 processor |
 | Windows 交叉编译 | `x86_64-pc-windows-gnu` | 通过 | 无 MinGW DLL 依赖，仅系统 DLL |
-| 发布包 | GitHub Release `v0.6.0` | 完成（CI 构建） | 单 exe 约 7.6 MB / deb 约 3.2 MB |
+| 发布包 | GitHub Release `v0.7.0` | 完成（CI 构建） | 单 exe 约 7.6 MB / deb 约 3.2 MB |
 
 ### 2.1 实测记录
 

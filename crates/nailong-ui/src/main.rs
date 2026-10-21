@@ -1184,7 +1184,9 @@ impl eframe::App for App {
                     self.error = Some("正在安装，请等当前任务结束".into());
                 }
             } else {
-                self.error = Some("只支持 .mrpack / CurseForge .zip / Prism .zip 整合包".into());
+                self.error = Some(
+                    "支持 Modrinth / CurseForge / Prism / HMCL / ATLauncher / MCBBS 整合包".into(),
+                );
             }
         }
         if self.busy.is_some() {

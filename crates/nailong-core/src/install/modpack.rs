@@ -1,10 +1,12 @@
 use crate::error::{Error, Result};
 use crate::http::{FileSpec, Http};
 use crate::install::{fabric, forge, neoforge, vanilla};
+use crate::manifest::{Context, VersionJson, library_specs_for};
 use crate::paths::{Root, write_atomic};
 use crate::progress::{Progress, Sink};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{Read, Seek};
@@ -32,6 +34,9 @@ enum PackFormat {
     Modrinth,
     CurseForge,
     Prism,
+    Mcbbs,
+    Hmcl,
+    Atl,
 }
 
 #[derive(Debug, Deserialize)]
@@ -101,6 +106,42 @@ struct CurseFile {
 }
 
 #[derive(Debug, Deserialize)]
+struct McbbsManifest {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    addons: Vec<McbbsAddon>,
+    #[serde(default)]
+    files: Vec<McbbsFile>,
+    #[serde(rename = "fileApi", default)]
+    file_api: Option<String>,
+    #[serde(default)]
+    libraries: Vec<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct McbbsAddon {
+    id: String,
+    version: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+enum McbbsFile {
+    Addon {
+        path: String,
+        #[serde(default)]
+        hash: Option<String>,
+    },
+    Curse {
+        #[serde(rename = "projectID")]
+        project_id: u64,
+        #[serde(rename = "fileID")]
+        file_id: u64,
+    },
+}
+
+#[derive(Debug, Deserialize)]
 struct MmcPack {
     #[serde(default)]
     components: Vec<MmcComponent>,
@@ -122,6 +163,9 @@ pub fn import_pack(
         PackFormat::Modrinth => import_mrpack(root, archive, mirror, sink),
         PackFormat::CurseForge => import_curseforge(root, archive, mirror, sink),
         PackFormat::Prism => import_prism(root, archive, mirror, sink),
+        PackFormat::Mcbbs => import_mcbbs(root, archive, mirror, sink),
+        PackFormat::Hmcl => import_hmcl(root, archive, mirror, sink),
+        PackFormat::Atl => import_atl(root, archive, mirror, sink),
     }
 }
 
@@ -131,14 +175,31 @@ fn detect_format(archive: &Path) -> Result<PackFormat> {
     if names.iter().any(|name| name == "modrinth.index.json") {
         return Ok(PackFormat::Modrinth);
     }
+    if names.iter().any(|name| name == "mcbbs.packmeta") {
+        return Ok(PackFormat::Mcbbs);
+    }
     if names.iter().any(|name| name == "manifest.json") {
+        let bytes = read_zip_entry(&mut zip, "manifest.json")?;
+        let value: Value = serde_json::from_slice(&bytes)
+            .map_err(|e| Error::Install(format!("manifest.json 解析失败: {e}")))?;
+        if value.get("addons").is_some() {
+            return Ok(PackFormat::Mcbbs);
+        }
         return Ok(PackFormat::CurseForge);
     }
     if names.iter().any(|name| name == "mmc-pack.json") {
         return Ok(PackFormat::Prism);
     }
+    if names.iter().any(|name| name == "modpack.json")
+        && names.iter().any(|name| name == "minecraft/pack.json")
+    {
+        return Ok(PackFormat::Hmcl);
+    }
+    if names.iter().any(|name| name == "instance.json") {
+        return Ok(PackFormat::Atl);
+    }
     Err(Error::Unsupported(
-        "无法识别的整合包格式；支持 Modrinth .mrpack、CurseForge .zip、Prism/MultiMC 导出 .zip"
+        "无法识别的整合包格式；支持 Modrinth / CurseForge / Prism-MultiMC / HMCL / ATLauncher / MCBBS"
             .into(),
     ))
 }
@@ -319,6 +380,322 @@ fn import_prism(
     )
 }
 
+fn import_mcbbs(
+    root: &Root,
+    archive: &Path,
+    mirror: &str,
+    sink: &Sink,
+) -> Result<ImportedInstance> {
+    root.ensure()?;
+    let mut zip = open_zip(archive)?;
+    let manifest_name = if zip.by_name("mcbbs.packmeta").is_ok() {
+        "mcbbs.packmeta"
+    } else {
+        "manifest.json"
+    };
+    let manifest: McbbsManifest = serde_json::from_slice(&read_zip_entry(&mut zip, manifest_name)?)
+        .map_err(|e| Error::Install(format!("{manifest_name} 解析失败: {e}")))?;
+    let mc = manifest
+        .addons
+        .iter()
+        .find(|addon| addon.id == "net.minecraft")
+        .map(|addon| addon.version.trim().to_string())
+        .filter(|version| !version.is_empty())
+        .ok_or_else(|| Error::Install("MCBBS 整合包没有声明 Minecraft 版本".into()))?;
+    if !manifest.libraries.is_empty() {
+        println!("! MCBBS 整合包含自定义 libraries，当前只安装 addon 加载器");
+    }
+    (sink)(Progress::stage("安装整合包加载器"));
+    let profile = install_mcbbs_loader(root, &mc, &manifest.addons, mirror, sink)?;
+    let name = manifest
+        .name
+        .clone()
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| archive_stem(archive));
+    let (id, instance_dir, game_dir) = create_instance(root, &name, &profile, "mcbbs", archive)?;
+
+    let result = (|| -> Result<()> {
+        import_mcbbs_files(&manifest, &game_dir, mirror, sink)?;
+        extract_prefixes(
+            &mut zip,
+            &game_dir,
+            &["overrides/".to_string(), "client-overrides/".to_string()],
+            sink,
+        )
+    })();
+    if let Err(e) = result {
+        let _ = std::fs::remove_dir_all(&instance_dir);
+        return Err(e);
+    }
+
+    finish_instance(
+        root,
+        &id,
+        &name,
+        &profile,
+        "mcbbs",
+        archive,
+        game_dir,
+        instance_dir,
+        sink,
+    )
+}
+
+fn install_mcbbs_loader(
+    root: &Root,
+    mc: &str,
+    addons: &[McbbsAddon],
+    mirror: &str,
+    sink: &Sink,
+) -> Result<String> {
+    let find = |id: &str| {
+        addons
+            .iter()
+            .find(|addon| addon.id == id)
+            .map(|addon| addon.version.trim().to_string())
+            .filter(|version| !version.is_empty())
+    };
+    if let Some(version) = find("net.fabricmc.fabric-loader") {
+        return fabric::install_with(root, mc, &version, mirror, sink);
+    }
+    if let Some(version) = find("net.neoforged") {
+        return neoforge::install_with(
+            root,
+            mc,
+            &normalize_loader_version(mc, &version),
+            mirror,
+            sink,
+        );
+    }
+    if let Some(version) = find("net.minecraftforge") {
+        return forge::install_with(
+            root,
+            mc,
+            &normalize_loader_version(mc, &version),
+            mirror,
+            sink,
+        );
+    }
+    if find("org.quiltmc.quilt-loader").is_some() {
+        return Err(Error::Unsupported("暂不支持 Quilt 整合包".into()));
+    }
+    vanilla::install_with(root, mc, mirror, sink)?;
+    Ok(mc.to_string())
+}
+
+fn import_mcbbs_files(
+    manifest: &McbbsManifest,
+    game_dir: &Path,
+    mirror: &str,
+    sink: &Sink,
+) -> Result<()> {
+    if manifest.files.is_empty() {
+        return Ok(());
+    }
+    let http = Http::new(mirror)?;
+    (sink)(Progress::stage("解析 MCBBS 文件"));
+    let mut specs = Vec::new();
+    for file in &manifest.files {
+        match file {
+            McbbsFile::Curse {
+                project_id,
+                file_id,
+            } => {
+                let curse = CurseFile {
+                    project_id: *project_id,
+                    file_id: *file_id,
+                    required: Some(true),
+                };
+                specs.push(curse_file_spec(&http, &curse, game_dir));
+            }
+            McbbsFile::Addon { path, hash } => {
+                let Some(base) = manifest.file_api.as_deref() else {
+                    println!("! MCBBS 文件缺少 fileApi，跳过: {path}");
+                    continue;
+                };
+                let dest = match safe_join(game_dir, path) {
+                    Ok(dest) => dest,
+                    Err(e) => {
+                        println!("! MCBBS 文件路径不安全，跳过: {e}");
+                        continue;
+                    }
+                };
+                specs.push(FileSpec {
+                    url: format!(
+                        "{}/{}",
+                        base.trim_end_matches('/'),
+                        path.trim_start_matches('/')
+                    ),
+                    dest,
+                    sha1: hash.clone(),
+                    size: None,
+                    verify_existing: true,
+                });
+            }
+        }
+    }
+    if !specs.is_empty() {
+        (sink)(Progress::stage("下载整合包文件"));
+        http.download_many_with(specs, "下载整合包文件", sink)?;
+    }
+    Ok(())
+}
+
+fn import_hmcl(root: &Root, archive: &Path, mirror: &str, sink: &Sink) -> Result<ImportedInstance> {
+    let mut zip = open_zip(archive)?;
+    let meta: Value = serde_json::from_slice(&read_zip_entry(&mut zip, "modpack.json")?)
+        .map_err(|e| Error::Install(format!("HMCL modpack.json 解析失败: {e}")))?;
+    let name = meta
+        .get("name")
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.trim().is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| archive_stem(archive));
+    let game = meta
+        .get("gameVersion")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let manifest: Value = serde_json::from_slice(&read_zip_entry(&mut zip, "minecraft/pack.json")?)
+        .map_err(|e| Error::Install(format!("HMCL pack.json 解析失败: {e}")))?;
+    let base = embedded_base(&manifest, game)
+        .ok_or_else(|| Error::Install("HMCL 整合包没有声明 Minecraft 基础版本".into()))?;
+    import_embedded(
+        root,
+        &mut zip,
+        manifest,
+        &name,
+        &base,
+        "minecraft/",
+        "hmcl",
+        archive,
+        mirror,
+        sink,
+    )
+}
+
+fn import_atl(root: &Root, archive: &Path, mirror: &str, sink: &Sink) -> Result<ImportedInstance> {
+    let mut zip = open_zip(archive)?;
+    let manifest: Value = serde_json::from_slice(&read_zip_entry(&mut zip, "instance.json")?)
+        .map_err(|e| Error::Install(format!("ATLauncher instance.json 解析失败: {e}")))?;
+    let name = manifest
+        .get("launcher")
+        .and_then(|v| v.get("name"))
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.trim().is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            manifest
+                .get("id")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| archive_stem(archive));
+    let base = embedded_base(&manifest, None)
+        .ok_or_else(|| Error::Install("ATLauncher 实例没有声明基础版本".into()))?;
+    import_embedded(
+        root, &mut zip, manifest, &name, &base, "", "atl", archive, mirror, sink,
+    )
+}
+
+fn embedded_base(manifest: &Value, fallback: Option<String>) -> Option<String> {
+    let from_inherit = manifest
+        .get("inheritsFrom")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let from_jar = manifest.get("jar").and_then(|jar| {
+        jar.as_str()
+            .map(str::to_string)
+            .or_else(|| jar.get("id").and_then(|v| v.as_str()).map(str::to_string))
+    });
+    from_inherit.or(from_jar).or(fallback)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn import_embedded(
+    root: &Root,
+    zip: &mut zip::ZipArchive<File>,
+    mut manifest: Value,
+    name: &str,
+    base: &str,
+    prefix: &str,
+    format: &str,
+    archive: &Path,
+    mirror: &str,
+    sink: &Sink,
+) -> Result<ImportedInstance> {
+    root.ensure()?;
+    if manifest.get("mainClass").and_then(|v| v.as_str()).is_none() {
+        return Err(Error::Unsupported(format!("{format} 整合包缺少 mainClass")));
+    }
+    (sink)(Progress::stage("安装 Minecraft 基础版本"));
+    vanilla::install_with(root, base, mirror, sink)?;
+    let profile = unique_loader_id(root, format, name);
+    let obj = manifest
+        .as_object_mut()
+        .ok_or_else(|| Error::Install(format!("{format} manifest 不是对象")))?;
+    obj.insert("id".to_string(), Value::String(profile.clone()));
+    if obj.get("inheritsFrom").and_then(|v| v.as_str()).is_none() {
+        obj.insert("inheritsFrom".to_string(), Value::String(base.to_string()));
+    }
+    let jar_id = obj.get("jar").and_then(|jar| {
+        jar.as_str()
+            .map(str::to_string)
+            .or_else(|| jar.get("id").and_then(|v| v.as_str()).map(str::to_string))
+    });
+    obj.insert(
+        "jar".to_string(),
+        Value::String(jar_id.unwrap_or_else(|| base.to_string())),
+    );
+    let text = serde_json::to_vec_pretty(&manifest).unwrap();
+    write_atomic(&root.version_json(&profile), &text)?;
+    let version: VersionJson = serde_json::from_slice(&text)
+        .map_err(|e| Error::Install(format!("{format} 版本解析失败: {e}")))?;
+
+    (sink)(Progress::stage("下载整合包运行库"));
+    let specs: Vec<FileSpec> = library_specs_for(root, &version.libraries, &Context::current())
+        .into_iter()
+        .filter(|spec| !spec.url.is_empty())
+        .collect();
+    let http = Http::new(mirror)?;
+    http.download_many_with(specs, "下载整合包运行库", sink)?;
+
+    let (id, instance_dir, game_dir) = create_instance(root, name, &profile, format, archive)?;
+    let result = (|| -> Result<()> {
+        extract_prefixes(zip, &game_dir, &[prefix.to_string()], sink)?;
+        let _ = std::fs::remove_file(game_dir.join("pack.json"));
+        let _ = std::fs::remove_file(game_dir.join("instance.json"));
+        let _ = std::fs::remove_file(game_dir.join("instance.cfg"));
+        Ok(())
+    })();
+    if let Err(e) = result {
+        let _ = std::fs::remove_dir_all(&instance_dir);
+        return Err(e);
+    }
+
+    finish_instance(
+        root,
+        &id,
+        name,
+        &profile,
+        format,
+        archive,
+        game_dir,
+        instance_dir,
+        sink,
+    )
+}
+
+fn unique_loader_id(root: &Root, prefix: &str, name: &str) -> String {
+    let base = format!("{prefix}-{}", slug(name));
+    let mut id = base.clone();
+    let mut n = 2;
+    while root.version_json(&id).exists() {
+        id = format!("{base}-{n}");
+        n += 1;
+    }
+    id
+}
+
 fn open_zip(archive: &Path) -> Result<zip::ZipArchive<File>> {
     let file = File::open(archive).map_err(|e| crate::error::io(archive, e))?;
     zip::ZipArchive::new(file).map_err(|e| Error::Install(format!("打开整合包失败: {e}")))
@@ -488,34 +865,16 @@ fn import_curse_files(
 
 fn curse_file_spec(http: &Http, file: &CurseFile, game_dir: &Path) -> FileSpec {
     let fallback = format!("mods/{}-{}.jar", file.project_id, file.file_id);
-    let meta_url = format!(
-        "https://www.curseforge.com/api/v1/mods/{}/files/{}",
-        file.project_id, file.file_id
-    );
-    let widget = curse_widget_file(http, file);
-    let (name, size, direct) = if widget.0.is_empty() {
-        match http.get_json(&meta_url) {
-            Ok(value) => {
-                let data = value.get("data").unwrap_or(&value);
-                let name = data
-                    .get("fileName")
-                    .and_then(|v| v.as_str())
-                    .filter(|v| !v.is_empty())
-                    .unwrap_or("")
-                    .to_string();
-                let size = data.get("fileLength").and_then(|v| v.as_u64());
-                let direct = data
-                    .get("downloadUrl")
-                    .and_then(|v| v.as_str())
-                    .filter(|v| !v.is_empty())
-                    .map(str::to_string);
-                (name, size, direct)
+    let (name, size, direct, sha1) = curse_api_file(http, file)
+        .or_else(|| {
+            let widget = curse_widget_file(http, file);
+            if widget.0.is_empty() {
+                None
+            } else {
+                Some((widget.0, widget.1, widget.2, None))
             }
-            Err(_) => (String::new(), None, None),
-        }
-    } else {
-        widget
-    };
+        })
+        .unwrap_or_else(|| (String::new(), None, None, None));
     let rel = if name.is_empty() {
         fallback
     } else {
@@ -533,18 +892,58 @@ fn curse_file_spec(http: &Http, file: &CurseFile, game_dir: &Path) -> FileSpec {
                 file.project_id, file.file_id
             )
         } else {
-            let first = file.file_id / 1000;
-            let last = file.file_id % 1000;
-            format!("https://mediafilez.forgecdn.net/files/{first}/{last:03}/{name}")
+            curse_cdn_url(file.file_id, &name)
         }
     });
     FileSpec {
         url,
         dest,
-        sha1: None,
+        sha1,
         size,
-        verify_existing: false,
+        verify_existing: true,
     }
+}
+
+type ResolvedCurseFile = (String, Option<u64>, Option<String>, Option<String>);
+
+fn curse_api_file(http: &Http, file: &CurseFile) -> Option<ResolvedCurseFile> {
+    let key = std::env::var("CURSEFORGE_API_KEY").ok()?;
+    let url = format!(
+        "https://api.curseforge.com/v1/mods/{}/files/{}",
+        file.project_id, file.file_id
+    );
+    let value = http
+        .get_json_with_headers(
+            &url,
+            &[("x-api-key", key.as_str()), ("Accept", "application/json")],
+        )
+        .ok()?;
+    let data = value.get("data")?;
+    let name = data.get("fileName")?.as_str()?.to_string();
+    let size = data.get("fileLength").and_then(|v| v.as_u64());
+    let sha1 = data
+        .get("hashes")
+        .and_then(|v| v.as_array())
+        .and_then(|items| {
+            items
+                .iter()
+                .find(|item| item.get("algo").and_then(|algo| algo.as_u64()) == Some(1))
+                .and_then(|item| item.get("value").and_then(|v| v.as_str()))
+                .map(str::to_string)
+        });
+    let direct = data
+        .get("downloadUrl")
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
+        .or_else(|| Some(curse_cdn_url(file.file_id, &name)));
+    Some((name, size, direct, sha1))
+}
+
+fn curse_cdn_url(file_id: u64, name: &str) -> String {
+    let first = file_id / 1000;
+    let last = file_id % 1000;
+    format!("https://mediafilez.forgecdn.net/files/{first}/{last:03}/{name}")
 }
 
 fn curse_widget_file(http: &Http, file: &CurseFile) -> (String, Option<u64>, Option<String>) {
@@ -558,10 +957,7 @@ fn curse_widget_file(http: &Http, file: &CurseFile) -> (String, Option<u64>, Opt
     let Some(name) = find_jar_name(&html) else {
         return (String::new(), None, None);
     };
-    let first = file.file_id / 1000;
-    let last = file.file_id % 1000;
-    let direct = format!("https://mediafilez.forgecdn.net/files/{first}/{last:03}/{name}");
-    (name, None, Some(direct))
+    (name.clone(), None, Some(curse_cdn_url(file.file_id, &name)))
 }
 
 fn find_jar_name(html: &str) -> Option<String> {

@@ -76,7 +76,7 @@ enum InstallTarget {
     Neoforge { mc: String, version: String },
     /// Forge（先安装原版，再执行客户端 processors）
     Forge { mc: String, version: String },
-    /// 整合包（.mrpack / CurseForge .zip / Prism .zip）
+    /// 整合包（Modrinth / CurseForge / Prism / HMCL / ATLauncher / MCBBS）
     Modpack { path: PathBuf },
 }
 

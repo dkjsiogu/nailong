@@ -532,10 +532,12 @@ shared/jre/
 | 顺序 | 格式 | 识别文件 | 说明 |
 |---|---|---|---|
 | 1 | Modrinth `.mrpack` | `modrinth.index.json` | 无需 API key；文件直链 + 哈希 |
-| 2 | CurseForge zip | `manifest.json` + `manifestType=minecraftModpack` | 用 cfwidget HTML 解析 fileID 文件名，构造 forgecdn 直链；无需 API key |
-| 3 | Prism/MultiMC zip | `mmc-pack.json` + `.minecraft/` | 组件映射到 base+loader，解压实例目录 |
-| 4 | HMCL | `modpack.json` | 未实现；检测到后明确报错 |
-| 5 | 手动整合包 | `minecraft/` 或 `overrides/` | 未识别时明确报错 |
+| 2 | MCBBS | `mcbbs.packmeta` 或带 `addons` 的 `manifest.json` | addons 装加载器，files/overrides |
+| 3 | CurseForge zip | `manifest.json` + `minecraft` | cfwidget 取文件名 + forgecdn 直链；可选 API key 校 SHA1 |
+| 4 | Prism/MultiMC zip | `mmc-pack.json` + `.minecraft/` | 组件映射到 base+loader，解压实例目录 |
+| 5 | HMCL | `modpack.json` + `minecraft/pack.json` | 内嵌 manifest 转实例 profile + 基础版本 |
+| 6 | ATLauncher | `instance.json` | 内嵌 manifest 转实例 profile + 基础版本 |
+| 7 | 未知 | 无 | 明确报错，不误装 |
 
 > 顺序必须固定：多种格式都可能含 `manifest.json`，靠 schema 校验互斥。
 
@@ -563,6 +565,7 @@ shared/jre/
 - 解析文件：优先 `cfwidget.com/{projectID}?version={fileID}` 的 HTML 取出文件名，构造 `mediafilez.forgecdn.net/files/{id/1000}/{id%1000:03}/{name}`；失败再尝试 CurseForge 官方 JSON。
 - 需要 API key（用户自备或项目内置受限 key）；API 有速率限制，需缓存与退避。
 - 不需要 API Key；拿不到文件名时回退 `<projectID>-<fileID>.jar`，不阻断 overrides 导入。
+- 设置 `CURSEFORGE_API_KEY` 时改用官方 API，优先取 `fileName/fileLength/hashes` 并校验 SHA1；无 key 时只有 HTTPS + 可选大小检查。
 - 不接受从第三方网页抓取（违反 ToS 且脆弱）。
 
 ### 8.5 安全

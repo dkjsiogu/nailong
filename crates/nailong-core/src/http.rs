@@ -117,6 +117,44 @@ impl Http {
         serde_json::from_str(&text).map_err(|e| Error::Install(format!("JSON 解析失败: {e}")))
     }
 
+    pub fn get_json_with_headers(
+        &self,
+        url: &str,
+        headers: &[(&str, &str)],
+    ) -> Result<serde_json::Value> {
+        let url = self.url(url);
+        let mut last = None;
+        for attempt in 0..3u32 {
+            let mut request = self.client.get(&url);
+            for (key, value) in headers {
+                request = request.header(*key, *value);
+            }
+            match request.send() {
+                Ok(response) => {
+                    let status = response.status();
+                    if status.is_success() {
+                        return response.json().map_err(|e| Error::Net {
+                            url: url.clone(),
+                            source: e,
+                        });
+                    }
+                    last = Some(Error::Http {
+                        url: url.clone(),
+                        status: status.as_u16(),
+                    });
+                }
+                Err(e) => {
+                    last = Some(Error::Net {
+                        url: url.clone(),
+                        source: e,
+                    });
+                }
+            }
+            std::thread::sleep(Duration::from_millis(400 * (attempt + 1) as u64));
+        }
+        Err(last.unwrap_or_else(|| Error::Install(format!("请求失败: {url}"))))
+    }
+
     /// Fetch one inclusive byte range.  `Ok(None)` means the server ignored the
     /// Range header and started a normal 200 response; callers must fall back
     /// to a full download instead of treating that body as a range.
@@ -349,7 +387,7 @@ impl Http {
                 if index > 0 {
                     println!("! 切换备用源: {url}");
                 }
-                match self.try_download(url, &spec.dest, spec.sha1.as_deref(), batch) {
+                match self.try_download(url, &spec.dest, spec.sha1.as_deref(), spec.size, batch) {
                     Ok(()) => {
                         if let Some(batch) = batch {
                             batch.file_done(0);
@@ -384,18 +422,31 @@ impl Http {
         url: &str,
         dest: &Path,
         expected: Option<&str>,
+        expected_size: Option<u64>,
         batch: Option<&Batch>,
     ) -> Result<()> {
-        let resp = self.client.get(url).send().map_err(|e| Error::Net {
-            url: url.into(),
-            source: e,
-        })?;
+        let resp = self
+            .client
+            .get(url)
+            .header(ACCEPT_ENCODING, "identity")
+            .send()
+            .map_err(|e| Error::Net {
+                url: url.into(),
+                source: e,
+            })?;
         let status = resp.status();
         if !status.is_success() {
             return Err(Error::Http {
                 url: url.into(),
                 status: status.as_u16(),
             });
+        }
+        if let (Some(expected), Some(actual)) = (expected_size, resp.content_length())
+            && actual != expected
+        {
+            return Err(Error::Install(format!(
+                "文件大小不符: 期望 {expected}, 实际 {actual} ({url})"
+            )));
         }
         let tmp = dest.with_extension(format!("part-{}", std::process::id()));
         let mut file = File::create(&tmp).map_err(|e| io(&tmp, e))?;
