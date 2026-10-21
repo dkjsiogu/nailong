@@ -61,7 +61,7 @@
 | 大文件分段下载 | `core::http` | 完成 | client jar 4 段并行、段续传、源回退 |
 | 重复安装快速路径 | `core::install::forge` / `neoforge` | 完成 | health 通过则 0 下载、0 processor |
 | Windows 交叉编译 | `x86_64-pc-windows-gnu` | 通过 | 无 MinGW DLL 依赖，仅系统 DLL |
-| 发布包 | GitHub Release `v0.7.1` | 完成（CI 构建） | 单 exe 约 7.6 MB / deb 约 3.2 MB |
+| 发布包 | GitHub Release `v0.7.1` | 完成（CI 构建） | 单 exe 约 7.7 MB / deb 约 3.2 MB |
 
 ### 2.1 实测记录
 
@@ -70,7 +70,7 @@
   `Setting user: Steve`、`Backend library: LWJGL version 3.3.3+5`、`Created: ... texture atlas`。
   无显示器环境用 Xvfb；音频设备缺失只产生 ALSA 警告，不影响进入游戏。
 - **GUI**：打包后的 `nailong` 在 Xvfb 中持续运行；通过 xdotool 点击“启动”后游戏进程到达主菜单。
-- **体积**：Linux GUI 8.7 MB / CLI 3.1 MB；Windows GUI 7.59 MB（CI 原生 MSVC 构建，无 VCRUNTIME/MSVCP 依赖）。opt-level=z + fat LTO + panic=abort，保留静态 CRT 与系统字体。
+- **体积**：Linux GUI 8.8 MB / CLI 3.3 MB；Windows GUI 7.70 MB（CI 原生 MSVC 构建，无 VCRUNTIME/MSVCP 依赖）。opt-level=z + fat LTO + panic=abort，保留静态 CRT 与系统字体。
 - **内存**：Linux + Xvfb + llvmpipe 下 GUI 空闲 RSS 约 **135 MB**。这是软件渲染上界，未达到 120 MB 目标；Windows 真实 GPU 待测。
 
 ### 2.2 关键实现细节

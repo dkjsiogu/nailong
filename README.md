@@ -76,8 +76,8 @@ sudo apt remove nailong
 
 | 产物 | 大小 | 说明 |
 |---|---:|---|
-| Windows GUI `nailong.exe` | 约 7.6 MB | 单文件，无额外运行库 |
-| Linux GUI（deb 内） | 约 8.5 MB | 单二进制 |
+| Windows GUI `nailong.exe` | 约 7.7 MB | 单文件，无额外运行库 |
+| Linux GUI（deb 内） | 约 8.8 MB | 单二进制 |
 | `nailong_0.7.1_amd64.deb` | 约 3.2 MB | 含桌面图标、菜单项、GPL 许可 |
 
 > 实机验证：Linux（Xvfb + Mesa）下 Fabric / NeoForge / Forge 1.21.1 均启动到游戏渲染/主菜单；Forge / NeoForge 只缓存约 3 MB 的精简安装数据，完整安装器不再落盘；原版基础版本已从主列表隐藏，管理页可删除；重复安装走快速路径；导入 Fabulously Optimized `.mrpack` 后加载 151 个模组并启动；CurseForge 真实 CDN 文件、Prism、MCBBS、HMCL、ATLauncher 均已用合成/样例包跑通格式识别与实例创建；Windows 由 CI 原生编译，尚未在 Windows 实机启动，欢迎帮忙试。
