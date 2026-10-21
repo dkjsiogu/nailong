@@ -1,5 +1,5 @@
 use crate::error::Result;
-use crate::install::{processors, slim, vanilla};
+use crate::install::{health, processors, slim, vanilla};
 use crate::paths::Root;
 use crate::progress::{Progress, Sink};
 
@@ -22,6 +22,11 @@ pub fn install_with(
     sink: &Sink,
 ) -> Result<String> {
     root.ensure()?;
+    let id = profile_id(mc, version);
+    if root.version_json(&id).exists() && health::inspect(root, &id).is_healthy() {
+        println!("✓ Forge {version}（{mc}）已安装，跳过下载");
+        return Ok(id);
+    }
     (sink)(Progress::stage("检查原版资源"));
     vanilla::install_with(root, mc, mirror, sink)?;
 

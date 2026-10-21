@@ -1,5 +1,5 @@
 use crate::error::Result;
-use crate::install::{processors, slim, vanilla};
+use crate::install::{health, processors, slim, vanilla};
 use crate::paths::Root;
 use crate::progress::{Progress, Sink, noop};
 
@@ -28,6 +28,14 @@ pub fn install_with(
     sink: &Sink,
 ) -> Result<String> {
     root.ensure()?;
+
+    let installed_id = format!("neoforge-{version}");
+    if root.version_json(&installed_id).exists()
+        && health::inspect(root, &installed_id).is_healthy()
+    {
+        println!("✓ NeoForge {version}（{mc}）已安装，跳过下载");
+        return Ok(installed_id);
+    }
 
     // Always run the vanilla pass: it verifies and completes missing resources.
     // This is what makes "继续安装" repair an interrupted download.

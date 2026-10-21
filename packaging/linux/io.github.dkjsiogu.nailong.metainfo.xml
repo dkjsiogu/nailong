@@ -25,6 +25,11 @@
   <url type="bugtracker">https://github.com/dkjsiogu/nailong/issues</url>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.4.3" date="2026-10-21">
+      <description>
+        <p>Loader base versions are hidden from the main picker, with a management page for deleting versions and instances. Reinstalling an intact loader is now instant, and the 3 MB core data is fetched in parallel.</p>
+      </description>
+    </release>
     <release version="0.4.2" date="2026-10-21">
       <description>
         <p>Forge and NeoForge installs now fetch only the core installer data (about 3 MB) instead of the full 7–9 MB package; mirrors without range support fall back safely.</p>

@@ -76,6 +76,17 @@ impl Root {
         self.version_dir(id).join(format!("{id}.jar"))
     }
 
+    /// Remove a version directory by its exact on-disk name.  Only direct
+    /// children are accepted, so a profile id can never escape `versions/`.
+    pub fn remove_version(&self, id: &str) -> Result<()> {
+        remove_child(&self.versions(), id)
+    }
+
+    /// Remove an instance directory by its exact on-disk name.
+    pub fn remove_instance(&self, id: &str) -> Result<()> {
+        remove_child(&self.instances(), id)
+    }
+
     pub fn ensure(&self) -> Result<()> {
         for p in [
             self.dir.clone(),
@@ -91,6 +102,25 @@ impl Root {
         }
         Ok(())
     }
+}
+
+fn remove_child(parent: &Path, id: &str) -> Result<()> {
+    if id.is_empty() || id == "." || id == ".." || id.contains('/') || id.contains('\\') {
+        return Err(crate::error::Error::Install(format!(
+            "拒绝删除非法路径: {id}"
+        )));
+    }
+    let path = parent.join(id);
+    if !path.exists() {
+        return Ok(());
+    }
+    if !path.is_dir() {
+        return Err(crate::error::Error::Install(format!(
+            "不是目录，拒绝删除: {}",
+            path.display()
+        )));
+    }
+    std::fs::remove_dir_all(&path).map_err(|e| io(&path, e))
 }
 
 pub fn sanitize(s: &str) -> String {

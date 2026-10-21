@@ -1,7 +1,7 @@
 # 14 · 原型实现状态（0.1 → 0.4）
 
 > 日期：2026-10-21
-> 对应发布：GitHub Release `v0.4.2` 的 `nailong.exe`、`nailong_0.4.2_amd64.deb`
+> 对应发布：GitHub Release `v0.4.3` 的 `nailong.exe`、`nailong_0.4.3_amd64.deb`
 > 目的：把「设计稿」和「已经跑起来的代码」分开记账，避免把计划当成已完成。
 
 ## 1. 一句话结论
@@ -9,6 +9,8 @@
 **垂直切片已经打通：Windows/Linux 上可以安装 Minecraft 1.21.1，并选择 Fabric / NeoForge / Forge / 原版，用离线账户启动到主菜单。**
 
 0.4.2 把 Forge/NeoForge 的安装数据从“整个安装器”改成“按需读取核心条目”：首次安装只取约 3 MB，而不是 6–9 MB；不支持 Range 的镜像自动改用官方源或完整包兜底。
+
+0.4.3 补上两项基础体验：加载器依赖的原版不再出现在主版本列表里（管理页仍可见、可删）；已完整安装的加载器再次点安装会直接复用，不再下载补丁或重跑 processor。3 MB 客户端补丁也改为 4 段并行读取。
 
 发布形态刻意保持简单：Windows 只发一个 `nailong.exe`；Linux 只发一个可双击/`apt install` 的 `.deb`。
 
@@ -40,8 +42,10 @@
 | Windows 便携目录 | `core::paths` | 完成 | 默认使用 exe 同目录 `.minecraft` |
 | CLI（list/java/info/install/launch） | `nailong-cli` | 完成 | 打包产物冒烟 |
 | GUI（版本下拉、安装进度、缺文件补全、启动、设置） | `nailong-ui` | 可用 | Xvfb 下走完安装 / 补全 / 启动；实际 NeoForge 到主菜单 |
+| 版本管理 | `nailong-ui` | 完成 | 基础版本隐藏、版本/整合包删除、被依赖保护 |
+| 重复安装快速路径 | `core::install::forge` / `neoforge` | 完成 | health 通过则 0 下载、0 processor |
 | Windows 交叉编译 | `x86_64-pc-windows-gnu` | 通过 | 无 MinGW DLL 依赖，仅系统 DLL |
-| 发布包 | GitHub Release `v0.4.2` | 完成（CI 构建） | 单 exe 约 12 MB / deb 约 4.3 MB |
+| 发布包 | GitHub Release `v0.4.3` | 完成（CI 构建） | 单 exe 约 12 MB / deb 约 4.3 MB |
 
 ### 2.1 实测记录
 
@@ -61,8 +65,9 @@
   `remove_classpath_args` 之后对 `resolved.client_jar` 的剔除。
 - **离线 UUID**：`MD5("OfflinePlayer:" + name)`，再置 version=3、variant=2；与 Java 的
   `UUID.nameUUIDFromBytes` 一致。测试向量：`Notch -> b50ad385829d3141a2167e7d7539ba7f`。
+- **版本列表**：主界面只展示用户安装的叶子版本；被加载器继承的原版标记为 `hidden`，管理页才列出。删除前检查“被多少版本依赖/被多少整合包使用”，避免把基础版本删掉。
 - **processor 安装**：按需读取 Forge/NeoForge 安装器的核心条目（约 3 MB），
-  精简缓存为 `*.slim.zip`；Rust 解析 `install_profile.json` 的 data/libraries/processors，
+  精简缓存为 `*.slim.zip`；3 MB 补丁分 4 段并行读取；Rust 解析 `install_profile.json` 的 data/libraries/processors，
   只执行客户端的 processor（mappings、jarsplitter、renamer、binarypatcher 等），再写出
   `versions/<id>/<id>.json`。不执行官方 GUI installer，也不保留完整安装器。
 - **下载器**：阻塞 `reqwest` + rustls(ring)，rayon 并发；单文件原子写；sha1 不匹配重试。
@@ -80,7 +85,7 @@
 | 整合包 / 正版登录 / 自动更新 | 未实现 | 下一步做整合包与账户 |
 | 微软正版登录 | 未实现（离线） | 按决定推迟到 M3.5 |
 | 自动更新 / 签名 / 崩溃报告 | 未实现 | 发布前补齐 |
-| 单元/集成测试体系 | **20 个核心单元测试** | 缺夹具、mock HTTP、启动 argv 快照、CI |
+| 单元/集成测试体系 | **22 个测试** | 缺夹具、mock HTTP、启动 argv 快照、Windows CI |
 
 ## 4. 已知问题与风险
 

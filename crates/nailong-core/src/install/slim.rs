@@ -2,6 +2,7 @@ use crate::error::{Error, Result, io};
 use crate::http::{FileSpec, Http};
 use crate::paths::Root;
 use crate::progress::{Progress, Sink};
+use rayon::prelude::*;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
@@ -10,6 +11,8 @@ use std::path::{Path, PathBuf};
 
 const EOCD_MAX: u64 = 65_557;
 const MAX_ENTRY: u64 = 128 * 1024 * 1024;
+const PARALLEL_RANGE: u64 = 1024 * 1024;
+const RANGE_PARTS: u64 = 4;
 
 /// Fetch only the data a modern Forge/NeoForge install needs.
 ///
@@ -328,6 +331,27 @@ fn fetch_entry(http: &Http, url: &str, entry: &CentralEntry, total: u64) -> Resu
     }
     let raw = if entry.compressed == 0 {
         Vec::new()
+    } else if entry.compressed >= PARALLEL_RANGE {
+        // Large entries (the 3 MB client patch) are fetched in parallel
+        // ranges.  This is still one logical ZIP entry, so CRC/length checks
+        // below validate the assembled result.
+        let chunk = entry.compressed.div_ceil(RANGE_PARTS);
+        let parts: Vec<Result<Vec<u8>>> = (0..RANGE_PARTS)
+            .into_par_iter()
+            .map(|index| {
+                let start = data_start + index * chunk;
+                if start >= data_end {
+                    return Ok(Vec::new());
+                }
+                let end = (start + chunk - 1).min(data_end - 1);
+                required_range(http, url, start, end)
+            })
+            .collect();
+        let mut out = Vec::with_capacity(entry.compressed as usize);
+        for part in parts {
+            out.extend_from_slice(&part?);
+        }
+        out
     } else {
         required_range(http, url, data_start, data_end - 1)?
     };

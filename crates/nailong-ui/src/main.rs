@@ -5,6 +5,7 @@ use nailong_core::install::{catalog, fabric, forge, health, modpack, neoforge, v
 use nailong_core::launch::{self, LaunchOptions};
 use nailong_core::progress::{Progress, Sink, from_fn};
 use nailong_core::{Root, java};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
@@ -54,6 +55,9 @@ struct Row {
     loader_version: Option<String>,
     game_dir: Option<PathBuf>,
     instance: Option<String>,
+    hidden: bool,
+    required_by: usize,
+    used_by: usize,
     health: health::Health,
 }
 
@@ -112,6 +116,9 @@ struct App {
     memory: u32,
     java_ok: bool,
     show_install: bool,
+    show_manage: bool,
+    show_base: bool,
+    delete_confirm: Option<String>,
     catalog: Option<catalog::Catalog>,
     catalog_loading: bool,
     catalog_error: Option<String>,
@@ -143,6 +150,9 @@ impl App {
             memory: 4096,
             java_ok,
             show_install: false,
+            show_manage: false,
+            show_base: false,
+            delete_confirm: None,
             catalog: None,
             catalog_loading: false,
             catalog_error: None,
@@ -163,13 +173,19 @@ impl App {
             catalog_rx: None,
         };
         app.refresh();
-        if app.rows.is_empty() {
-            app.open_install();
+        if app.visible_count() == 0 {
+            if app.rows.is_empty() {
+                app.open_install();
+            } else {
+                app.show_manage = true;
+            }
         }
         app
     }
 
     fn refresh(&mut self) {
+        let required_by = profile_dependents(&self.root);
+        let used_by = instance_usage(&self.root);
         let mut rows = Vec::new();
         if let Ok(entries) = std::fs::read_dir(self.root.versions()) {
             for entry in entries.flatten() {
@@ -186,6 +202,8 @@ impl App {
                     None => mc.clone(),
                 };
                 let row_health = health::inspect(&self.root, &id);
+                let required = required_by.get(&id).copied().unwrap_or(0);
+                let used = used_by.get(&id).copied().unwrap_or(0);
                 rows.push(Row {
                     id: id.clone(),
                     profile: id,
@@ -195,6 +213,9 @@ impl App {
                     loader_version,
                     game_dir: None,
                     instance: None,
+                    hidden: loader == LoaderKind::Vanilla && required > 0,
+                    required_by: required,
+                    used_by: used,
                     health: row_health,
                 });
             }
@@ -226,6 +247,9 @@ impl App {
                     loader_version,
                     game_dir: Some(game_dir),
                     instance: Some(meta.name),
+                    hidden: false,
+                    required_by: 0,
+                    used_by: 0,
                     health: health::inspect(&self.root, &meta.profile),
                 });
             }
@@ -237,14 +261,8 @@ impl App {
                 .then_with(|| mc_key(&b.mc).cmp(&mc_key(&a.mc)))
                 .then_with(|| a.loader.rank().cmp(&b.loader.rank()))
         });
-        if self
-            .selected
-            .as_ref()
-            .is_none_or(|s| !rows.iter().any(|r| &r.id == s))
-        {
-            self.selected = rows.first().map(|r| r.id.clone());
-        }
         self.rows = rows;
+        self.ensure_visible_selection();
     }
 
     fn selected_row(&self) -> Option<Row> {
@@ -254,8 +272,36 @@ impl App {
             .cloned()
     }
 
+    fn is_visible(&self, row: &Row) -> bool {
+        self.show_base || !row.hidden
+    }
+
+    fn visible_count(&self) -> usize {
+        self.rows.iter().filter(|r| self.is_visible(r)).count()
+    }
+
+    fn visible_rows(&self) -> impl Iterator<Item = &Row> {
+        self.rows.iter().filter(|r| self.is_visible(r))
+    }
+
+    fn ensure_visible_selection(&mut self) {
+        let valid = self
+            .selected
+            .as_ref()
+            .and_then(|id| self.rows.iter().find(|r| &r.id == id))
+            .is_some_and(|r| self.is_visible(r));
+        if !valid {
+            self.selected = self
+                .rows
+                .iter()
+                .find(|r| self.is_visible(r))
+                .map(|r| r.id.clone());
+        }
+    }
+
     fn open_install(&mut self) {
         self.show_install = true;
+        self.show_manage = false;
         self.error = None;
         self.notice = None;
         self.repair_target = None;
@@ -320,6 +366,7 @@ impl App {
         self.error = None;
         self.notice = None;
         self.show_install = true;
+        self.show_manage = false;
         self.show_log = false;
         self.busy = Some(Task::Install);
         self.progress = Some(Progress::stage("准备导入整合包"));
@@ -372,6 +419,10 @@ impl App {
         self.error = None;
         self.notice = None;
         self.show_install = true;
+        self.show_manage = false;
+        if loader == LoaderKind::Vanilla {
+            self.show_base = true;
+        }
         self.show_log = false;
         self.busy = Some(Task::Install);
         self.progress = Some(Progress::stage("准备安装"));
@@ -562,16 +613,27 @@ impl App {
                         ui.add_space(22.0);
                         if matches!(self.busy, Some(Task::Launch)) {
                             ui.spinner();
+                        } else if self.show_manage {
+                            if ghost_button(ui, "返回").clicked() {
+                                self.show_manage = false;
+                                self.delete_confirm = None;
+                            }
                         } else if !self.show_install && !self.rows.is_empty() && self.busy.is_none()
                         {
-                            if ghost_button(ui, "导入整合包").clicked()
-                                && let Some(path) = pick_modpack()
-                            {
-                                self.start_modpack(path);
+                            if ghost_button(ui, "版本管理").clicked() {
+                                self.show_manage = true;
+                                self.delete_confirm = None;
+                                self.error = None;
                             }
                             ui.add_space(4.0);
                             if ghost_button(ui, "+ 安装").clicked() {
                                 self.open_install();
+                            }
+                            ui.add_space(4.0);
+                            if ghost_button(ui, "导入整合包").clicked()
+                                && let Some(path) = pick_modpack()
+                            {
+                                self.start_modpack(path);
                             }
                         }
                     });
@@ -580,7 +642,12 @@ impl App {
     }
 
     fn main_view(&mut self, ui: &mut egui::Ui) {
-        let Some(row) = self.selected_row() else {
+        let rows: Vec<Row> = self.visible_rows().cloned().collect();
+        let Some(row) = self
+            .selected_row()
+            .filter(|r| self.is_visible(r))
+            .or_else(|| rows.first().cloned())
+        else {
             self.install_view(ui);
             return;
         };
@@ -596,7 +663,6 @@ impl App {
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     let mut chosen = row.id.clone();
-                    let rows = self.rows.clone();
                     egui::ComboBox::from_id_salt("installed_version")
                         .selected_text(egui::RichText::new(&row.label).size(17.0).strong())
                         .width(430.0)
@@ -697,6 +763,161 @@ impl App {
                                 }
                             });
                     });
+            });
+        });
+    }
+
+    fn delete_row(&mut self, row: &Row) {
+        let result = if let Some(id) = row.id.strip_prefix("instance:") {
+            self.root.remove_instance(id)
+        } else {
+            self.root.remove_version(&row.profile)
+        };
+        match result {
+            Ok(()) => {
+                self.notice = Some(format!("已删除 {}", row.label));
+                self.error = None;
+                self.delete_confirm = None;
+                self.refresh();
+                if self.visible_count() == 0 {
+                    self.show_manage = false;
+                    self.open_install();
+                }
+            }
+            Err(e) => {
+                self.error = Some(format!("删除失败: {e}"));
+                self.delete_confirm = None;
+            }
+        }
+    }
+
+    fn manage_view(&mut self, ui: &mut egui::Ui) {
+        let width = ui.available_width().min(600.0);
+        let pad = ((ui.available_width() - width) / 2.0).max(24.0);
+        let rows = self.rows.clone();
+        ui.add_space(28.0);
+        ui.horizontal(|ui| {
+            ui.add_space(pad);
+            ui.vertical(|ui| {
+                ui.set_width(width);
+                ui.label(egui::RichText::new("版本管理").size(28.0).strong());
+                ui.add_space(6.0);
+                ui.label(
+                    egui::RichText::new(
+                        "加载器依赖的原版会作为基础版本保留，默认不显示；删除会同时移除磁盘上的文件。",
+                    )
+                    .size(12.0)
+                    .color(MUTED),
+                );
+                ui.add_space(14.0);
+                let mut show_base = self.show_base;
+                if ui.checkbox(&mut show_base, "显示基础版本").changed() {
+                    self.show_base = show_base;
+                    self.ensure_visible_selection();
+                }
+                ui.add_space(10.0);
+
+                card().show(ui, |ui| {
+                    if rows.is_empty() {
+                        ui.label(egui::RichText::new("还没有安装版本").color(MUTED));
+                        return;
+                    }
+                    egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+                        for row in &rows {
+                            let is_instance = row.instance.is_some();
+                            let blocked = !is_instance && (row.required_by > 0 || row.used_by > 0);
+                            ui.horizontal(|ui| {
+                                ui.vertical(|ui| {
+                                    ui.label(
+                                        egui::RichText::new(&row.label)
+                                            .size(15.0)
+                                            .strong(),
+                                    );
+                                    let mut detail = if is_instance {
+                                        format!("整合包 · 使用 {}", row.profile)
+                                    } else if row.hidden {
+                                        format!(
+                                            "基础版本 · 被 {} 个加载器版本依赖",
+                                            row.required_by
+                                        )
+                                    } else {
+                                        format!("{} · {}", row.mc, row.loader.name())
+                                    };
+                                    if !is_instance && row.used_by > 0 {
+                                        detail.push_str(&format!(
+                                            " · {} 个整合包在用",
+                                            row.used_by
+                                        ));
+                                    }
+                                    ui.label(
+                                        egui::RichText::new(detail).size(11.0).color(MUTED),
+                                    );
+                                });
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        if blocked {
+                                            ui.label(
+                                                egui::RichText::new("被依赖，不能删")
+                                                    .size(11.0)
+                                                    .color(MUTED),
+                                            );
+                                        } else if self.delete_confirm.as_deref()
+                                            == Some(row.id.as_str())
+                                        {
+                                            if ui.button("取消").clicked() {
+                                                self.delete_confirm = None;
+                                            }
+                                            if ui
+                                                .add(
+                                                    egui::Button::new("确认删除")
+                                                        .fill(egui::Color32::from_rgb(
+                                                            120, 48, 48,
+                                                        )),
+                                                )
+                                                .clicked()
+                                            {
+                                                self.delete_row(row);
+                                            }
+                                        } else if ui
+                                            .add_enabled(
+                                                self.busy.is_none(),
+                                                egui::Button::new(if is_instance {
+                                                    "删除整合包"
+                                                } else {
+                                                    "删除版本"
+                                                }),
+                                            )
+                                            .clicked()
+                                        {
+                                            self.delete_confirm = Some(row.id.clone());
+                                        }
+                                    },
+                                );
+                            });
+                            ui.add_space(8.0);
+                            ui.separator();
+                            ui.add_space(8.0);
+                        }
+                    });
+                });
+
+                if let Some(err) = &self.error {
+                    ui.add_space(10.0);
+                    ui.label(
+                        egui::RichText::new(err)
+                            .size(12.0)
+                            .color(egui::Color32::from_rgb(230, 120, 110)),
+                    );
+                }
+                if let Some(note) = &self.notice {
+                    ui.add_space(10.0);
+                    ui.label(
+                        egui::RichText::new(note)
+                            .size(12.0)
+                            .color(egui::Color32::from_rgb(120, 190, 140)),
+                    );
+                }
             });
         });
     }
@@ -841,7 +1062,7 @@ impl App {
                         if primary_button(ui, "安装", can_install) {
                             go = true;
                         }
-                        if !self.rows.is_empty() {
+                        if self.visible_count() > 0 {
                             ui.add_space(6.0);
                             if ui.button("返回").clicked() {
                                 self.show_install = false;
@@ -970,6 +1191,8 @@ impl eframe::App for App {
         egui::CentralPanel::default_margins().show(ui, |ui| {
             if matches!(self.busy, Some(Task::Install)) {
                 self.progress_view(ui);
+            } else if self.show_manage {
+                self.manage_view(ui);
             } else if self.show_install {
                 self.install_view(ui);
             } else {
@@ -1155,6 +1378,46 @@ fn preferred_forge(cat: &catalog::Catalog, mc: &str) -> String {
     cat.forge_for(mc).first().cloned().unwrap_or_default()
 }
 
+fn profile_dependents(root: &Root) -> HashMap<String, usize> {
+    let mut out = HashMap::new();
+    let Ok(entries) = std::fs::read_dir(root.versions()) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        if !entry.path().is_dir() {
+            continue;
+        }
+        let id = entry.file_name().to_string_lossy().to_string();
+        let Ok(bytes) = std::fs::read(root.version_json(&id)) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+            continue;
+        };
+        if let Some(parent) = value.get("inheritsFrom").and_then(|v| v.as_str()) {
+            *out.entry(parent.to_string()).or_insert(0) += 1;
+        }
+    }
+    out
+}
+
+fn instance_usage(root: &Root) -> HashMap<String, usize> {
+    let mut out = HashMap::new();
+    let Ok(entries) = std::fs::read_dir(root.instances()) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let Ok(bytes) = std::fs::read(entry.path().join("instance.json")) else {
+            continue;
+        };
+        let Ok(meta) = serde_json::from_slice::<modpack::InstanceMeta>(&bytes) else {
+            continue;
+        };
+        *out.entry(meta.profile).or_insert(0) += 1;
+    }
+    out
+}
+
 fn profile_info(root: &Root, profile: &str) -> (String, LoaderKind, Option<String>) {
     let value: serde_json::Value = std::fs::read(root.version_json(profile))
         .ok()
@@ -1336,4 +1599,50 @@ fn main() -> eframe::Result<()> {
             Ok(Box::new(App::new(root)))
         }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_root(tag: &str) -> Root {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        Root::new(
+            std::env::temp_dir().join(format!("nailong-ui-{tag}-{}-{nanos}", std::process::id())),
+        )
+    }
+
+    #[test]
+    fn detects_loader_base_dependencies() {
+        let root = temp_root("deps");
+        std::fs::create_dir_all(root.versions()).unwrap();
+        let base = root.versions().join("1.21.1");
+        let loader = root.versions().join("neoforge-21.1.209");
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::create_dir_all(&loader).unwrap();
+        std::fs::write(base.join("1.21.1.json"), r#"{"id":"1.21.1"}"#).unwrap();
+        std::fs::write(
+            loader.join("neoforge-21.1.209.json"),
+            r#"{"id":"neoforge-21.1.209","inheritsFrom":"1.21.1"}"#,
+        )
+        .unwrap();
+        let deps = profile_dependents(&root);
+        assert_eq!(deps.get("1.21.1"), Some(&1));
+        let _ = std::fs::remove_dir_all(root.dir());
+    }
+
+    #[test]
+    fn removal_is_direct_child_only() {
+        let root = temp_root("remove");
+        std::fs::create_dir_all(root.versions().join("old")).unwrap();
+        std::fs::write(root.versions().join("old").join("x"), b"x").unwrap();
+        root.remove_version("old").unwrap();
+        assert!(!root.versions().join("old").exists());
+        assert!(root.remove_version("../outside").is_err());
+        assert!(root.remove_version(".").is_err());
+        let _ = std::fs::remove_dir_all(root.dir());
+    }
 }
