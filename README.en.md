@@ -8,7 +8,7 @@ A small, native Minecraft: Java Edition launcher written in Rust. Windows ships 
 
 [简体中文](README.md) | **English**
 
-> Current version: **0.7.5** (preview)
+> Current version: **0.8.0** (preview)
 >
 > Goals: small binaries, few dependencies, visible install progress, and a repair path after interruption. See [implementation status](docs/design/14-implementation-status.md) for exact boundaries.
 
@@ -54,6 +54,16 @@ Six formats are detected automatically:
 
 Drag a `.mrpack` or `.zip` into the window to start an import. A single mod `.jar` is not treated as a modpack.
 
+### Mod search and download
+
+- Select an installed Fabric / NeoForge / Forge version first; searches are locked to that version's Minecraft version and loader.
+- Search Modrinth and CurseForge together, or filter to one source.
+- Pick a compatible file version, then review its dependencies.
+- `required` dependencies are added automatically; `optional` ones are shown as checkboxes (off by default); `incompatible` ones block the download.
+- Files go into that version's `mods/`. A normal version gets an isolated `gameDir` (`versions/<id>/`) on first download, so other versions are untouched; existing saves in the root are not migrated.
+- Identical existing files are skipped; a conflicting file is reported, never silently overwritten.
+- Search/download only: no auto-update, dependency upgrades or remote installers.
+
 ### Everyday use
 
 - Offline-account launch (singleplayer / LAN).
@@ -66,7 +76,7 @@ Drag a `.mrpack` or `.zip` into the window to start an import. A single mod `.ja
 | Platform | File | Size | Requirements |
 |---|---|---:|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | ~7.7 MB | Windows 10/11, Java 21 |
-| Linux x64 (deb) | [nailong_0.7.5_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.7.5_amd64.deb) | ~3.2 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
+| Linux x64 (deb) | [nailong_0.8.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.8.0_amd64.deb) | ~3.2 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
 
 Checksums: [SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS).
 
@@ -83,7 +93,7 @@ Java 21 must be installed. nailong searches for it automatically and shows a war
 ### Linux (Debian / Ubuntu)
 
 ```bash
-sudo apt install ./nailong_0.7.5_amd64.deb
+sudo apt install ./nailong_0.8.0_amd64.deb
 nailong
 ```
 
@@ -122,6 +132,7 @@ Ran for real:
 - Fabulously Optimized `.mrpack`: 151 mods loaded and launched.
 - CurseForge: a real file was downloaded through the no-key official-page fallback; the approved API key returned the official file name, size, SHA1, and download URL.
 - GUI cancellation: cancelled an install under Xvfb and returned to the “continue install” page without crashing.
+- Mod search/download: real Modrinth + CurseForge APIs; Jade and its required dependency resolved and downloaded into the version-isolated `mods/` successfully.
 - Prism, MCBBS, HMCL, and ATLauncher: real or synthetic samples passed format detection and instance creation.
 
 Not verified yet:
@@ -174,13 +185,13 @@ Windows release builds use MSVC with the static CRT in GitHub Actions. `x86_64-p
 - Auto-update, mod management, and skins.
 - Stopping a running game / cancelling a launch.
 - Real Windows testing and macOS support.
-- Importing a single mod `.jar`.
+- Importing a local single mod `.jar` (online search/download is supported; local jar import is not).
 
 ## Project layout
 
 ```text
 crates/
-  nailong-core/   manifests, downloads, Java detection, launch, loaders, modpacks
+  nailong-core/   manifests, downloads, Java detection, launch, loaders, modpacks, mod search
   nailong-cli/    command line
   nailong-ui/     egui desktop UI
 packaging/linux/  desktop file, icons, AppStream metadata, copyright

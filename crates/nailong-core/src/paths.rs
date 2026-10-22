@@ -82,6 +82,12 @@ impl Root {
         self.version_dir(id).join(".nailong-incomplete")
     }
 
+    /// Present when a version has opted into its own game directory (mods,
+    /// saves and options no longer live in the shared root).
+    pub fn isolated_marker(&self, id: &str) -> PathBuf {
+        self.version_dir(id).join(".nailong-isolated")
+    }
+
     /// Remove a version directory by its exact on-disk name.  Only direct
     /// children are accepted, so a profile id can never escape `versions/`.
     pub fn remove_version(&self, id: &str) -> Result<()> {

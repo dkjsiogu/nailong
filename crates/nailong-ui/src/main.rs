@@ -3,9 +3,10 @@
 use eframe::egui;
 use nailong_core::install::{catalog, fabric, forge, health, modpack, neoforge, vanilla};
 use nailong_core::launch::{self, LaunchOptions};
+use nailong_core::mods;
 use nailong_core::progress::{Progress, Sink, from_fn};
 use nailong_core::{Error, Root, cancel, java};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
@@ -42,6 +43,15 @@ impl LoaderKind {
             Self::Forge => 2,
             Self::Vanilla => 3,
         }
+    }
+}
+
+fn mod_loader(kind: LoaderKind) -> Option<mods::Loader> {
+    match kind {
+        LoaderKind::Fabric => Some(mods::Loader::Fabric),
+        LoaderKind::NeoForge => Some(mods::Loader::NeoForge),
+        LoaderKind::Forge => Some(mods::Loader::Forge),
+        LoaderKind::Vanilla => None,
     }
 }
 
@@ -96,6 +106,7 @@ impl RepairTarget {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Task {
     Install,
+    Mods,
     Launch,
 }
 
@@ -105,6 +116,21 @@ enum Msg {
     InstallDone(String),
     InstallFailed(String),
     InstallCancelled,
+    ModsSearch {
+        query: String,
+        result: Result<mods::SearchPage, String>,
+    },
+    ModsVersions {
+        project: String,
+        result: Result<Vec<mods::Version>, String>,
+    },
+    ModsDeps {
+        version: String,
+        result: Result<Vec<mods::DependencyChoice>, String>,
+    },
+    ModsDone(String),
+    ModsFailed(String),
+    ModsCancelled,
     LaunchDone(i32),
     LaunchFailed(String),
 }
@@ -118,8 +144,26 @@ struct App {
     java_ok: bool,
     show_install: bool,
     show_manage: bool,
+    show_mods: bool,
     show_base: bool,
     delete_confirm: Option<String>,
+    mods_row: Option<Row>,
+    mods_game_dir: Option<PathBuf>,
+    mods_query: String,
+    mods_source: Option<mods::Source>,
+    mods_results: Vec<mods::Project>,
+    mods_total: u64,
+    mods_warnings: Vec<String>,
+    mods_loading: bool,
+    mods_selected: Option<mods::Project>,
+    mods_versions: Vec<mods::Version>,
+    mods_version: Option<mods::Version>,
+    mods_choices: Vec<mods::DependencyChoice>,
+    mods_optional: BTreeSet<mods::DependencyKey>,
+    mods_deps_loading: bool,
+    mods_notice: Option<String>,
+    mods_error: Option<String>,
+    mods_rx: Option<mpsc::Receiver<Msg>>,
     catalog: Option<catalog::Catalog>,
     catalog_loading: bool,
     catalog_error: Option<String>,
@@ -153,8 +197,26 @@ impl App {
             java_ok,
             show_install: false,
             show_manage: false,
+            show_mods: false,
             show_base: false,
             delete_confirm: None,
+            mods_row: None,
+            mods_game_dir: None,
+            mods_query: String::new(),
+            mods_source: None,
+            mods_results: Vec::new(),
+            mods_total: 0,
+            mods_warnings: Vec::new(),
+            mods_loading: false,
+            mods_selected: None,
+            mods_versions: Vec::new(),
+            mods_version: None,
+            mods_choices: Vec::new(),
+            mods_optional: BTreeSet::new(),
+            mods_deps_loading: false,
+            mods_notice: None,
+            mods_error: None,
+            mods_rx: None,
             catalog: None,
             catalog_loading: false,
             catalog_error: None,
@@ -207,6 +269,9 @@ impl App {
                 let row_health = health::inspect(&self.root, &id);
                 let required = required_by.get(&id).copied().unwrap_or(0);
                 let used = used_by.get(&id).copied().unwrap_or(0);
+                let isolated = self.root.isolated_marker(&id).exists()
+                    || self.root.version_dir(&id).join("mods").is_dir();
+                let game_dir = isolated.then(|| self.root.version_dir(&id));
                 rows.push(Row {
                     id: id.clone(),
                     profile: id,
@@ -214,7 +279,7 @@ impl App {
                     mc,
                     loader,
                     loader_version,
-                    game_dir: None,
+                    game_dir,
                     instance: None,
                     hidden: loader == LoaderKind::Vanilla && required > 0,
                     required_by: required,
@@ -305,6 +370,7 @@ impl App {
     fn open_install(&mut self) {
         self.show_install = true;
         self.show_manage = false;
+        self.show_mods = false;
         self.error = None;
         self.notice = None;
         self.repair_target = None;
@@ -370,6 +436,7 @@ impl App {
         self.notice = None;
         self.show_install = true;
         self.show_manage = false;
+        self.show_mods = false;
         self.show_log = false;
         cancel::reset();
         self.cancel_requested = false;
@@ -426,6 +493,7 @@ impl App {
         self.notice = None;
         self.show_install = true;
         self.show_manage = false;
+        self.show_mods = false;
         if loader == LoaderKind::Vanilla {
             self.show_base = true;
         }
@@ -520,6 +588,231 @@ impl App {
         });
     }
 
+    fn open_mods(&mut self) {
+        if self.busy.is_some() {
+            return;
+        }
+        let Some(row) = self.selected_row() else {
+            self.error = Some("先安装一个 Fabric / NeoForge / Forge 版本".into());
+            return;
+        };
+        if mod_loader(row.loader).is_none() {
+            self.error = Some("原版没有 mods 目录，请先安装 Fabric / NeoForge / Forge".into());
+            return;
+        }
+        let game_dir = row
+            .game_dir
+            .clone()
+            .unwrap_or_else(|| self.root.version_dir(&row.profile));
+        self.mods_row = Some(row);
+        self.mods_game_dir = Some(game_dir);
+        self.show_mods = true;
+        self.show_install = false;
+        self.show_manage = false;
+        self.mods_query.clear();
+        self.mods_source = None;
+        self.mods_results.clear();
+        self.mods_total = 0;
+        self.mods_warnings.clear();
+        self.mods_selected = None;
+        self.mods_versions.clear();
+        self.mods_version = None;
+        self.mods_choices.clear();
+        self.mods_optional.clear();
+        self.mods_notice = None;
+        self.mods_error = None;
+        self.mods_loading = false;
+        self.mods_deps_loading = false;
+        self.mods_rx = None;
+        self.error = None;
+        self.notice = None;
+    }
+
+    fn close_mods(&mut self) {
+        self.show_mods = false;
+        self.mods_row = None;
+        self.mods_game_dir = None;
+        self.mods_rx = None;
+        self.mods_loading = false;
+        self.mods_deps_loading = false;
+        self.mods_notice = None;
+        self.mods_error = None;
+    }
+
+    fn start_mods_search(&mut self) {
+        let Some(row) = self.mods_row.clone() else {
+            return;
+        };
+        let Some(loader) = mod_loader(row.loader) else {
+            return;
+        };
+        let query = self.mods_query.trim().to_string();
+        self.mods_loading = true;
+        self.mods_error = None;
+        self.mods_notice = None;
+        self.mods_warnings.clear();
+        self.mods_results.clear();
+        self.mods_total = 0;
+        self.mods_selected = None;
+        self.mods_versions.clear();
+        self.mods_version = None;
+        self.mods_choices.clear();
+        self.mods_optional.clear();
+        let source = self.mods_source;
+        let mc = row.mc.clone();
+        let (tx, rx) = mpsc::channel();
+        self.mods_rx = Some(rx);
+        std::thread::spawn(move || {
+            let result =
+                mods::search(&query, source, &mc, loader, 0, 20).map_err(|e| e.to_string());
+            let _ = tx.send(Msg::ModsSearch { query, result });
+        });
+    }
+
+    fn select_mods_project(&mut self, project: mods::Project) {
+        let Some(row) = self.mods_row.clone() else {
+            return;
+        };
+        let Some(loader) = mod_loader(row.loader) else {
+            return;
+        };
+        self.mods_selected = Some(project.clone());
+        self.mods_versions.clear();
+        self.mods_version = None;
+        self.mods_choices.clear();
+        self.mods_optional.clear();
+        self.mods_deps_loading = false;
+        self.mods_error = None;
+        self.mods_notice = None;
+        let project_key = format!("{:?}:{}", project.source, project.id);
+        let mc = row.mc.clone();
+        let (tx, rx) = mpsc::channel();
+        self.mods_rx = Some(rx);
+        std::thread::spawn(move || {
+            let result = mods::versions(&project, &mc, loader).map_err(|e| e.to_string());
+            let _ = tx.send(Msg::ModsVersions {
+                project: project_key,
+                result,
+            });
+        });
+    }
+
+    fn select_mods_version(&mut self, version: mods::Version) {
+        let Some(row) = self.mods_row.clone() else {
+            return;
+        };
+        let Some(loader) = mod_loader(row.loader) else {
+            return;
+        };
+        self.mods_version = Some(version.clone());
+        self.mods_choices.clear();
+        self.mods_optional.clear();
+        self.mods_deps_loading = true;
+        self.mods_error = None;
+        self.mods_notice = None;
+        let version_key = format!("{:?}:{}", version.source, version.id);
+        let mc = row.mc.clone();
+        let (tx, rx) = mpsc::channel();
+        self.mods_rx = Some(rx);
+        std::thread::spawn(move || {
+            let result = mods::dependency_choices(&version, &mc, loader).map_err(|e| e.to_string());
+            let _ = tx.send(Msg::ModsDeps {
+                version: version_key,
+                result,
+            });
+        });
+    }
+
+    fn start_mods_download(&mut self) {
+        if self.busy.is_some() {
+            return;
+        }
+        let Some(row) = self.mods_row.clone() else {
+            return;
+        };
+        let Some(loader) = mod_loader(row.loader) else {
+            return;
+        };
+        let Some(version) = self.mods_version.clone() else {
+            self.mods_error = Some("先选择一个 Mod 版本".into());
+            return;
+        };
+        if self
+            .mods_choices
+            .iter()
+            .any(|choice| choice.dependency.kind == mods::DependencyKind::Incompatible)
+        {
+            self.mods_error = Some("存在不兼容前置，不能下载".into());
+            return;
+        }
+        let missing_optional = self.mods_choices.iter().any(|choice| {
+            choice.dependency.kind == mods::DependencyKind::Optional
+                && self.mods_optional.contains(&(
+                    choice.dependency.source,
+                    choice.dependency.project_id.clone(),
+                ))
+                && choice.version.is_none()
+        });
+        if missing_optional {
+            self.mods_error = Some("已选的可选前置没有兼容版本".into());
+            return;
+        }
+        let Some(game_dir) = self.mods_game_dir.clone() else {
+            self.mods_error = Some("目标目录无效".into());
+            return;
+        };
+        let mods_dir = game_dir.join("mods");
+        if let Err(e) = std::fs::create_dir_all(&mods_dir) {
+            self.mods_error = Some(format!("创建 mods 目录失败: {e}"));
+            return;
+        }
+        if row.instance.is_none() {
+            if let Some(parent) = game_dir.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Err(e) = std::fs::write(self.root.isolated_marker(&row.profile), b"1") {
+                self.mods_error = Some(format!("启用版本隔离失败: {e}"));
+                return;
+            }
+        }
+        cancel::reset();
+        self.cancel_requested = false;
+        self.busy = Some(Task::Mods);
+        self.mods_error = None;
+        self.mods_notice = None;
+        self.progress = Some(Progress::stage("解析 Mod 依赖"));
+        self.progress_label = version.file_name.clone();
+        let optional = self.mods_optional.clone();
+        let mc = row.mc.clone();
+        let (tx, rx) = mpsc::channel();
+        self.rx = Some(rx);
+        let tx = Arc::new(Mutex::new(tx));
+        let sink: Sink = {
+            let tx = tx.clone();
+            from_fn(move |p| {
+                if let Ok(tx) = tx.lock() {
+                    let _ = tx.send(Msg::Progress(p));
+                }
+            })
+        };
+        std::thread::spawn(move || {
+            let result = mods::plan(&version, &mc, loader, &optional)
+                .and_then(|plan| mods::download_plan(&mods_dir, &plan, false, &sink));
+            let msg = match result {
+                Ok(report) => Msg::ModsDone(format!(
+                    "已下载 {} 个文件，跳过 {} 个已存在文件",
+                    report.downloaded,
+                    report.skipped.len()
+                )),
+                Err(Error::Cancelled) => Msg::ModsCancelled,
+                Err(e) => Msg::ModsFailed(e.to_string()),
+            };
+            if let Ok(tx) = tx.lock() {
+                let _ = tx.send(msg);
+            }
+        });
+    }
+
     fn poll(&mut self) {
         let mut messages = Vec::new();
         if let Some(rx) = &self.rx {
@@ -532,10 +825,15 @@ impl App {
                 messages.push(msg);
             }
         }
+        if let Some(rx) = &self.mods_rx {
+            while let Ok(msg) = rx.try_recv() {
+                messages.push(msg);
+            }
+        }
         for msg in messages {
             match msg {
                 Msg::Progress(p) => {
-                    if matches!(self.busy, Some(Task::Install)) {
+                    if matches!(self.busy, Some(Task::Install) | Some(Task::Mods)) {
                         if self.progress.as_ref().map(|x| &x.stage) != Some(&p.stage) {
                             self.log.push(p.stage.clone());
                         }
@@ -600,6 +898,82 @@ impl App {
                     self.log.push("安装已取消".into());
                     self.refresh();
                 }
+                Msg::ModsSearch { query, result } => {
+                    self.mods_loading = false;
+                    self.mods_rx = None;
+                    if query != self.mods_query.trim() {
+                        continue;
+                    }
+                    match result {
+                        Ok(page) => {
+                            self.mods_results = page.hits;
+                            self.mods_total = page.total;
+                            self.mods_warnings = page.warnings;
+                            self.mods_error = None;
+                        }
+                        Err(e) => self.mods_error = Some(e),
+                    }
+                }
+                Msg::ModsVersions { project, result } => {
+                    self.mods_rx = None;
+                    let Some(selected) = &self.mods_selected else {
+                        continue;
+                    };
+                    if project != format!("{:?}:{}", selected.source, selected.id) {
+                        continue;
+                    }
+                    match result {
+                        Ok(mut versions) => {
+                            self.mods_versions = std::mem::take(&mut versions);
+                            self.mods_error = None;
+                            if let Some(first) = self.mods_versions.first().cloned() {
+                                self.select_mods_version(first);
+                            }
+                        }
+                        Err(e) => self.mods_error = Some(e),
+                    }
+                }
+                Msg::ModsDeps { version, result } => {
+                    self.mods_deps_loading = false;
+                    self.mods_rx = None;
+                    let Some(selected) = &self.mods_version else {
+                        continue;
+                    };
+                    if version != format!("{:?}:{}", selected.source, selected.id) {
+                        continue;
+                    }
+                    match result {
+                        Ok(choices) => {
+                            self.mods_choices = choices;
+                            self.mods_error = None;
+                        }
+                        Err(e) => self.mods_error = Some(e),
+                    }
+                }
+                Msg::ModsDone(note) => {
+                    self.busy = None;
+                    self.cancel_requested = false;
+                    self.progress = None;
+                    self.rx = None;
+                    self.mods_notice = Some(note);
+                    self.mods_error = None;
+                    self.refresh();
+                }
+                Msg::ModsFailed(e) => {
+                    self.busy = None;
+                    self.cancel_requested = false;
+                    self.progress = None;
+                    self.rx = None;
+                    self.mods_error = Some(e);
+                }
+                Msg::ModsCancelled => {
+                    self.busy = None;
+                    self.cancel_requested = false;
+                    self.progress = None;
+                    self.rx = None;
+                    self.mods_notice = Some("Mod 下载已取消".into());
+                    self.mods_error = None;
+                }
                 Msg::LaunchDone(code) => {
                     self.busy = None;
                     self.rx = None;
@@ -621,6 +995,9 @@ impl App {
     }
 
     fn top_bar(&mut self, ui: &mut egui::Ui) {
+        let can_mods = self
+            .selected_row()
+            .is_some_and(|row| mod_loader(row.loader).is_some());
         egui::Panel::top("top")
             .default_size(64.0)
             .frame(egui::Frame::new().fill(PANEL))
@@ -637,14 +1014,24 @@ impl App {
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.add_space(22.0);
-                        if matches!(self.busy, Some(Task::Launch)) {
+                        if matches!(self.busy, Some(Task::Launch) | Some(Task::Mods)) {
                             ui.spinner();
+                        } else if self.show_mods {
+                            if ghost_button(ui, "返回").clicked() {
+                                self.close_mods();
+                            }
                         } else if self.show_manage {
                             if ghost_button(ui, "返回").clicked() {
                                 self.show_manage = false;
                                 self.delete_confirm = None;
                             }
                         } else if self.busy.is_none() && !self.show_install {
+                            if can_mods {
+                                ui.add_space(4.0);
+                                if ghost_button(ui, "下载 Mod").clicked() {
+                                    self.open_mods();
+                                }
+                            }
                             if !self.rows.is_empty() {
                                 ui.add_space(4.0);
                                 if ghost_button(ui, "版本管理").clicked() {
@@ -817,6 +1204,347 @@ impl App {
                 self.delete_confirm = None;
             }
         }
+    }
+
+    fn mods_view(&mut self, ui: &mut egui::Ui) {
+        let width = ui.available_width().min(760.0);
+        let pad = ((ui.available_width() - width) / 2.0).max(24.0);
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.add_space(22.0);
+                ui.horizontal(|ui| {
+                    ui.add_space(pad);
+                    ui.vertical(|ui| {
+                        ui.set_width(width);
+                        ui.label(egui::RichText::new("下载 Mod").size(28.0).strong());
+                        if let Some(row) = &self.mods_row {
+                            ui.add_space(4.0);
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{} · {} · 下载到该版本的 mods/",
+                                    row.mc,
+                                    row.loader.name()
+                                ))
+                                .size(12.0)
+                                .color(MUTED),
+                            );
+                        }
+                        ui.add_space(16.0);
+
+                        let mut search = false;
+                        card().show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                let response = ui.add(
+                                    egui::TextEdit::singleline(&mut self.mods_query)
+                                        .hint_text("搜索 Mod 名称或描述…")
+                                        .desired_width(420.0),
+                                );
+                                if (response.lost_focus() || response.has_focus())
+                                    && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                                {
+                                    search = true;
+                                }
+                                let mut source = self.mods_source;
+                                egui::ComboBox::from_id_salt("mods_source")
+                                    .selected_text(source_label(source))
+                                    .width(120.0)
+                                    .show_ui(ui, |ui| {
+                                        if ui
+                                            .selectable_label(source.is_none(), "全部来源")
+                                            .clicked()
+                                        {
+                                            source = None;
+                                        }
+                                        if ui
+                                            .selectable_label(
+                                                source == Some(mods::Source::Modrinth),
+                                                "Modrinth",
+                                            )
+                                            .clicked()
+                                        {
+                                            source = Some(mods::Source::Modrinth);
+                                        }
+                                        if ui
+                                            .selectable_label(
+                                                source == Some(mods::Source::CurseForge),
+                                                "CurseForge",
+                                            )
+                                            .clicked()
+                                        {
+                                            source = Some(mods::Source::CurseForge);
+                                        }
+                                    });
+                                self.mods_source = source;
+                                if ui.button("搜索").clicked() {
+                                    search = true;
+                                }
+                            });
+                        });
+                        if search {
+                            self.start_mods_search();
+                        }
+                        if self.mods_loading {
+                            ui.add_space(10.0);
+                            ui.horizontal(|ui| {
+                                ui.spinner();
+                                ui.label(egui::RichText::new("正在搜索…").color(MUTED));
+                            });
+                        }
+                        for warning in &self.mods_warnings {
+                            ui.add_space(4.0);
+                            ui.label(egui::RichText::new(warning).size(11.5).color(WARN));
+                        }
+                        if !self.mods_results.is_empty() {
+                            ui.add_space(10.0);
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "找到 {} 个结果（合并显示，来源见前缀）",
+                                    self.mods_total
+                                ))
+                                .size(11.5)
+                                .color(MUTED),
+                            );
+                            let mut chosen = None;
+                            egui::ScrollArea::vertical()
+                                .max_height(235.0)
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    for project in &self.mods_results {
+                                        let selected =
+                                            self.mods_selected.as_ref().is_some_and(|p| {
+                                                p.source == project.source && p.id == project.id
+                                            });
+                                        let text = format!(
+                                            "[{}] {}\n{} · {} · {} downloads\n{}",
+                                            project.source.label(),
+                                            project.name,
+                                            project.author,
+                                            project.categories.join(", "),
+                                            project.downloads,
+                                            project.summary
+                                        );
+                                        if ui.selectable_label(selected, text).clicked() {
+                                            chosen = Some(project.clone());
+                                        }
+                                    }
+                                });
+                            if let Some(project) = chosen {
+                                self.select_mods_project(project);
+                            }
+                        }
+
+                        let project = self.mods_selected.clone();
+                        let Some(project) = project else {
+                            if !self.mods_loading && self.mods_results.is_empty() {
+                                ui.add_space(16.0);
+                                ui.label(
+                                    egui::RichText::new(
+                                        "输入关键词，搜索 Modrinth 和 CurseForge。",
+                                    )
+                                    .color(MUTED),
+                                );
+                            }
+                            return;
+                        };
+
+                        ui.add_space(16.0);
+                        card().show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new(&project.name).size(19.0).strong());
+                                ui.label(
+                                    egui::RichText::new(project.source.label())
+                                        .size(11.0)
+                                        .color(ACCENT),
+                                );
+                            });
+                            ui.label(
+                                egui::RichText::new(&project.summary)
+                                    .size(12.0)
+                                    .color(MUTED),
+                            );
+                            ui.add_space(8.0);
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "作者 {} · {} downloads",
+                                    project.author, project.downloads
+                                ))
+                                .size(11.0)
+                                .color(MUTED),
+                            );
+                            ui.add_space(12.0);
+
+                            if self.mods_versions.is_empty() {
+                                ui.label(
+                                    egui::RichText::new("没有匹配当前 Minecraft/加载器的版本")
+                                        .color(WARN),
+                                );
+                            } else {
+                                let versions = self.mods_versions.clone();
+                                let selected = self.mods_version.clone();
+                                let selected_text = selected
+                                    .as_ref()
+                                    .map(|v| format!("{} · {}", v.version_number, v.file_name))
+                                    .unwrap_or_else(|| "选择版本".into());
+                                let mut chosen: Option<mods::Version> = None;
+                                egui::ComboBox::from_id_salt("mods_version")
+                                    .selected_text(selected_text)
+                                    .width(500.0)
+                                    .show_ui(ui, |ui| {
+                                        for version in &versions {
+                                            let label = format!(
+                                                "{} · {}",
+                                                version.version_number, version.file_name
+                                            );
+                                            if ui
+                                                .selectable_label(
+                                                    selected
+                                                        .as_ref()
+                                                        .is_some_and(|v| v.id == version.id),
+                                                    label,
+                                                )
+                                                .clicked()
+                                            {
+                                                chosen = Some(version.clone());
+                                            }
+                                        }
+                                    });
+                                if let Some(version) = chosen {
+                                    self.select_mods_version(version);
+                                }
+                                if let Some(version) = &self.mods_version {
+                                    ui.add_space(4.0);
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "文件: {} · {}",
+                                            version.file_name,
+                                            version
+                                                .size
+                                                .map(format_bytes)
+                                                .unwrap_or_else(|| "未知大小".into())
+                                        ))
+                                        .size(11.0)
+                                        .color(MUTED),
+                                    );
+                                }
+                            }
+
+                            if self.mods_deps_loading {
+                                ui.add_space(10.0);
+                                ui.horizontal(|ui| {
+                                    ui.spinner();
+                                    ui.label(egui::RichText::new("解析前置依赖…").color(MUTED));
+                                });
+                            } else if !self.mods_choices.is_empty() {
+                                ui.add_space(12.0);
+                                ui.label(egui::RichText::new("前置依赖").size(14.0).strong());
+                                let choices = self.mods_choices.clone();
+                                for choice in &choices {
+                                    ui.horizontal(|ui| {
+                                        let (label, color) = match choice.dependency.kind {
+                                            mods::DependencyKind::Required => ("必需", ACCENT),
+                                            mods::DependencyKind::Optional => ("可选", MUTED),
+                                            mods::DependencyKind::Incompatible => ("不兼容", WARN),
+                                            _ => ("嵌入/工具", MUTED),
+                                        };
+                                        ui.label(
+                                            egui::RichText::new(label).size(11.0).color(color),
+                                        );
+                                        let name = choice
+                                            .project
+                                            .as_ref()
+                                            .map(|p| p.name.clone())
+                                            .or_else(|| choice.dependency.name.clone())
+                                            .unwrap_or_else(|| {
+                                                choice.dependency.project_id.clone()
+                                            });
+                                        if choice.dependency.kind == mods::DependencyKind::Optional
+                                        {
+                                            let key = (
+                                                choice.dependency.source,
+                                                choice.dependency.project_id.clone(),
+                                            );
+                                            let mut checked = self.mods_optional.contains(&key);
+                                            if ui.checkbox(&mut checked, name).changed() {
+                                                if checked {
+                                                    self.mods_optional.insert(key);
+                                                } else {
+                                                    self.mods_optional.remove(&key);
+                                                }
+                                            }
+                                        } else {
+                                            ui.label(name);
+                                        }
+                                        match &choice.version {
+                                            Some(version) => {
+                                                ui.label(
+                                                    egui::RichText::new(&version.file_name)
+                                                        .size(11.0)
+                                                        .color(MUTED),
+                                                );
+                                            }
+                                            None => {
+                                                ui.label(
+                                                    egui::RichText::new("找不到兼容版本")
+                                                        .size(11.0)
+                                                        .color(WARN),
+                                                );
+                                            }
+                                        }
+                                    });
+                                }
+                            }
+
+                            ui.add_space(16.0);
+                            let incompatible = self
+                                .mods_choices
+                                .iter()
+                                .any(|c| c.dependency.kind == mods::DependencyKind::Incompatible);
+                            let missing_required = self.mods_choices.iter().any(|c| {
+                                c.dependency.kind == mods::DependencyKind::Required
+                                    && c.version.is_none()
+                            });
+                            let can_download = self.mods_version.is_some()
+                                && !self.mods_deps_loading
+                                && !incompatible
+                                && !missing_required
+                                && self.busy.is_none();
+                            if let Some(dir) = &self.mods_game_dir {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "目标: {}",
+                                        dir.join("mods").display()
+                                    ))
+                                    .size(10.5)
+                                    .color(MUTED),
+                                );
+                            }
+                            if let Some(note) = &self.mods_notice {
+                                ui.add_space(6.0);
+                                ui.label(
+                                    egui::RichText::new(note)
+                                        .size(12.0)
+                                        .color(egui::Color32::from_rgb(120, 190, 140)),
+                                );
+                            }
+                            if let Some(err) = &self.mods_error {
+                                ui.add_space(6.0);
+                                ui.label(
+                                    egui::RichText::new(err)
+                                        .size(12.0)
+                                        .color(egui::Color32::from_rgb(230, 120, 110)),
+                                );
+                            }
+                            ui.add_space(10.0);
+                            ui.vertical_centered(|ui| {
+                                if primary_button(ui, "下载到该版本", can_download) {
+                                    self.start_mods_download();
+                                }
+                            });
+                        });
+                    });
+                });
+            });
     }
 
     fn manage_view(&mut self, ui: &mut egui::Ui) {
@@ -1161,7 +1889,12 @@ impl App {
             ui.add_space(pad);
             ui.vertical(|ui| {
                 ui.set_width(width);
-                ui.label(egui::RichText::new("正在安装").size(26.0).strong());
+                let title = if matches!(self.busy, Some(Task::Mods)) {
+                    "正在下载 Mod"
+                } else {
+                    "正在安装"
+                };
+                ui.label(egui::RichText::new(title).size(26.0).strong());
                 ui.add_space(6.0);
                 ui.label(egui::RichText::new(&self.progress_label).color(MUTED));
                 ui.add_space(28.0);
@@ -1244,13 +1977,15 @@ impl eframe::App for App {
                 );
             }
         }
-        if self.busy.is_some() {
+        if self.busy.is_some() || self.mods_rx.is_some() {
             ui.ctx().request_repaint_after(Duration::from_millis(100));
         }
         self.top_bar(ui);
         egui::CentralPanel::default_margins().show(ui, |ui| {
-            if matches!(self.busy, Some(Task::Install)) {
+            if matches!(self.busy, Some(Task::Install) | Some(Task::Mods)) {
                 self.progress_view(ui);
+            } else if self.show_mods {
+                self.mods_view(ui);
             } else if self.show_manage {
                 self.manage_view(ui);
             } else if self.show_install {
@@ -1516,6 +2251,24 @@ fn mc_key(v: &str) -> Vec<u64> {
         .filter(|s| !s.is_empty())
         .filter_map(|s| s.parse().ok())
         .collect()
+}
+
+fn source_label(source: Option<mods::Source>) -> &'static str {
+    match source {
+        None => "全部来源",
+        Some(mods::Source::Modrinth) => "Modrinth",
+        Some(mods::Source::CurseForge) => "CurseForge",
+    }
+}
+
+fn format_bytes(bytes: u64) -> String {
+    if bytes >= 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    } else if bytes >= 1024 {
+        format!("{:.0} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{bytes} B")
+    }
 }
 
 fn card() -> egui::Frame {
