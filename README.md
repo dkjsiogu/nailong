@@ -8,7 +8,7 @@
 
 **简体中文** | [English](README.en.md)
 
-> 当前版本：**0.7.3**（预览版）
+> 当前版本：**0.7.4**（预览版）
 >
 > 目标：小体积、少依赖、安装过程可见、中断可补。功能边界见 [实现状态](docs/design/14-implementation-status.md)。
 
@@ -66,7 +66,7 @@ nailong 的思路很直：
 | 平台 | 文件 | 大小 | 要求 |
 |---|---|---:|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | 约 7.7 MB | Windows 10/11，Java 21 |
-| Linux x64 (deb) | [nailong_0.7.3_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.7.3_amd64.deb) | 约 3.2 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
+| Linux x64 (deb) | [nailong_0.7.4_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.7.4_amd64.deb) | 约 3.2 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
 
 校验值：[SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS)。
 
@@ -83,7 +83,7 @@ nailong 的思路很直：
 ### Linux（Debian / Ubuntu）
 
 ```bash
-sudo apt install ./nailong_0.7.3_amd64.deb
+sudo apt install ./nailong_0.7.4_amd64.deb
 nailong
 ```
 
@@ -106,7 +106,7 @@ sudo apt remove nailong
 
 ## CurseForge API Key（可选）
 
-**普通用户留空即可。** 这不是 CurseForge 账号密码，而是应用级 API key；没有它也能导入 CurseForge 整合包。
+**普通用户留空即可。** 官方 Release 已内置项目默认 key；这不是 CurseForge 账号密码，而是应用级 API key。内置 key 可以从二进制中提取，只作为默认配额，不能当秘密。
 
 - 有 key：官方 API 返回文件名、大小、SHA1 和下载地址，下载后可以校验。
 - 没有 key：cfwidget 取文件名 + CurseForge 官方下载页；没有官方 SHA1。
@@ -114,6 +114,7 @@ sudo apt remove nailong
 - 填写位置：右上角 **设置**；也可以设环境变量 `CURSEFORGE_API_KEY`。
 - 存储位置：数据目录的 `nailong.json`；Unix 下权限 `0600`，不写日志。它是**本机明文存储**，不要分享这个文件。
 - 优先级：运行时环境变量 > 设置文件 > 构建时默认 key（维护者用 `NAILONG_CURSEFORGE_API_KEY` 注入）。
+- 如果你自己构建且没有注入 key，仍然可以导入，只是走无 key 的 cfwidget + 官方下载页回退。
 
 ## 验证范围
 
@@ -121,7 +122,7 @@ sudo apt remove nailong
 
 - Linux（Xvfb + Mesa）：Fabric 0.19.5、NeoForge 21.1.209、Forge 52.1.20 在 1.21.1 启动到主菜单。
 - Fabulously Optimized `.mrpack`：151 个模组加载并启动。
-- CurseForge：真实文件通过无 key 的官方下载页回退下载成功。
+- CurseForge：真实文件通过无 key 的官方下载页回退下载成功；官方 API key 实测返回文件名、大小、SHA1 和下载地址。
 - GUI 取消安装：Xvfb 下安装中点取消，回到“继续安装”页，进程未崩溃。
 - Prism、MCBBS、HMCL、ATLauncher：真实或合成样例包跑通格式识别与实例创建。
 

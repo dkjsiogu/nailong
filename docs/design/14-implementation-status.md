@@ -1,7 +1,7 @@
-# 14 · 原型实现状态（0.1 → 0.7.3）
+# 14 · 原型实现状态（0.1 → 0.7.4）
 
 > 日期：2026-10-21
-> 对应发布：GitHub Release `v0.7.3` 的 `nailong.exe`、`nailong_0.7.3_amd64.deb`
+> 对应发布：GitHub Release `v0.7.4` 的 `nailong.exe`、`nailong_0.7.4_amd64.deb`
 > 目的：把「设计稿」和「已经跑起来的代码」分开记账，避免把计划当成已完成。
 
 ## 1. 一句话结论
@@ -29,6 +29,8 @@
 0.7.2 修正 CurseForge 合规路径：官方 API 的 `downloadUrl` 为 null（作者关闭第三方分发）时停止导入并列出文件，不再手拼 CDN 链接；无 key 回退改用官方下载页。元数据查询加入 120 ms 间隔，并支持用 `NAILONG_CURSEFORGE_API_KEY` 在发布构建中内置默认 key（运行时环境变量和设置文件仍优先）。
 
 0.7.3 增加安装取消：进程级取消标志贯穿 HTTP/HTTP Range、分段下载、blob 落盘、整合包解压和 Forge/NeoForge processor；GUI 进度页有取消按钮，取消后保留已下载部分并回到“继续安装”。Forge/NeoForge 开始 processor 前会写 `.nailong-incomplete` 标记，成功后删除，health 不会把半成品当完整安装。当前是单任务全局标志，不是 async `CancellationToken`；正在进行的单个 HTTP 请求要等它返回或超时。
+
+0.7.4 的官方构建内置 CurseForge 默认 key：CI 从 `NAILONG_CURSEFORGE_API_KEY` 注入，普通用户无需填写。运行时环境变量和设置文件仍优先；内置 key 在公开二进制中可被提取，只能当共享默认配额。无 key 构建继续使用 cfwidget + 官方下载页回退。
 
 发布形态刻意保持简单：Windows 只发一个 `nailong.exe`；Linux 只发一个可双击/`apt install` 的 `.deb`。
 
@@ -65,7 +67,7 @@
 | 大文件分段下载 | `core::http` | 完成 | client jar 4 段并行、段续传、源回退 |
 | 重复安装快速路径 | `core::install::forge` / `neoforge` | 完成 | health 通过则 0 下载、0 processor |
 | Windows 交叉编译 | `x86_64-pc-windows-gnu` | 通过 | 无 MinGW DLL 依赖，仅系统 DLL |
-| 发布包 | GitHub Release `v0.7.3` | 完成（CI 构建） | 单 exe 约 7.7 MB / deb 约 3.2 MB |
+| 发布包 | GitHub Release `v0.7.4` | 完成（CI 构建） | 单 exe 约 7.7 MB / deb 约 3.2 MB |
 
 ### 2.1 实测记录
 
