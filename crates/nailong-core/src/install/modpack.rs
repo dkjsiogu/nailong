@@ -1,5 +1,5 @@
+use crate::builtin;
 use crate::cancel;
-use crate::config;
 use crate::error::{Error, Result};
 use crate::http::{FileSpec, Http};
 use crate::install::{fabric, forge, neoforge, vanilla};
@@ -315,7 +315,7 @@ fn import_curseforge(
         create_instance(root, &name, &profile, "curseforge", archive)?;
 
     let result = (|| -> Result<()> {
-        import_curse_files(root, &manifest.files, &game_dir, mirror, sink)?;
+        import_curse_files(&manifest.files, &game_dir, mirror, sink)?;
         let overrides = manifest
             .overrides
             .clone()
@@ -431,7 +431,7 @@ fn import_mcbbs(
     let (id, instance_dir, game_dir) = create_instance(root, &name, &profile, "mcbbs", archive)?;
 
     let result = (|| -> Result<()> {
-        import_mcbbs_files(root, &manifest, &game_dir, mirror, sink)?;
+        import_mcbbs_files(&manifest, &game_dir, mirror, sink)?;
         extract_prefixes(
             &mut zip,
             &game_dir,
@@ -500,7 +500,6 @@ fn install_mcbbs_loader(
 }
 
 fn import_mcbbs_files(
-    root: &Root,
     manifest: &McbbsManifest,
     game_dir: &Path,
     mirror: &str,
@@ -510,7 +509,7 @@ fn import_mcbbs_files(
         return Ok(());
     }
     let http = Http::new(mirror)?;
-    let api_key = config::curseforge_api_key(root);
+    let api_key = builtin::curseforge_api_key();
     (sink)(Progress::stage("解析 MCBBS 文件"));
     let mut specs = Vec::new();
     for file in &manifest.files {
@@ -865,7 +864,6 @@ fn normalize_loader_version(mc: &str, version: &str) -> String {
 }
 
 fn import_curse_files(
-    root: &Root,
     files: &[CurseFile],
     game_dir: &Path,
     mirror: &str,
@@ -876,7 +874,7 @@ fn import_curse_files(
     }
     (sink)(Progress::stage("解析 CurseForge 文件"));
     let http = Http::new(mirror)?;
-    let api_key = config::curseforge_api_key(root);
+    let api_key = builtin::curseforge_api_key();
     let lookups: Vec<CurseFileLookup> = files
         .par_iter()
         .filter(|file| file.required != Some(false))

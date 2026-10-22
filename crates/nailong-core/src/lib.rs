@@ -1,6 +1,6 @@
 pub mod blob;
+pub mod builtin;
 pub mod cancel;
-pub mod config;
 pub mod error;
 pub mod http;
 pub mod install;

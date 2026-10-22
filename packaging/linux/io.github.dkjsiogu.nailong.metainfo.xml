@@ -25,6 +25,11 @@
   <url type="bugtracker">https://github.com/dkjsiogu/nailong/issues</url>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.7.5" date="2026-10-22">
+      <description>
+        <p>CurseForge credentials are now built in and lightly obfuscated; the user-facing API key setting and local settings file were removed. Maintainers can still override the key with an environment variable.</p>
+      </description>
+    </release>
     <release version="0.7.4" date="2026-10-22">
       <description>
         <p>Official builds include a project CurseForge API key so regular users can import CurseForge packs without configuring one. Runtime environment variables and user settings still take precedence; the embedded key is extractable and treated as a shared default quota.</p>

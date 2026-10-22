@@ -1,7 +1,7 @@
-# 14 · 原型实现状态（0.1 → 0.7.4）
+# 14 · 原型实现状态（0.1 → 0.7.5）
 
 > 日期：2026-10-21
-> 对应发布：GitHub Release `v0.7.4` 的 `nailong.exe`、`nailong_0.7.4_amd64.deb`
+> 对应发布：GitHub Release `v0.7.5` 的 `nailong.exe`、`nailong_0.7.5_amd64.deb`
 > 目的：把「设计稿」和「已经跑起来的代码」分开记账，避免把计划当成已完成。
 
 ## 1. 一句话结论
@@ -32,6 +32,8 @@
 
 0.7.4 的官方构建内置 CurseForge 默认 key：CI 从 `NAILONG_CURSEFORGE_API_KEY` 注入，普通用户无需填写。运行时环境变量和设置文件仍优先；内置 key 在公开二进制中可被提取，只能当共享默认配额。无 key 构建继续使用 cfwidget + 官方下载页回退。
 
+0.7.5 简化凭据路径：移除设置页里的 API key 输入和 `nailong.json` 存储，官方构建默认 key 直接可用；维护者仍可用环境变量 `CURSEFORGE_API_KEY` 覆盖。key 由 `build.rs` 在编译期 XOR 混淆后写入二进制，避免 `strings` 直接看到；这不是加密，仍可被还原。
+
 发布形态刻意保持简单：Windows 只发一个 `nailong.exe`；Linux 只发一个可双击/`apt install` 的 `.deb`。
 
 这不是 v1.0。它刻意只做一条路径，用来验证三件事：
@@ -61,13 +63,13 @@
 | 整合包导入 | `core::install::modpack` | 完成（6 种格式） | Modrinth、CurseForge、Prism/MultiMC、MCBBS、HMCL、ATLauncher；真实 CurseForge 文件 + 各格式合成包验证 |
 | Windows 便携目录 | `core::paths` | 完成 | 默认使用 exe 同目录 `.minecraft` |
 | CLI（list/java/info/install/launch） | `nailong-cli` | 完成 | 打包产物冒烟 |
-| GUI（版本下拉、安装进度、取消、缺文件补全、启动、设置） | `nailong-ui` | 可用 | Xvfb 下走完安装 / 补全 / 启动；安装中取消后回到继续安装页；设置页实际保存/清除 `nailong.json`；实际 NeoForge 到主菜单 |
+| GUI（版本下拉、安装进度、取消、缺文件补全、启动） | `nailong-ui` | 可用 | Xvfb 下走完安装 / 补全 / 启动；安装中取消后回到继续安装页；实际 NeoForge 到主菜单 |
 | 版本管理 | `nailong-ui` | 完成 | 基础版本隐藏、版本/整合包删除、被依赖保护 |
 | CAS / patched client 复用 | `core::blob` / `core::install::reuse` | 完成（第一阶段） | client/libraries 新文件走 blob+硬链接；复用后跳过补丁与 processor；Forge 实测 5.3s、NeoForge 3.7s |
 | 大文件分段下载 | `core::http` | 完成 | client jar 4 段并行、段续传、源回退 |
 | 重复安装快速路径 | `core::install::forge` / `neoforge` | 完成 | health 通过则 0 下载、0 processor |
 | Windows 交叉编译 | `x86_64-pc-windows-gnu` | 通过 | 无 MinGW DLL 依赖，仅系统 DLL |
-| 发布包 | GitHub Release `v0.7.4` | 完成（CI 构建） | 单 exe 约 7.7 MB / deb 约 3.2 MB |
+| 发布包 | GitHub Release `v0.7.5` | 完成（CI 构建） | 单 exe 约 7.7 MB / deb 约 3.2 MB |
 
 ### 2.1 实测记录
 
@@ -103,8 +105,8 @@
 | Forge/NeoForge 原生 processors，外部 installer 仅兜底 | **Rust 原生驱动 processor 链 + 按需读取数据** | 只缓存约 3 MB 核心数据；不执行官方 GUI installer；需要完整包时自动回退 |
 | 托管 JRE（Mojang runtime） | 只用系统 Java 21 | 用户需预装 Java；这是“开箱即用”目标的主要缺口 |
 | 异步 runtime + 事件总线 + 可取消任务 | 阻塞调用 + 线程 + 进程级取消标志（单任务） | 下载、分段、解压和 processor 已可取消；未引入 async runtime |
-| 实例（Instance）抽象、配置存储 | 直接以版本目录为单位；全局 `nailong.json` 只存 API Key | 目前只能切版本，不能多实例隔离 |
-| 完整 GUI（路由/向导/设置/下载中心） | 版本页、安装页、版本管理、设置页 | 设置页已完成 CurseForge Key；下载中心未做 |
+| 实例（Instance）抽象、配置存储 | 直接以版本目录为单位；无全局配置文件 | 目前只能切版本，不能多实例隔离 |
+| 完整 GUI（路由/向导/下载中心） | 版本页、安装页、版本管理 | CurseForge key 已内置，无需设置页；下载中心未做 |
 | 正版登录 / 自动更新 | 未实现 | 下一步做账户与更新 |
 | 微软正版登录 | 未实现（离线） | 按决定推迟到 M3.5 |
 | 自动更新 / 签名 / 崩溃报告 | 未实现 | 发布前补齐 |

@@ -8,7 +8,7 @@
 
 **简体中文** | [English](README.en.md)
 
-> 当前版本：**0.7.4**（预览版）
+> 当前版本：**0.7.5**（预览版）
 >
 > 目标：小体积、少依赖、安装过程可见、中断可补。功能边界见 [实现状态](docs/design/14-implementation-status.md)。
 
@@ -46,7 +46,7 @@ nailong 的思路很直：
 | 格式 | 入口文件 | 说明 |
 |---|---|---|
 | Modrinth | `.mrpack` | 直链 + SHA1 |
-| CurseForge | `manifest.json` 的 zip | 按 project/file ID 解析；可选 API key 校验 |
+| CurseForge | `manifest.json` 的 zip | 按 project/file ID 解析；官方构建内置 key，校验 SHA1 |
 | Prism / MultiMC | `mmc-pack.json` | 读取组件和 overrides |
 | MCBBS | `mcbbs.packmeta` | addons + files + overrides |
 | HMCL | `modpack.json` + `minecraft/pack.json` | 内嵌 manifest 转实例 |
@@ -66,7 +66,7 @@ nailong 的思路很直：
 | 平台 | 文件 | 大小 | 要求 |
 |---|---|---:|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | 约 7.7 MB | Windows 10/11，Java 21 |
-| Linux x64 (deb) | [nailong_0.7.4_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.7.4_amd64.deb) | 约 3.2 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
+| Linux x64 (deb) | [nailong_0.7.5_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.7.5_amd64.deb) | 约 3.2 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
 
 校验值：[SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS)。
 
@@ -83,7 +83,7 @@ nailong 的思路很直：
 ### Linux（Debian / Ubuntu）
 
 ```bash
-sudo apt install ./nailong_0.7.4_amd64.deb
+sudo apt install ./nailong_0.7.5_amd64.deb
 nailong
 ```
 
@@ -104,17 +104,15 @@ sudo apt remove nailong
 
 可以用 `--root` 指定其他目录。
 
-## CurseForge API Key（可选）
+## CurseForge API（内置）
 
-**普通用户留空即可。** 官方 Release 已内置项目默认 key；这不是 CurseForge 账号密码，而是应用级 API key。内置 key 可以从二进制中提取，只作为默认配额，不能当秘密。
+官方 Release 已内置项目 key，导入 CurseForge 整合包时自动走官方 API，**普通用户无需设置**。这不是 CurseForge 账号密码，而是应用级 key。
 
-- 有 key：官方 API 返回文件名、大小、SHA1 和下载地址，下载后可以校验。
-- 没有 key：cfwidget 取文件名 + CurseForge 官方下载页；没有官方 SHA1。
+- 官方 API 返回文件名、大小、SHA1 和下载地址，下载后可以校验。
 - 作者关闭第三方分发：停止导入并列出文件，不会手拼 CDN 链接绕过。
-- 填写位置：右上角 **设置**；也可以设环境变量 `CURSEFORGE_API_KEY`。
-- 存储位置：数据目录的 `nailong.json`；Unix 下权限 `0600`，不写日志。它是**本机明文存储**，不要分享这个文件。
-- 优先级：运行时环境变量 > 设置文件 > 构建时默认 key（维护者用 `NAILONG_CURSEFORGE_API_KEY` 注入）。
-- 如果你自己构建且没有注入 key，仍然可以导入，只是走无 key 的 cfwidget + 官方下载页回退。
+- 维护者或调试时可以用环境变量 `CURSEFORGE_API_KEY` 覆盖内置值，下一版换 key 不需要改代码。
+- 内置 key 做了简单的 XOR 混淆，避免 `strings` 直接看到；**这不是加密**，仍然可以从二进制里还原，只作为共享默认配额，不能当秘密。
+- 如果你自己构建且没有注入 key，仍然可以导入，只是走 cfwidget + 官方下载页回退，没有官方 SHA1。
 
 ## 验证范围
 

@@ -8,7 +8,7 @@ A small, native Minecraft: Java Edition launcher written in Rust. Windows ships 
 
 [简体中文](README.md) | **English**
 
-> Current version: **0.7.4** (preview)
+> Current version: **0.7.5** (preview)
 >
 > Goals: small binaries, few dependencies, visible install progress, and a repair path after interruption. See [implementation status](docs/design/14-implementation-status.md) for exact boundaries.
 
@@ -46,7 +46,7 @@ Six formats are detected automatically:
 | Format | Entry point | Notes |
 |---|---|---|
 | Modrinth | `.mrpack` | Direct URLs plus SHA1 |
-| CurseForge | zip with `manifest.json` | Resolve project/file IDs; optional API key for hashes |
+| CurseForge | zip with `manifest.json` | Resolve project/file IDs; official builds include a key for SHA1 checks |
 | Prism / MultiMC | `mmc-pack.json` | Components and overrides |
 | MCBBS | `mcbbs.packmeta` | addons + files + overrides |
 | HMCL | `modpack.json` + `minecraft/pack.json` | Embedded manifest becomes a profile |
@@ -66,7 +66,7 @@ Drag a `.mrpack` or `.zip` into the window to start an import. A single mod `.ja
 | Platform | File | Size | Requirements |
 |---|---|---:|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | ~7.7 MB | Windows 10/11, Java 21 |
-| Linux x64 (deb) | [nailong_0.7.4_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.7.4_amd64.deb) | ~3.2 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
+| Linux x64 (deb) | [nailong_0.7.5_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.7.5_amd64.deb) | ~3.2 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
 
 Checksums: [SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS).
 
@@ -83,7 +83,7 @@ Java 21 must be installed. nailong searches for it automatically and shows a war
 ### Linux (Debian / Ubuntu)
 
 ```bash
-sudo apt install ./nailong_0.7.4_amd64.deb
+sudo apt install ./nailong_0.7.5_amd64.deb
 nailong
 ```
 
@@ -104,17 +104,15 @@ sudo apt remove nailong
 
 Use `--root` to point at another directory.
 
-## CurseForge API key (optional)
+## CurseForge API (built in)
 
-**Regular users should leave this empty.** Official releases include a project default key. It is an application-level API key, not a CurseForge account password. The built-in key can be extracted from the binary and is only a shared default quota, not a secret.
+Official releases include a project key, so CurseForge packs use the official API automatically and **regular users do not configure anything**. It is an application-level key, not a CurseForge account password.
 
-- With a key: the official API returns the file name, size, SHA1, and download URL, so downloads can be verified.
-- Without a key: cfwidget provides the file name and the download goes through CurseForge's official download page; there is no official SHA1.
+- The official API returns the file name, size, SHA1, and download URL, so downloads can be verified.
 - If the author has disabled third-party distribution, the import stops and lists the affected files. nailong does not synthesize CDN URLs to bypass that setting.
-- Where to enter it: **Settings** in the top-right corner, or the `CURSEFORGE_API_KEY` environment variable.
-- Storage: `nailong.json` in the data directory; mode `0600` on Unix, never logged. It is **plaintext on disk**, so do not share the file.
-- Priority: runtime environment variable > settings file > build-time default key (maintainers inject `NAILONG_CURSEFORGE_API_KEY`).
-- A local build without a key still imports packs through the no-key cfwidget + official-page fallback.
+- Maintainers can override the built-in key with the `CURSEFORGE_API_KEY` environment variable, so rotating it does not require a code change.
+- The key is lightly XOR-obfuscated so a casual `strings` scan does not reveal it. **This is not encryption**: it can still be recovered from the binary and is only a shared default quota, not a secret.
+- A local build without an injected key still imports packs through the no-key cfwidget + official-page fallback, without official SHA1.
 
 ## What has been verified
 

@@ -565,8 +565,8 @@ shared/jre/
 - 解析文件：有 API Key 时走 `api.curseforge.com/v1/mods/{projectID}/files/{fileID}`，取官方 `fileName/fileLength/hashes/downloadUrl`。**`downloadUrl` 为 null 表示作者关闭了第三方分发，直接停止导入并列出文件，不回退、不手拼 CDN 链接。**
 - 无 key 或官方 API 失败时，读 `cfwidget.com/{projectID}?version={fileID}` 的 HTML 取出文件名，下载走 `www.curseforge.com/api/v1/mods/{projectID}/files/{fileID}/download` 官方下载页；不再构造 `mediafilez.forgecdn.net` 链接。
 - 每次元数据查询之间至少间隔 120 ms，避免大整合包把 API/cfwidget 打成突发；API 失败才回退，作者限制不回退。
-- API Key 可选；GUI 右上角“设置”可填写、显示/隐藏、保存和清除，也支持环境变量 `CURSEFORGE_API_KEY`。优先级：运行时环境变量 > 设置文件 > 构建时内置默认值（`NAILONG_CURSEFORGE_API_KEY`）。
-- Key 存在数据目录的 `nailong.json`，Unix 权限 0600；不写日志、不进入启动参数。构建时内置的 key 仍可从桌面二进制提取，只能作为默认配额，不能当作秘密。
+- API Key 由官方构建内置（CI 的 `NAILONG_CURSEFORGE_API_KEY`），普通用户无需配置；维护者可用运行时环境变量 `CURSEFORGE_API_KEY` 覆盖。
+- 构建时 key 由 `build.rs` 做 XOR 混淆后写入二进制，避免 `strings` 直接看到；这不是加密，仍可还原，只能作为共享默认配额。key 不进入仓库、日志或启动参数。
 - 无 key 时只有 HTTPS 检查，没有官方 SHA1；拿不到文件名时回退 `<projectID>-<fileID>.jar`，不阻断 overrides 导入。
 
 ### 8.5 安全
