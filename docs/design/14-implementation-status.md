@@ -1,7 +1,7 @@
-# 14 · 原型实现状态（0.1 → 0.7.2）
+# 14 · 原型实现状态（0.1 → 0.7.3）
 
 > 日期：2026-10-21
-> 对应发布：GitHub Release `v0.7.2` 的 `nailong.exe`、`nailong_0.7.2_amd64.deb`
+> 对应发布：GitHub Release `v0.7.3` 的 `nailong.exe`、`nailong_0.7.3_amd64.deb`
 > 目的：把「设计稿」和「已经跑起来的代码」分开记账，避免把计划当成已完成。
 
 ## 1. 一句话结论
@@ -27,6 +27,8 @@
 0.7.1 增加设置页：CurseForge API Key 可掩码查看、保存、清除，写入 `<数据目录>/nailong.json`（Unix 0600），环境变量优先；无 key 的 cfwidget 回退不变。设置页在版本列表为空时也可进入。
 
 0.7.2 修正 CurseForge 合规路径：官方 API 的 `downloadUrl` 为 null（作者关闭第三方分发）时停止导入并列出文件，不再手拼 CDN 链接；无 key 回退改用官方下载页。元数据查询加入 120 ms 间隔，并支持用 `NAILONG_CURSEFORGE_API_KEY` 在发布构建中内置默认 key（运行时环境变量和设置文件仍优先）。
+
+0.7.3 增加安装取消：进程级取消标志贯穿 HTTP/HTTP Range、分段下载、blob 落盘、整合包解压和 Forge/NeoForge processor；GUI 进度页有取消按钮，取消后保留已下载部分并回到“继续安装”。Forge/NeoForge 开始 processor 前会写 `.nailong-incomplete` 标记，成功后删除，health 不会把半成品当完整安装。当前是单任务全局标志，不是 async `CancellationToken`；正在进行的单个 HTTP 请求要等它返回或超时。
 
 发布形态刻意保持简单：Windows 只发一个 `nailong.exe`；Linux 只发一个可双击/`apt install` 的 `.deb`。
 
@@ -54,16 +56,16 @@
 | Fabric 安装 / 启动 | `core::install::fabric` | 完成（原生 profile） | 1.21.1 / 0.19.5 安装并启动到渲染 |
 | Forge 安装 / 启动 | `core::install::forge` | 完成（精简数据 + 原生 processors） | 1.21.1 / 52.1.20 安装并启动到渲染 |
 | 四加载器选择 | `nailong-ui` | 完成 | 安装页按 Minecraft / Fabric / NeoForge / Forge / 原版排列 |
-| 整合包导入 | `core::install::modpack` | 完成（6 种格式） | Modrinth、CurseForge、Prism/MultiMC、MCBBS、HMCL、ATLauncher；真实 CurseForge CDN 文件 + 各格式合成包验证 |
+| 整合包导入 | `core::install::modpack` | 完成（6 种格式） | Modrinth、CurseForge、Prism/MultiMC、MCBBS、HMCL、ATLauncher；真实 CurseForge 文件 + 各格式合成包验证 |
 | Windows 便携目录 | `core::paths` | 完成 | 默认使用 exe 同目录 `.minecraft` |
 | CLI（list/java/info/install/launch） | `nailong-cli` | 完成 | 打包产物冒烟 |
-| GUI（版本下拉、安装进度、缺文件补全、启动、设置） | `nailong-ui` | 可用 | Xvfb 下走完安装 / 补全 / 启动；设置页实际保存/清除 `nailong.json`；实际 NeoForge 到主菜单 |
+| GUI（版本下拉、安装进度、取消、缺文件补全、启动、设置） | `nailong-ui` | 可用 | Xvfb 下走完安装 / 补全 / 启动；安装中取消后回到继续安装页；设置页实际保存/清除 `nailong.json`；实际 NeoForge 到主菜单 |
 | 版本管理 | `nailong-ui` | 完成 | 基础版本隐藏、版本/整合包删除、被依赖保护 |
 | CAS / patched client 复用 | `core::blob` / `core::install::reuse` | 完成（第一阶段） | client/libraries 新文件走 blob+硬链接；复用后跳过补丁与 processor；Forge 实测 5.3s、NeoForge 3.7s |
 | 大文件分段下载 | `core::http` | 完成 | client jar 4 段并行、段续传、源回退 |
 | 重复安装快速路径 | `core::install::forge` / `neoforge` | 完成 | health 通过则 0 下载、0 processor |
 | Windows 交叉编译 | `x86_64-pc-windows-gnu` | 通过 | 无 MinGW DLL 依赖，仅系统 DLL |
-| 发布包 | GitHub Release `v0.7.2` | 完成（CI 构建） | 单 exe 约 7.7 MB / deb 约 3.2 MB |
+| 发布包 | GitHub Release `v0.7.3` | 完成（CI 构建） | 单 exe 约 7.7 MB / deb 约 3.2 MB |
 
 ### 2.1 实测记录
 
@@ -98,20 +100,20 @@
 |---|---|---|
 | Forge/NeoForge 原生 processors，外部 installer 仅兜底 | **Rust 原生驱动 processor 链 + 按需读取数据** | 只缓存约 3 MB 核心数据；不执行官方 GUI installer；需要完整包时自动回退 |
 | 托管 JRE（Mojang runtime） | 只用系统 Java 21 | 用户需预装 Java；这是“开箱即用”目标的主要缺口 |
-| 异步 runtime + 事件总线 + 可取消任务 | 阻塞调用 + 线程 + 进度回调；暂无取消 | 下载与安装已有阶段/字节进度；下一步做取消令牌 |
+| 异步 runtime + 事件总线 + 可取消任务 | 阻塞调用 + 线程 + 进程级取消标志（单任务） | 下载、分段、解压和 processor 已可取消；未引入 async runtime |
 | 实例（Instance）抽象、配置存储 | 直接以版本目录为单位；全局 `nailong.json` 只存 API Key | 目前只能切版本，不能多实例隔离 |
 | 完整 GUI（路由/向导/设置/下载中心） | 版本页、安装页、版本管理、设置页 | 设置页已完成 CurseForge Key；下载中心未做 |
 | 正版登录 / 自动更新 | 未实现 | 下一步做账户与更新 |
 | 微软正版登录 | 未实现（离线） | 按决定推迟到 M3.5 |
 | 自动更新 / 签名 / 崩溃报告 | 未实现 | 发布前补齐 |
-| 单元/集成测试体系 | **34 个测试** | 缺夹具、mock HTTP、启动 argv 快照、Windows CI |
+| 单元/集成测试体系 | **37 个测试** | 缺夹具、mock HTTP、启动 argv 快照、Windows CI |
 
 ## 4. 已知问题与风险
 
 1. **Windows 只在 Linux 上交叉编译通过**，还没有 Windows 实机启动记录；OpenGL 驱动、路径、Java 发现都可能出问题。
 2. **processor 安装**依赖 `install_profile` 结构和 processor 工具；上游改格式时需要跟进。精简读取还依赖官方 ZIP 结构；不支持 Range 或结构异常时会回退完整包。
 3. **离线账户会触发 401**：游戏向 Mojang 请求 user properties 被拒，日志有 `InvalidCredentialsException`，但不阻塞单人游戏；后续可关闭该请求或接正版登录。
-4. **安装没有取消按钮**；关闭窗口可中断，重新打开会检测并补全。
+4. **取消安装有边界**：下载循环、解压和 processor 会尽快停止；已经在途的单个 HTTP 请求无法立即 abort，最多等到请求超时。processor 会被 kill，已下载的分段/文件保留，下次安装检查补全。
 5. **GUI 内存 135 MB**（软件渲染）高于 120 MB 目标；需要真实 GPU 复测，或减少字体/纹理占用。
 6. **续传范围有限**：普通文件是“已存在且哈希正确则跳过”，不保留半成品；单个大文件有稳定的 `.dlpart-N` 段文件，可续传。安装器核心数据用 HTTP Range 只取所需条目，中断后重跑会重新读取约 3 MB。
 7. **无安装锁**：并发启动两个安装可能写同一目录；原型未处理。
@@ -120,12 +122,11 @@
 ## 5. 下一步（按优先级）
 
 1. **Windows 实机验证**：在一台 Windows 10/11 + Java 21 上跑安装与启动，记录失败点。
-2. **安装取消**：增加取消令牌，让用户在下载/安装中安全停止。
-3. **processor 校验增强**：outputs SHA1 校验、取消令牌、失败断点续跑。
-5. **测试与 CI**：版本 JSON 夹具、规则/合并/argv 快照、mock HTTP（重试/哈希失败）、`fmt/clippy/test`。
-6. **托管 JRE**：至少做“检测缺失 → 引导安装/下载 Temurin”的闭环。
-7. **实例与配置**：在现有 JSON 配置上增加每实例 game dir/Java/内存，脱离“版本即实例”。
-8. **发布工程**：版本号、CHANGELOG、SHA256、签名、自动更新。
+2. **processor 校验增强**：outputs SHA1 校验、失败断点续跑。
+3. **测试与 CI**：版本 JSON 夹具、规则/合并/argv 快照、mock HTTP（重试/哈希失败）、`fmt/clippy/test`。
+4. **托管 JRE**：至少做“检测缺失 → 引导安装/下载 Temurin”的闭环。
+5. **实例与配置**：在现有 JSON 配置上增加每实例 game dir/Java/内存，脱离“版本即实例”。
+6. **发布工程**：版本号、CHANGELOG、SHA256、签名、自动更新。
 
 ## 6. 复现命令
 

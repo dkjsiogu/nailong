@@ -1,4 +1,5 @@
 use crate::blob;
+use crate::cancel;
 use crate::error::{Error, Result};
 use crate::http::{FileSpec, Http, sha1_file};
 use crate::java;
@@ -11,6 +12,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
 /// Install a modern Forge/NeoForge client from an installer jar without
 /// executing the installer's Swing application.
@@ -27,6 +29,7 @@ pub fn install_client(
     label: &str,
     sink: &Sink,
 ) -> Result<String> {
+    cancel::check()?;
     root.ensure()?;
     let mut zip =
         zip::ZipArchive::new(File::open(installer).map_err(|e| crate::error::io(installer, e))?)
@@ -53,6 +56,7 @@ pub fn install_client(
         return Err(Error::Install(format!("{label} 版本文件缺少 id")));
     }
     write_atomic(&root.version_json(&id), version_text.as_bytes())?;
+    write_atomic(&root.incomplete_marker(&id), b"processors")?;
 
     let http = Http::new(mirror)?;
     (sink)(Progress::stage("下载版本依赖"));
@@ -151,6 +155,7 @@ pub fn install_client(
     let _ = std::fs::remove_file(&log_path);
 
     for (index, processor) in client_processors.iter().enumerate() {
+        cancel::check()?;
         let jar_name = processor
             .get("jar")
             .and_then(|v| v.as_str())
@@ -224,7 +229,7 @@ pub fn install_client(
                 args
             );
         }
-        let status = Command::new(&java.path)
+        let mut child = Command::new(&java.path)
             .arg("-cp")
             .arg(classpath.join(if cfg!(windows) { ";" } else { ":" }))
             .arg(&main_class)
@@ -232,8 +237,25 @@ pub fn install_client(
             .current_dir(root.dir())
             .stdout(Stdio::from(log))
             .stderr(Stdio::from(log_err))
-            .status()
+            .spawn()
             .map_err(|e| Error::Install(format!("无法启动 {label} processor: {e}")))?;
+        let status = loop {
+            if cancel::is_cancelled() {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(Error::Cancelled);
+            }
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) => std::thread::sleep(Duration::from_millis(90)),
+                Err(e) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(Error::Install(format!("等待 {label} processor 失败: {e}")));
+                }
+            }
+        };
+        cancel::check()?;
         if !status.success() {
             return Err(Error::Install(format!(
                 "{label} 处理器 {}/{} 失败（{status}）；日志: {}",
@@ -256,6 +278,7 @@ pub fn install_client(
     if !root.version_json(&id).exists() {
         return Err(Error::Install(format!("安装完成但找不到 {id} 版本文件")));
     }
+    let _ = std::fs::remove_file(root.incomplete_marker(&id));
     let _ = std::fs::remove_dir_all(&work);
     Ok(id)
 }

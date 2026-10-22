@@ -76,6 +76,12 @@ impl Root {
         self.version_dir(id).join(format!("{id}.jar"))
     }
 
+    /// Present while a Forge/NeoForge processor chain has not completed.
+    /// A partial patched client must never be treated as a healthy install.
+    pub fn incomplete_marker(&self, id: &str) -> PathBuf {
+        self.version_dir(id).join(".nailong-incomplete")
+    }
+
     /// Remove a version directory by its exact on-disk name.  Only direct
     /// children are accepted, so a profile id can never escape `versions/`.
     pub fn remove_version(&self, id: &str) -> Result<()> {

@@ -1,3 +1,4 @@
+use crate::cancel;
 use crate::error::Result;
 use crate::install::{health, join_install, processors, reuse, slim, vanilla};
 use crate::paths::Root;
@@ -22,6 +23,7 @@ pub fn install_with(
     mirror: &str,
     sink: &Sink,
 ) -> Result<String> {
+    cancel::check()?;
     root.ensure()?;
     let id = profile_id(mc, version);
     if root.version_json(&id).exists() && health::inspect(root, &id).is_healthy() {

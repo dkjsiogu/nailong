@@ -25,6 +25,11 @@
   <url type="bugtracker">https://github.com/dkjsiogu/nailong/issues</url>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.7.3" date="2026-10-22">
+      <description>
+        <p>Install cancellation: downloads, extraction and loader processors now respond to a cancel button; completed parts are kept for the next repair.</p>
+      </description>
+    </release>
     <release version="0.7.2" date="2026-10-21">
       <description>
         <p>CurseForge compliance fixes: respect files whose authors disabled third-party distribution, use the official download page instead of synthesizing CDN URLs, space out metadata requests, and support an optional build-time default key.</p>

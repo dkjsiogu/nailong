@@ -1,3 +1,4 @@
+use crate::cancel;
 use crate::error::{Error, Result, io};
 use crate::progress::{Progress, Sink};
 use indicatif::{ProgressBar, ProgressStyle};
@@ -82,9 +83,11 @@ impl Http {
     }
 
     pub fn get_text(&self, url: &str) -> Result<String> {
+        cancel::check()?;
         let url = self.url(url);
         let mut last = None;
         for attempt in 0..3 {
+            cancel::check()?;
             match self.client.get(&url).send() {
                 Ok(resp) => {
                     let status = resp.status();
@@ -122,9 +125,11 @@ impl Http {
         url: &str,
         headers: &[(&str, &str)],
     ) -> Result<serde_json::Value> {
+        cancel::check()?;
         let url = self.url(url);
         let mut last = None;
         for attempt in 0..3u32 {
+            cancel::check()?;
             let mut request = self.client.get(&url);
             for (key, value) in headers {
                 request = request.header(*key, *value);
@@ -159,12 +164,14 @@ impl Http {
     /// Range header and started a normal 200 response; callers must fall back
     /// to a full download instead of treating that body as a range.
     pub fn get_range(&self, url: &str, start: u64, end: u64) -> Result<Option<RangeResponse>> {
+        cancel::check()?;
         if end < start {
             return Err(Error::Install(format!("无效的 Range: {start}-{end}")));
         }
         let url = self.url(url);
         let mut last = None;
         for attempt in 0..3u32 {
+            cancel::check()?;
             match self.try_get_range(&url, start, end) {
                 Ok(Some(response)) => return Ok(Some(response)),
                 Ok(None) => return Ok(None),
@@ -184,6 +191,7 @@ impl Http {
     }
 
     fn try_get_range(&self, url: &str, start: u64, end: u64) -> Result<Option<RangeResponse>> {
+        cancel::check()?;
         let response = self
             .client
             .get(url)
@@ -237,6 +245,7 @@ impl Http {
         expected: &str,
         batch: Option<&Batch>,
     ) -> Result<()> {
+        cancel::check()?;
         let chunk = total.div_ceil(SEGMENT_COUNT);
         let results: Vec<Result<()>> = std::thread::scope(|scope| {
             let mut handles = Vec::new();
@@ -264,6 +273,7 @@ impl Http {
         for result in results {
             result?;
         }
+        cancel::check()?;
 
         let merged = dest.with_extension(format!("merged-{}", std::process::id()));
         let mut out = File::create(&merged).map_err(|e| io(&merged, e))?;
@@ -311,6 +321,7 @@ impl Http {
     }
 
     fn download_inner(&self, spec: &FileSpec, batch: Option<&Batch>) -> Result<()> {
+        cancel::check()?;
         if spec.dest.exists() {
             let actual_size = spec.dest.metadata().map(|m| m.len()).unwrap_or(0);
             let size_ok = spec.size.is_none_or(|s| actual_size == s);
@@ -364,6 +375,7 @@ impl Http {
                         }
                         return Ok(());
                     }
+                    Err(e @ Error::Cancelled) => return Err(e),
                     Err(e) => {
                         if let (Some(batch), Some(before)) = (batch, before) {
                             let after = batch.bytes_done.load(Ordering::Relaxed);
@@ -394,6 +406,7 @@ impl Http {
                         }
                         return Ok(());
                     }
+                    Err(e @ Error::Cancelled) => return Err(e),
                     Err(e) => attempt_error = Some(e),
                 }
             }
@@ -404,6 +417,7 @@ impl Http {
                     .fetch_sub(after.saturating_sub(before), Ordering::Relaxed);
             }
             last = attempt_error;
+            cancel::check()?;
             std::thread::sleep(Duration::from_millis(500 * (attempt + 1) as u64));
         }
         if let Some(batch) = batch {
@@ -425,6 +439,7 @@ impl Http {
         expected_size: Option<u64>,
         batch: Option<&Batch>,
     ) -> Result<()> {
+        cancel::check()?;
         let resp = self
             .client
             .get(url)
@@ -454,6 +469,7 @@ impl Http {
         let mut reader = resp;
         let mut buf = [0u8; 64 * 1024];
         loop {
+            cancel::check()?;
             let n = reader.read(&mut buf).map_err(|e| io(dest, e))?;
             if n == 0 {
                 break;
@@ -477,6 +493,7 @@ impl Http {
                 });
             }
         }
+        cancel::check()?;
         std::fs::rename(&tmp, dest).map_err(|e| {
             let _ = std::fs::remove_file(&tmp);
             io(dest, e)
@@ -518,6 +535,7 @@ impl Http {
         label: &str,
         sink: &Sink,
     ) -> Result<usize> {
+        cancel::check()?;
         if specs.is_empty() {
             return Ok(0);
         }
@@ -550,6 +568,7 @@ impl Http {
                 })
                 .collect()
         });
+        cancel::check()?;
         batch.emit(true);
         if errors.is_empty() {
             Ok(specs.len())
@@ -587,6 +606,7 @@ fn download_segment(
     end: u64,
     batch: Option<&Batch>,
 ) -> Result<()> {
+    cancel::check()?;
     let want = end.saturating_sub(start).saturating_add(1);
     let mut have = part.metadata().map(|m| m.len()).unwrap_or(0);
     if have > want {
@@ -620,6 +640,7 @@ fn download_segment(
     let mut reader = response;
     let mut buf = [0u8; 64 * 1024];
     loop {
+        cancel::check()?;
         let n = reader.read(&mut buf).map_err(|e| io(part, e))?;
         if n == 0 {
             break;
@@ -787,6 +808,57 @@ mod tests {
         let urls = official.candidate_urls(original);
         assert_eq!(urls[0], original);
         assert!(urls[1].contains("bmclapi"));
+    }
+
+    #[test]
+    fn cancelled_download_stops_before_completion() {
+        use std::net::TcpListener;
+
+        let _guard = crate::cancel::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0u8; 1024];
+            let _ = stream.read(&mut request);
+            let _ = stream.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 8388608\r\nConnection: close\r\n\r\n",
+            );
+            let chunk = [0u8; 65536];
+            for _ in 0..128 {
+                if stream.write_all(&chunk).is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        });
+
+        cancel::reset();
+        let root =
+            std::env::temp_dir().join(format!("nailong-cancel-download-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let dest = root.join("large.bin");
+        let http = Http::new("official").unwrap();
+        let spec = FileSpec {
+            url: format!("http://{addr}/large.bin"),
+            dest: dest.clone(),
+            sha1: None,
+            size: Some(8 * 1024 * 1024),
+            verify_existing: false,
+        };
+        let canceller = std::thread::spawn(|| {
+            std::thread::sleep(Duration::from_millis(60));
+            cancel::cancel();
+        });
+        let error = http.download(&spec).unwrap_err();
+        canceller.join().unwrap();
+        server.join().unwrap();
+        cancel::reset();
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(matches!(error, Error::Cancelled));
     }
 
     #[test]

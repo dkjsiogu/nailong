@@ -1,3 +1,4 @@
+use crate::cancel;
 use crate::config;
 use crate::error::{Error, Result};
 use crate::http::{FileSpec, Http};
@@ -173,6 +174,7 @@ pub fn import_pack(
     mirror: &str,
     sink: &Sink,
 ) -> Result<ImportedInstance> {
+    cancel::check()?;
     match detect_format(archive)? {
         PackFormat::Modrinth => import_mrpack(root, archive, mirror, sink),
         PackFormat::CurseForge => import_curseforge(root, archive, mirror, sink),
@@ -1116,6 +1118,7 @@ fn extract_prefixes(
     let names = zip_names(zip);
     let mut done = 0u64;
     for name in names {
+        cancel::check()?;
         let Some(rest) = prefixes
             .iter()
             .find_map(|prefix| name.strip_prefix(prefix.as_str()))

@@ -1,4 +1,5 @@
 use crate::blob;
+use crate::cancel;
 use crate::error::{Error, Result};
 use crate::http::Http;
 use crate::install::vanilla;
@@ -17,6 +18,7 @@ pub fn install_with(
     mirror: &str,
     sink: &Sink,
 ) -> Result<String> {
+    cancel::check()?;
     root.ensure()?;
     (sink)(Progress::stage("检查原版资源"));
     vanilla::install_with(root, mc, mirror, sink)?;

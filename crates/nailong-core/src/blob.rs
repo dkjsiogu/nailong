@@ -1,3 +1,4 @@
+use crate::cancel;
 use crate::error::{Error, Result, io};
 use crate::http::{FileSpec, Http, sha1_file};
 use crate::paths::Root;
@@ -79,6 +80,7 @@ pub fn download_specs(
     label: &str,
     sink: &Sink,
 ) -> Result<usize> {
+    cancel::check()?;
     let mut downloads = Vec::with_capacity(specs.len());
     let mut direct = Vec::new();
     let mut links: Vec<(String, PathBuf)> = Vec::new();
@@ -117,6 +119,7 @@ pub fn download_specs(
         http.download_many_with(downloads, label, sink)?;
     }
     for (sha1, dest) in links {
+        cancel::check()?;
         if !materialize(root, &sha1, &dest)? {
             return Err(Error::Install(format!(
                 "blob 缺失，无法落盘: {}",

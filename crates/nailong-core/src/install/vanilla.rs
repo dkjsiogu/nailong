@@ -1,4 +1,5 @@
 use crate::blob;
+use crate::cancel;
 use crate::error::{Error, Result};
 use crate::http::{FileSpec, Http};
 use crate::manifest::{self, AssetIndex, Context, VersionJson, library_specs_for};
@@ -25,6 +26,7 @@ pub fn install(root: &Root, mc: &str, mirror: &str) -> Result<()> {
 }
 
 pub fn install_with(root: &Root, mc: &str, mirror: &str, sink: &Sink) -> Result<()> {
+    cancel::check()?;
     install_runtime_with(root, mc, mirror, sink)?;
     install_assets_with(root, mc, mirror, sink)?;
     (sink)(Progress {
@@ -43,6 +45,7 @@ pub fn install_with(root: &Root, mc: &str, mirror: &str, sink: &Sink) -> Result<
 /// step that needs the remote version manifest; everything else can be
 /// downloaded from the URLs in this JSON.
 pub fn prepare_version(root: &Root, mc: &str, mirror: &str, sink: &Sink) -> Result<VersionJson> {
+    cancel::check()?;
     root.ensure()?;
     let http = Http::new(mirror)?;
     (sink)(Progress::stage("读取版本信息"));
@@ -78,6 +81,7 @@ pub fn install_client_libs(
     vj: &VersionJson,
     sink: &Sink,
 ) -> Result<()> {
+    cancel::check()?;
     root.ensure()?;
     let http = Http::new(mirror)?;
     let ctx = Context::current();
@@ -108,6 +112,7 @@ pub fn install_client_libs(
 /// Asset index, asset objects and logging config.  Safe to run concurrently
 /// with loader processor installation once the version JSON exists.
 pub fn install_assets_with(root: &Root, mc: &str, mirror: &str, sink: &Sink) -> Result<()> {
+    cancel::check()?;
     root.ensure()?;
     let vj = manifest::load(root, mc)?;
     let http = Http::new(mirror)?;

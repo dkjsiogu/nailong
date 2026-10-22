@@ -56,6 +56,9 @@ pub enum Error {
 
     #[error("启动失败: {0}")]
     Launch(String),
+
+    #[error("操作已取消")]
+    Cancelled,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

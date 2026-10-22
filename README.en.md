@@ -8,7 +8,7 @@ A small, native Minecraft: Java Edition launcher written in Rust. Windows ships 
 
 [简体中文](README.md) | **English**
 
-> Current version: **0.7.2** (preview)
+> Current version: **0.7.3** (preview)
 >
 > Goals: small binaries, few dependencies, visible install progress, and a repair path after interruption. See [implementation status](docs/design/14-implementation-status.md) for exact boundaries.
 
@@ -37,6 +37,7 @@ It is not a universal launcher, and it is not 1.0 yet. What works and what does 
 - Patched clients found locally are reused: we scan official / PCL / HMCL / Prism / MultiMC / Modrinth and sibling `.minecraft` roots; a matching SHA1 (or a valid NeoForge JAR shape) skips the patch and processors.
 - Reinstalling an intact Forge/NeoForge instance is a fast no-op — no re-download, no repeated processors.
 - Missing assets show up as a specific “repair resources” action instead of a generic launch failure.
+- Installs can be cancelled: downloads, extraction, and processors respond; completed parts stay on disk for the next repair/retry.
 
 ### Modpacks
 
@@ -65,7 +66,7 @@ Drag a `.mrpack` or `.zip` into the window to start an import. A single mod `.ja
 | Platform | File | Size | Requirements |
 |---|---|---:|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | ~7.7 MB | Windows 10/11, Java 21 |
-| Linux x64 (deb) | [nailong_0.7.2_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.7.2_amd64.deb) | ~3.2 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
+| Linux x64 (deb) | [nailong_0.7.3_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.7.3_amd64.deb) | ~3.2 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
 
 Checksums: [SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS).
 
@@ -82,7 +83,7 @@ Java 21 must be installed. nailong searches for it automatically and shows a war
 ### Linux (Debian / Ubuntu)
 
 ```bash
-sudo apt install ./nailong_0.7.2_amd64.deb
+sudo apt install ./nailong_0.7.3_amd64.deb
 nailong
 ```
 
@@ -121,6 +122,7 @@ Ran for real:
 - Linux (Xvfb + Mesa): Fabric 0.19.5, NeoForge 21.1.209, and Forge 52.1.20 on 1.21.1 reached the main menu.
 - Fabulously Optimized `.mrpack`: 151 mods loaded and launched.
 - CurseForge: a real file was downloaded through the no-key official-page fallback.
+- GUI cancellation: cancelled an install under Xvfb and returned to the “continue install” page without crashing.
 - Prism, MCBBS, HMCL, and ATLauncher: real or synthetic samples passed format detection and instance creation.
 
 Not verified yet:
@@ -171,7 +173,7 @@ Windows release builds use MSVC with the static CRT in GitHub Actions. `x86_64-p
 
 - Microsoft account login (waiting for a client-id / Minecraft Services allowlist).
 - Auto-update, mod management, and skins.
-- An install cancel button (closing the window interrupts; the next launch checks and repairs).
+- Stopping a running game / cancelling a launch.
 - Real Windows testing and macOS support.
 - Importing a single mod `.jar`.
 

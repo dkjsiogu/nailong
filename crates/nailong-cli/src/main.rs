@@ -4,7 +4,7 @@ use nailong_core::install::{fabric, forge, modpack, neoforge, vanilla};
 use nailong_core::launch::{self, LaunchOptions};
 use nailong_core::manifest::{self, Context as ResolveContext};
 use nailong_core::progress::{Progress, Sink, from_fn};
-use nailong_core::{Root, java};
+use nailong_core::{Root, cancel, java};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -142,6 +142,7 @@ fn main() -> anyhow::Result<()> {
             );
         }
         Commands::Install { target } => {
+            cancel::reset();
             let sink = cli_progress();
             match target {
                 InstallTarget::Vanilla { mc } => {

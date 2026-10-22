@@ -4,7 +4,7 @@ use eframe::egui;
 use nailong_core::install::{catalog, fabric, forge, health, modpack, neoforge, vanilla};
 use nailong_core::launch::{self, LaunchOptions};
 use nailong_core::progress::{Progress, Sink, from_fn};
-use nailong_core::{Root, config, java};
+use nailong_core::{Error, Root, cancel, config, java};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
@@ -104,6 +104,7 @@ enum Msg {
     Catalog(Result<catalog::Catalog, String>),
     InstallDone(String),
     InstallFailed(String),
+    InstallCancelled,
     LaunchDone(i32),
     LaunchFailed(String),
 }
@@ -133,6 +134,7 @@ struct App {
     install_forge: String,
     repair_target: Option<RepairTarget>,
     busy: Option<Task>,
+    cancel_requested: bool,
     progress: Option<Progress>,
     progress_label: String,
     error: Option<String>,
@@ -175,6 +177,7 @@ impl App {
             install_forge: "52.1.20".into(),
             repair_target: None,
             busy: None,
+            cancel_requested: false,
             progress: None,
             progress_label: String::new(),
             error: None,
@@ -382,6 +385,8 @@ impl App {
         self.show_manage = false;
         self.show_settings = false;
         self.show_log = false;
+        cancel::reset();
+        self.cancel_requested = false;
         self.busy = Some(Task::Install);
         self.progress = Some(Progress::stage("准备导入整合包"));
         self.progress_label = name.clone();
@@ -403,6 +408,7 @@ impl App {
         std::thread::spawn(move || {
             let msg = match modpack::import_pack(&root, &path, "official", &sink) {
                 Ok(instance) => Msg::InstallDone(format!("instance:{}", instance.id)),
+                Err(Error::Cancelled) => Msg::InstallCancelled,
                 Err(e) => Msg::InstallFailed(e.to_string()),
             };
             if let Ok(tx) = tx.lock() {
@@ -439,6 +445,8 @@ impl App {
             self.show_base = true;
         }
         self.show_log = false;
+        cancel::reset();
+        self.cancel_requested = false;
         self.busy = Some(Task::Install);
         self.progress = Some(Progress::stage("准备安装"));
         self.progress_label = target_label.clone();
@@ -470,22 +478,20 @@ impl App {
             })
         };
         std::thread::spawn(move || {
-            let result: Result<String, String> = match loader {
-                LoaderKind::Vanilla => vanilla::install_with(&root, &mc, "official", &sink)
-                    .map(|()| target.clone())
-                    .map_err(|e| e.to_string()),
-                LoaderKind::Fabric => fabric::install_with(&root, &mc, &version, "official", &sink)
-                    .map_err(|e| e.to_string()),
+            let result: Result<String, Error> = match loader {
+                LoaderKind::Vanilla => {
+                    vanilla::install_with(&root, &mc, "official", &sink).map(|()| target.clone())
+                }
+                LoaderKind::Fabric => fabric::install_with(&root, &mc, &version, "official", &sink),
                 LoaderKind::NeoForge => {
                     neoforge::install_with(&root, &mc, &version, "official", &sink)
-                        .map_err(|e| e.to_string())
                 }
-                LoaderKind::Forge => forge::install_with(&root, &mc, &version, "official", &sink)
-                    .map_err(|e| e.to_string()),
+                LoaderKind::Forge => forge::install_with(&root, &mc, &version, "official", &sink),
             };
             let msg = match result {
                 Ok(id) => Msg::InstallDone(id),
-                Err(e) => Msg::InstallFailed(e),
+                Err(Error::Cancelled) => Msg::InstallCancelled,
+                Err(e) => Msg::InstallFailed(e.to_string()),
             };
             if let Ok(tx) = tx.lock() {
                 let _ = tx.send(msg);
@@ -568,6 +574,7 @@ impl App {
                 }
                 Msg::InstallDone(id) => {
                     self.busy = None;
+                    self.cancel_requested = false;
                     self.progress = None;
                     self.rx = None;
                     self.show_install = false;
@@ -581,12 +588,31 @@ impl App {
                 }
                 Msg::InstallFailed(e) => {
                     self.busy = None;
+                    self.cancel_requested = false;
                     self.progress = None;
                     self.rx = None;
                     self.show_install = true;
                     self.show_log = true;
-                    self.error = Some(e.clone());
                     self.log.push(format!("安装未完成: {e}"));
+                    if e.contains("操作已取消") {
+                        self.error = None;
+                        self.notice = Some("安装已取消，已下载的部分会保留。".into());
+                    } else {
+                        self.error = Some(e);
+                    }
+                    self.refresh();
+                }
+                Msg::InstallCancelled => {
+                    self.busy = None;
+                    self.cancel_requested = false;
+                    self.progress = None;
+                    self.rx = None;
+                    self.show_install = true;
+                    self.show_log = false;
+                    self.error = None;
+                    self.notice =
+                        Some("安装已取消，已下载的部分会保留；重新开始会检查并补全。".into());
+                    self.log.push("安装已取消".into());
                     self.refresh();
                 }
                 Msg::LaunchDone(code) => {
@@ -1106,6 +1132,16 @@ impl App {
                     ui.label(egui::RichText::new(target.label()).color(MUTED));
                     ui.add_space(20.0);
                     card().show(ui, |ui| {
+                        if let Some(note) = &self.notice {
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(note)
+                                        .color(egui::Color32::from_rgb(120, 190, 140)),
+                                )
+                                .wrap(),
+                            );
+                            ui.add_space(16.0);
+                        }
                         if let Some(err) = &self.error {
                             ui.add(
                                 egui::Label::new(
@@ -1326,6 +1362,23 @@ impl App {
                             .color(MUTED),
                     );
                 }
+                ui.add_space(26.0);
+                ui.vertical_centered(|ui| {
+                    if self.cancel_requested {
+                        ui.add_enabled(false, egui::Button::new("正在取消…"));
+                        ui.add_space(6.0);
+                        ui.label(
+                            egui::RichText::new(
+                                "等待当前下载或 processor 结束；已完成的部分会保留。",
+                            )
+                            .size(11.5)
+                            .color(MUTED),
+                        );
+                    } else if ui.button("取消安装").clicked() {
+                        self.cancel_requested = true;
+                        cancel::cancel();
+                    }
+                });
             });
         });
     }

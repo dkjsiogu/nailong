@@ -8,7 +8,7 @@
 
 **简体中文** | [English](README.en.md)
 
-> 当前版本：**0.7.2**（预览版）
+> 当前版本：**0.7.3**（预览版）
 >
 > 目标：小体积、少依赖、安装过程可见、中断可补。功能边界见 [实现状态](docs/design/14-implementation-status.md)。
 
@@ -37,6 +37,7 @@ nailong 的思路很直：
 - 本机现成的 patched client 也能复用：自动扫官方 / PCL / HMCL / Prism / MultiMC / Modrinth 和相邻 `.minecraft`，SHA1 匹配（NeoForge 走 JAR 结构校验）后直接复用，跳过补丁和 processor。
 - 已完整安装的 Forge / NeoForge 再装一次等于 no-op，不会重复下载、重跑 processor。
 - 资源缺失时明确提示“补全资源”，修完再启动。
+- 安装可取消：下载、解压和 processor 都会响应；已下载部分保留，重新开始会检查补全。
 
 ### 整合包
 
@@ -65,7 +66,7 @@ nailong 的思路很直：
 | 平台 | 文件 | 大小 | 要求 |
 |---|---|---:|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | 约 7.7 MB | Windows 10/11，Java 21 |
-| Linux x64 (deb) | [nailong_0.7.2_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.7.2_amd64.deb) | 约 3.2 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
+| Linux x64 (deb) | [nailong_0.7.3_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.7.3_amd64.deb) | 约 3.2 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
 
 校验值：[SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS)。
 
@@ -82,7 +83,7 @@ nailong 的思路很直：
 ### Linux（Debian / Ubuntu）
 
 ```bash
-sudo apt install ./nailong_0.7.2_amd64.deb
+sudo apt install ./nailong_0.7.3_amd64.deb
 nailong
 ```
 
@@ -121,6 +122,7 @@ sudo apt remove nailong
 - Linux（Xvfb + Mesa）：Fabric 0.19.5、NeoForge 21.1.209、Forge 52.1.20 在 1.21.1 启动到主菜单。
 - Fabulously Optimized `.mrpack`：151 个模组加载并启动。
 - CurseForge：真实文件通过无 key 的官方下载页回退下载成功。
+- GUI 取消安装：Xvfb 下安装中点取消，回到“继续安装”页，进程未崩溃。
 - Prism、MCBBS、HMCL、ATLauncher：真实或合成样例包跑通格式识别与实例创建。
 
 还没验证的：
@@ -171,7 +173,7 @@ Windows 发布版由 GitHub Actions 使用 MSVC + 静态 CRT 构建；也可以�
 
 - 微软正版登录（client id / Minecraft Services allowlist 审批未就绪）。
 - 自动更新、模组管理、皮肤。
-- 安装取消按钮（关闭窗口可中断，下次打开会检测并补全）。
+- 启动后的停止游戏 / 启动取消。
 - Windows 实机验证、macOS 支持。
 - 单个 mod `.jar` 直接导入。
 

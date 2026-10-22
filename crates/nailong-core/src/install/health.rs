@@ -23,6 +23,10 @@ pub fn inspect(root: &Root, id: &str) -> Health {
         health.missing += 1;
         return health;
     }
+    if root.incomplete_marker(id).exists() {
+        health.missing += 1;
+        return health;
+    }
     let (merged, chain) = match manifest::merged_chain(root, id) {
         Ok(v) => v,
         Err(_) => {
@@ -102,4 +106,37 @@ pub fn inspect(root: &Root, id: &str) -> Health {
     }
 
     health
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn incomplete_loader_marker_is_never_healthy() {
+        let n = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = Root::new(
+            std::env::temp_dir().join(format!("nailong-health-marker-{}-{n}", std::process::id())),
+        );
+        let version = root.version_dir("neoforge-test");
+        std::fs::create_dir_all(&version).unwrap();
+        std::fs::write(
+            version.join("neoforge-test.json"),
+            br#"{"id":"neoforge-test"}"#,
+        )
+        .unwrap();
+        std::fs::write(root.incomplete_marker("neoforge-test"), b"processors").unwrap();
+        let health = inspect(&root, "neoforge-test");
+        assert!(health.missing > 0);
+        std::fs::remove_file(root.incomplete_marker("neoforge-test")).unwrap();
+        // Without the marker this minimal profile is still incomplete, but it
+        // must get past the marker short-circuit and report the missing client.
+        let health = inspect(&root, "neoforge-test");
+        assert!(health.total > 1);
+        let _ = std::fs::remove_dir_all(root.dir());
+    }
 }
