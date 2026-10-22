@@ -8,7 +8,7 @@
 
 **简体中文** | [English](README.en.md)
 
-> 当前版本：**0.8.0**（预览版）
+> 当前版本：**0.9.0**（预览版）
 >
 > 目标：小体积、少依赖、安装过程可见、中断可补。功能边界见 [实现状态](docs/design/14-implementation-status.md)。
 
@@ -54,15 +54,16 @@ nailong 的思路很直：
 
 把 `.mrpack` 或 `.zip` 拖进窗口即可开始导入。单个 mod `.jar` 目前不会被当成整合包处理。
 
-### Mod 搜索与下载
+### 下载中心：Mod / 资源包 / 光影
 
-- 先在版本列表选中一个 Fabric / NeoForge / Forge 版本，检索会锁定该版本的 Minecraft 版本和加载器。
-- 同时搜索 Modrinth 和 CurseForge；可以只看某一个来源，也可以合并看。
-- 选中项目后查看兼容版本，选择具体文件；再解析前置依赖。
-- `required` 前置自动加入，`optional` 前置显示为勾选项（默认不勾），`incompatible` 直接阻止下载。
-- 下载到该版本的 `mods/`。普通版本首次下载会启用独立 `gameDir`（`versions/<id>/`），不会和其他版本互相污染；根目录旧存档不会自动迁移。
-- 同名文件内容相同则跳过，内容不同会报冲突，不静默覆盖。
-- 只是检索/下载，不做自动更新、依赖升级或远程安装器。
+- 先在版本列表选中目标版本；Mod 检索锁定该版本的 Minecraft 版本和加载器，资源包/光影锁定 Minecraft 版本。
+- 同时搜索 Modrinth 和 CurseForge，可切换来源；结果支持“加载更多”分页。
+- 选中项目后查看兼容版本，指定具体文件；Mod 还会解析 `required` / `optional` / `incompatible` 前置。
+- `required` 自动加入；`optional` 显示为勾选项（默认不勾）；`incompatible` 阻止下载。
+- 下载到该版本的 `mods/`、`resourcepacks/` 或 `shaderpacks/`。普通版本首次下载会启用独立 `gameDir`（`versions/<id>/`），不会和其他版本互相污染；根目录旧存档不会自动迁移。
+- 已安装页可以扫描现有目录、启用/禁用、删除、检测重复项目、检查更新并一键更新。
+- 支持本地 `.jar` 拖入/导入，以及资源包/光影的本地 `.zip` 导入。
+- 同名文件内容相同则跳过，内容不同会报冲突，不静默覆盖；更新会替换旧版本并保留索引。
 
 ### 日常使用
 
@@ -76,7 +77,7 @@ nailong 的思路很直：
 | 平台 | 文件 | 大小 | 要求 |
 |---|---|---:|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | 约 7.7 MB | Windows 10/11，Java 21 |
-| Linux x64 (deb) | [nailong_0.8.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.8.0_amd64.deb) | 约 3.2 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
+| Linux x64 (deb) | [nailong_0.9.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.9.0_amd64.deb) | 约 3.2 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
 
 校验值：[SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS)。
 
@@ -93,7 +94,7 @@ nailong 的思路很直：
 ### Linux（Debian / Ubuntu）
 
 ```bash
-sudo apt install ./nailong_0.8.0_amd64.deb
+sudo apt install ./nailong_0.9.0_amd64.deb
 nailong
 ```
 
@@ -132,7 +133,7 @@ sudo apt remove nailong
 - Fabulously Optimized `.mrpack`：151 个模组加载并启动。
 - CurseForge：真实文件通过无 key 的官方下载页回退下载成功；官方 API key 实测返回文件名、大小、SHA1 和下载地址。
 - GUI 取消安装：Xvfb 下安装中点取消，回到“继续安装”页，进程未崩溃。
-- Mod 搜索/下载：真实 Modrinth + CurseForge API，Jade 及其必需前置解析、下载到版本独立 `mods/` 成功。
+- 下载中心：真实 Modrinth + CurseForge API；Mod/资源包/光影检索；Jade 及必需前置下载到版本独立 `mods/`；已安装扫描/启停/重复检测/更新检查。
 - Prism、MCBBS、HMCL、ATLauncher：真实或合成样例包跑通格式识别与实例创建。
 
 还没验证的：
@@ -182,16 +183,16 @@ Windows 发布版由 GitHub Actions 使用 MSVC + 静态 CRT 构建；也可以�
 ## 还没做
 
 - 微软正版登录（client id / Minecraft Services allowlist 审批未就绪）。
-- 自动更新、模组管理、皮肤。
+- 启动器自身自动更新、皮肤、完整整合包更新。
 - 启动后的停止游戏 / 启动取消。
 - Windows 实机验证、macOS 支持。
-- 本地单个 mod `.jar` 直接导入（现在支持在线检索/下载，不是本地 jar 导入）。
+
 
 ## 代码结构
 
 ```text
 crates/
-  nailong-core/   版本解析、下载、Java 检测、启动、加载器安装、整合包导入、Mod 检索/下载
+  nailong-core/   版本解析、下载、Java 检测、启动、加载器安装、整合包导入、下载中心
   nailong-cli/    命令行
   nailong-ui/     egui 图形界面
 packaging/linux/  desktop、图标、AppStream 元数据、版权文件

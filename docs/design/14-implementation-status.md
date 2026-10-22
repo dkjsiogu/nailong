@@ -1,7 +1,7 @@
-# 14 · 原型实现状态（0.1 → 0.8.0）
+# 14 · 原型实现状态（0.1 → 0.9.0）
 
 > 日期：2026-10-21
-> 对应发布：GitHub Release `v0.8.0` 的 `nailong.exe`、`nailong_0.8.0_amd64.deb`
+> 对应发布：GitHub Release `v0.9.0` 的 `nailong.exe`、`nailong_0.9.0_amd64.deb`
 > 目的：把「设计稿」和「已经跑起来的代码」分开记账，避免把计划当成已完成。
 
 ## 1. 一句话结论
@@ -36,6 +36,8 @@
 
 0.8.0 增加 Mod 检索与下载：选中 Fabric/NeoForge/Forge 版本后锁定 MC/加载器，搜索 Modrinth + CurseForge，查看兼容文件，解析 required/optional/incompatible 前置，下载到该版本的独立 `mods/`。普通版本首次下载会写 `.nailong-isolated`，之后 `gameDir` 指向 `versions/<id>/`；根目录旧存档不迁移。
 
+0.9.0 把下载中心补齐：资源包/光影搜索与下载、结果分页、已安装内容索引（扫描、启用/禁用、删除、重复检测、更新检查/一键更新）、本地 `.jar`/`.zip` 导入。Mod 更新会按最新兼容版本重解依赖并把旧文件从索引/目录移除；CurseForge 依赖仍只有 `modId`，因此只能选目标版本下最新的兼容文件。
+
 发布形态刻意保持简单：Windows 只发一个 `nailong.exe`；Linux 只发一个可双击/`apt install` 的 `.deb`。
 
 这不是 v1.0。它刻意只做一条路径，用来验证三件事：
@@ -63,16 +65,16 @@
 | Forge 安装 / 启动 | `core::install::forge` | 完成（精简数据 + 原生 processors） | 1.21.1 / 52.1.20 安装并启动到渲染 |
 | 四加载器选择 | `nailong-ui` | 完成 | 安装页按 Minecraft / Fabric / NeoForge / Forge / 原版排列 |
 | 整合包导入 | `core::install::modpack` | 完成（6 种格式） | Modrinth、CurseForge、Prism/MultiMC、MCBBS、HMCL、ATLauncher；真实 CurseForge 文件 + 各格式合成包验证 |
-| Mod 检索/下载 | `core::mods` + `nailong-ui` | 完成（第一阶段） | 真实 Modrinth + CurseForge API；Jade + 必需前置下载到版本独立 `mods/`；required/optional/incompatible 分类 |
+| 下载中心 | `core::mods` / `core::installed` + `nailong-ui` | 完成 | Mod/资源包/光影检索；分页；真实 API；依赖解析；已安装扫描/启停/删除/重复检测/更新；本地导入 |
 | Windows 便携目录 | `core::paths` | 完成 | 默认使用 exe 同目录 `.minecraft` |
 | CLI（list/java/info/install/launch） | `nailong-cli` | 完成 | 打包产物冒烟 |
-| GUI（版本下拉、安装进度、取消、缺文件补全、启动、Mod 下载） | `nailong-ui` | 可用 | Xvfb 下走完安装 / 补全 / 启动；安装中取消后回到继续安装页；Mod 搜索/版本/前置/下载实测；实际 NeoForge 到主菜单 |
+| GUI（版本下拉、安装进度、取消、缺文件补全、启动、下载中心） | `nailong-ui` | 可用 | Xvfb 下走完安装 / 补全 / 启动；安装中取消；下载中心检索/版本/依赖/已安装页实测；实际 NeoForge 到主菜单 |
 | 版本管理 | `nailong-ui` | 完成 | 基础版本隐藏、版本/整合包删除、被依赖保护 |
 | CAS / patched client 复用 | `core::blob` / `core::install::reuse` | 完成（第一阶段） | client/libraries 新文件走 blob+硬链接；复用后跳过补丁与 processor；Forge 实测 5.3s、NeoForge 3.7s |
 | 大文件分段下载 | `core::http` | 完成 | client jar 4 段并行、段续传、源回退 |
 | 重复安装快速路径 | `core::install::forge` / `neoforge` | 完成 | health 通过则 0 下载、0 processor |
 | Windows 交叉编译 | `x86_64-pc-windows-gnu` | 通过 | 无 MinGW DLL 依赖，仅系统 DLL |
-| 发布包 | GitHub Release `v0.8.0` | 完成（CI 构建） | 单 exe 约 7.7 MB / deb 约 3.2 MB |
+| 发布包 | GitHub Release `v0.9.0` | 完成（CI 构建） | 单 exe 约 7.8 MB / deb 约 3.2 MB |
 
 ### 2.1 实测记录
 
@@ -113,7 +115,7 @@
 | 正版登录 / 自动更新 | 未实现 | 下一步做账户与更新 |
 | 微软正版登录 | 未实现（离线） | 按决定推迟到 M3.5 |
 | 自动更新 / 签名 / 崩溃报告 | 未实现 | 发布前补齐 |
-| 单元/集成测试体系 | **40 个测试** | 缺夹具、mock HTTP、启动 argv 快照、Windows CI |
+| 单元/集成测试体系 | **43 个测试** | 缺夹具、mock HTTP、启动 argv 快照、Windows CI |
 
 ## 4. 已知问题与风险
 
@@ -125,7 +127,7 @@
 6. **续传范围有限**：普通文件是“已存在且哈希正确则跳过”，不保留半成品；单个大文件有稳定的 `.dlpart-N` 段文件，可续传。安装器核心数据用 HTTP Range 只取所需条目，中断后重跑会重新读取约 3 MB。
 7. **无安装锁**：并发启动两个安装可能写同一目录；原型未处理。
 8. **资产下载没有虚拟资源映射**（legacy virtual assets）验证；1.21.1 不需要，旧版本可能需要。
-9. **Mod 检索/下载是第一阶段**：只做 Mod，不做资源包/光影；没有已安装 Mod 清单、自动更新或依赖升级。CurseForge 依赖只有 `modId`，解析时选目标版本下最新的兼容文件，不能保证与作者指定版本完全一致。版本隔离首次启用不迁移根目录旧存档。
+9. **下载中心边界**：CurseForge 依赖只有 `modId`，解析时选目标版本下最新的兼容文件，不能保证与作者指定版本完全一致；更新为手动检查/一键更新，不做后台静默更新；版本隔离首次启用不迁移根目录旧存档。
 
 ## 5. 下一步（按优先级）
 

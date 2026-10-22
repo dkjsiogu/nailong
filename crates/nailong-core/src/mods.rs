@@ -9,6 +9,7 @@ use crate::cancel;
 use crate::error::{Error, Result};
 use crate::http::{FileSpec, Http};
 use crate::progress::{Progress, Sink};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeSet, HashSet, VecDeque};
 use std::path::{Component, Path};
@@ -16,9 +17,8 @@ use std::path::{Component, Path};
 const MODRINTH_API: &str = "https://api.modrinth.com/v2";
 const CURSEFORGE_API: &str = "https://api.curseforge.com/v1";
 const CURSEFORGE_GAME_ID: u64 = 432;
-const CURSEFORGE_MOD_CLASS: u64 = 6;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Source {
     Modrinth,
     CurseForge,
@@ -70,6 +70,47 @@ impl Loader {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum ContentKind {
+    Mod,
+    ResourcePack,
+    Shader,
+}
+
+impl ContentKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Mod => "Mod",
+            Self::ResourcePack => "资源包",
+            Self::Shader => "光影",
+        }
+    }
+
+    pub fn folder(self) -> &'static str {
+        match self {
+            Self::Mod => "mods",
+            Self::ResourcePack => "resourcepacks",
+            Self::Shader => "shaderpacks",
+        }
+    }
+
+    fn modrinth_type(self) -> &'static str {
+        match self {
+            Self::Mod => "mod",
+            Self::ResourcePack => "resourcepack",
+            Self::Shader => "shader",
+        }
+    }
+
+    fn curseforge_class(self) -> u64 {
+        match self {
+            Self::Mod => 6,
+            Self::ResourcePack => 12,
+            Self::Shader => 6552,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum DependencyKind {
     Required,
@@ -82,6 +123,7 @@ pub enum DependencyKind {
 #[derive(Debug, Clone)]
 pub struct Project {
     pub source: Source,
+    pub kind: ContentKind,
     pub id: String,
     pub slug: String,
     pub name: String,
@@ -104,6 +146,7 @@ pub struct Dependency {
 #[derive(Debug, Clone)]
 pub struct Version {
     pub source: Source,
+    pub kind: ContentKind,
     pub project_id: String,
     pub id: String,
     pub name: String,
@@ -163,7 +206,8 @@ pub fn search(
     query: &str,
     source: Option<Source>,
     mc: &str,
-    loader: Loader,
+    loader: Option<Loader>,
+    kind: ContentKind,
     offset: usize,
     limit: usize,
 ) -> Result<SearchPage> {
@@ -178,7 +222,7 @@ pub fn search(
     let want = |candidate: Source| source.is_none_or(|wanted| wanted == candidate);
 
     if want(Source::Modrinth) {
-        match search_modrinth(query, mc, loader, offset, limit) {
+        match search_modrinth(query, mc, loader, kind, offset, limit) {
             Ok(mut result) => {
                 page.hits.append(&mut result.hits);
                 page.total = page.total.max(result.total);
@@ -190,7 +234,7 @@ pub fn search(
         }
     }
     if want(Source::CurseForge) {
-        match search_curseforge(query, mc, loader, offset, limit) {
+        match search_curseforge(query, mc, loader, kind, offset, limit) {
             Ok(mut result) => {
                 page.hits.append(&mut result.hits);
                 page.total = page.total.max(result.total);
@@ -214,16 +258,23 @@ pub fn search(
 fn search_modrinth(
     query: &str,
     mc: &str,
-    loader: Loader,
+    loader: Option<Loader>,
+    kind: ContentKind,
     offset: usize,
     limit: usize,
 ) -> Result<SearchPage> {
-    let facets = serde_json::json!([
-        ["project_type:mod"],
-        [format!("versions:{mc}")],
-        [format!("categories:{}", loader.modrinth_category())]
-    ])
-    .to_string();
+    let mut facets = vec![
+        vec![format!("project_type:{}", kind.modrinth_type())],
+        vec![format!("versions:{mc}")],
+    ];
+    if kind == ContentKind::Mod {
+        facets.push(vec![format!(
+            "categories:{}",
+            loader.unwrap_or(Loader::Fabric).modrinth_category()
+        )]);
+    }
+    let facets = serde_json::to_string(&facets)
+        .map_err(|e| Error::Install(format!("Modrinth facets 序列化失败: {e}")))?;
     let url = query_url(
         &format!("{MODRINTH_API}/search"),
         &[
@@ -240,7 +291,7 @@ fn search_modrinth(
         .map(|items| {
             items
                 .iter()
-                .filter_map(modrinth_project)
+                .filter_map(|value| modrinth_project(value, kind))
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
@@ -257,20 +308,25 @@ fn search_modrinth(
 fn search_curseforge(
     query: &str,
     mc: &str,
-    loader: Loader,
+    loader: Option<Loader>,
+    kind: ContentKind,
     offset: usize,
     limit: usize,
 ) -> Result<SearchPage> {
     let key = curse_key()?;
     let mut params = vec![
         ("gameId", CURSEFORGE_GAME_ID.to_string()),
-        ("classId", CURSEFORGE_MOD_CLASS.to_string()),
+        ("classId", kind.curseforge_class().to_string()),
         ("gameVersion", mc.to_string()),
-        ("modLoaderType", loader.curseforge_id().to_string()),
         ("index", offset.to_string()),
         ("pageSize", limit.min(50).to_string()),
         ("sortOrder", "desc".to_string()),
     ];
+    if kind == ContentKind::Mod
+        && let Some(loader) = loader
+    {
+        params.push(("modLoaderType", loader.curseforge_id().to_string()));
+    }
     if !query.trim().is_empty() {
         params.push(("searchFilter", query.trim().to_string()));
     }
@@ -282,7 +338,7 @@ fn search_curseforge(
         .map(|items| {
             items
                 .iter()
-                .filter_map(curseforge_project)
+                .filter_map(|value| curseforge_project(value, kind))
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
@@ -296,9 +352,10 @@ fn search_curseforge(
     })
 }
 
-fn modrinth_project(value: &Value) -> Option<Project> {
+fn modrinth_project(value: &Value, kind: ContentKind) -> Option<Project> {
     Some(Project {
         source: Source::Modrinth,
+        kind,
         id: value
             .get("project_id")
             .or_else(|| value.get("id"))?
@@ -329,10 +386,11 @@ fn modrinth_project(value: &Value) -> Option<Project> {
     })
 }
 
-fn curseforge_project(value: &Value) -> Option<Project> {
+fn curseforge_project(value: &Value, kind: ContentKind) -> Option<Project> {
     let id = value.get("id")?.as_u64()?.to_string();
     Some(Project {
         source: Source::CurseForge,
+        kind,
         id,
         slug: value
             .get("slug")
@@ -384,7 +442,7 @@ fn string_array(value: Option<&Value>) -> Vec<String> {
         .unwrap_or_default()
 }
 
-pub fn project(source: Source, id: &str) -> Result<Project> {
+pub fn project(source: Source, id: &str, kind: ContentKind) -> Result<Project> {
     cancel::check()?;
     let value = match source {
         Source::Modrinth => {
@@ -403,8 +461,8 @@ pub fn project(source: Source, id: &str) -> Result<Project> {
         &value
     };
     match source {
-        Source::Modrinth => modrinth_project(data),
-        Source::CurseForge => curseforge_project(data),
+        Source::Modrinth => modrinth_project(data, kind),
+        Source::CurseForge => curseforge_project(data, kind),
     }
     .ok_or_else(|| Error::Install(format!("{} 项目 {id} 解析失败", source.label())))
 }
@@ -412,23 +470,29 @@ pub fn project(source: Source, id: &str) -> Result<Project> {
 pub fn versions(project: &Project, mc: &str, loader: Loader) -> Result<Vec<Version>> {
     cancel::check()?;
     let mut versions = match project.source {
-        Source::Modrinth => versions_modrinth(&project.id, mc, loader)?,
-        Source::CurseForge => versions_curseforge(&project.id, mc, loader)?,
+        Source::Modrinth => versions_modrinth(&project.id, project.kind, mc, loader)?,
+        Source::CurseForge => versions_curseforge(&project.id, project.kind, mc, loader)?,
     };
     versions.sort_by(|a, b| b.published.cmp(&a.published));
     Ok(versions)
 }
 
-fn versions_modrinth(project_id: &str, mc: &str, loader: Loader) -> Result<Vec<Version>> {
+fn versions_modrinth(
+    project_id: &str,
+    kind: ContentKind,
+    mc: &str,
+    loader: Loader,
+) -> Result<Vec<Version>> {
+    let mut params = vec![("game_versions", serde_json::json!([mc]).to_string())];
+    if kind == ContentKind::Mod {
+        params.push((
+            "loaders",
+            serde_json::json!([loader.modrinth_category()]).to_string(),
+        ));
+    }
     let url = query_url(
         &format!("{MODRINTH_API}/project/{project_id}/version"),
-        &[
-            ("game_versions", serde_json::json!([mc]).to_string()),
-            (
-                "loaders",
-                serde_json::json!([loader.modrinth_category()]).to_string(),
-            ),
-        ],
+        &params,
     )?;
     let value = Http::new("official")?.get_json(&url)?;
     let items = value
@@ -436,11 +500,11 @@ fn versions_modrinth(project_id: &str, mc: &str, loader: Loader) -> Result<Vec<V
         .ok_or_else(|| Error::Install("Modrinth 版本列表格式异常".into()))?;
     Ok(items
         .iter()
-        .filter_map(|item| modrinth_version(project_id, item))
+        .filter_map(|item| modrinth_version(project_id, kind, item))
         .collect())
 }
 
-fn modrinth_version(project_id: &str, value: &Value) -> Option<Version> {
+fn modrinth_version(project_id: &str, kind: ContentKind, value: &Value) -> Option<Version> {
     let files = value.get("files")?.as_array()?;
     let file = files
         .iter()
@@ -457,6 +521,7 @@ fn modrinth_version(project_id: &str, value: &Value) -> Option<Version> {
         .unwrap_or_default();
     Some(Version {
         source: Source::Modrinth,
+        kind,
         project_id: project_id.to_string(),
         id: value.get("id")?.as_str()?.to_string(),
         name: value
@@ -513,15 +578,23 @@ fn modrinth_dependency(value: &Value) -> Option<Dependency> {
     })
 }
 
-fn versions_curseforge(project_id: &str, mc: &str, loader: Loader) -> Result<Vec<Version>> {
+fn versions_curseforge(
+    project_id: &str,
+    kind: ContentKind,
+    mc: &str,
+    loader: Loader,
+) -> Result<Vec<Version>> {
     let key = curse_key()?;
+    let mut params = vec![
+        ("gameVersion", mc.to_string()),
+        ("pageSize", "50".to_string()),
+    ];
+    if kind == ContentKind::Mod {
+        params.push(("modLoaderType", loader.curseforge_id().to_string()));
+    }
     let url = query_url(
         &format!("{CURSEFORGE_API}/mods/{project_id}/files"),
-        &[
-            ("gameVersion", mc.to_string()),
-            ("modLoaderType", loader.curseforge_id().to_string()),
-            ("pageSize", "50".to_string()),
-        ],
+        &params,
     )?;
     let value = Http::new("official")?.get_json_with_headers(&url, &curse_headers(&key))?;
     let items = value
@@ -531,11 +604,11 @@ fn versions_curseforge(project_id: &str, mc: &str, loader: Loader) -> Result<Vec
     Ok(items
         .iter()
         .filter(|file| file.get("isAvailable").and_then(|v| v.as_bool()) != Some(false))
-        .filter_map(|file| curseforge_version(project_id, file))
+        .filter_map(|file| curseforge_version(project_id, kind, file))
         .collect())
 }
 
-fn curseforge_version(project_id: &str, value: &Value) -> Option<Version> {
+fn curseforge_version(project_id: &str, kind: ContentKind, value: &Value) -> Option<Version> {
     let file_name = value.get("fileName")?.as_str()?.to_string();
     let file_id = value.get("id")?.as_u64()?;
     let dependencies = value
@@ -565,6 +638,7 @@ fn curseforge_version(project_id: &str, value: &Value) -> Option<Version> {
         .unwrap_or_default();
     Some(Version {
         source: Source::CurseForge,
+        kind,
         project_id: project_id.to_string(),
         id: file_id.to_string(),
         name: value
@@ -609,19 +683,24 @@ fn curseforge_version(project_id: &str, value: &Value) -> Option<Version> {
     })
 }
 
-fn version_from_id(source: Source, project_id: &str, version_id: &str) -> Result<Option<Version>> {
+fn version_from_id(
+    source: Source,
+    project_id: &str,
+    version_id: &str,
+    kind: ContentKind,
+) -> Result<Option<Version>> {
     match source {
         Source::Modrinth => {
             let url = format!("{MODRINTH_API}/version/{version_id}");
             let value = Http::new("official")?.get_json(&url)?;
-            Ok(modrinth_version(project_id, &value))
+            Ok(modrinth_version(project_id, kind, &value))
         }
         Source::CurseForge => {
             let key = curse_key()?;
             let url = format!("{CURSEFORGE_API}/mods/{project_id}/files/{version_id}");
             let value = Http::new("official")?.get_json_with_headers(&url, &curse_headers(&key))?;
             let data = value.get("data").unwrap_or(&value);
-            Ok(curseforge_version(project_id, data))
+            Ok(curseforge_version(project_id, kind, data))
         }
     }
 }
@@ -632,12 +711,18 @@ fn resolve_dependency(
     loader: Loader,
 ) -> Result<Option<(Option<Project>, Option<Version>)>> {
     cancel::check()?;
-    let project = project(dependency.source, &dependency.project_id).ok();
+    let project = project(dependency.source, &dependency.project_id, ContentKind::Mod).ok();
     let version = if let Some(version_id) = &dependency.version_id {
-        version_from_id(dependency.source, &dependency.project_id, version_id)?
+        version_from_id(
+            dependency.source,
+            &dependency.project_id,
+            version_id,
+            ContentKind::Mod,
+        )?
     } else {
         let project_ref = project.clone().unwrap_or(Project {
             source: dependency.source,
+            kind: ContentKind::Mod,
             id: dependency.project_id.clone(),
             slug: String::new(),
             name: dependency.name.clone().unwrap_or_default(),
@@ -844,7 +929,7 @@ mod tests {
             "fileLength": 10,
             "dependencies": [required, optional, embedded, incompatible]
         });
-        let version = curseforge_version("42", &item).unwrap();
+        let version = curseforge_version("42", ContentKind::Mod, &item).unwrap();
         assert_eq!(version.dependencies.len(), 3);
         assert!(
             version

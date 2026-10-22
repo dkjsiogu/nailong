@@ -4,6 +4,7 @@ pub mod cancel;
 pub mod error;
 pub mod http;
 pub mod install;
+pub mod installed;
 pub mod java;
 pub mod launch;
 pub mod manifest;

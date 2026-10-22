@@ -2,6 +2,7 @@
 
 use eframe::egui;
 use nailong_core::install::{catalog, fabric, forge, health, modpack, neoforge, vanilla};
+use nailong_core::installed;
 use nailong_core::launch::{self, LaunchOptions};
 use nailong_core::mods;
 use nailong_core::progress::{Progress, Sink, from_fn};
@@ -118,6 +119,7 @@ enum Msg {
     InstallCancelled,
     ModsSearch {
         query: String,
+        offset: usize,
         result: Result<mods::SearchPage, String>,
     },
     ModsVersions {
@@ -131,6 +133,8 @@ enum Msg {
     ModsDone(String),
     ModsFailed(String),
     ModsCancelled,
+    ModsInstalled(Result<Vec<installed::InstalledEntry>, String>),
+    ModsUpdates(Result<Vec<installed::UpdateCandidate>, String>),
     LaunchDone(i32),
     LaunchFailed(String),
 }
@@ -151,8 +155,15 @@ struct App {
     mods_game_dir: Option<PathBuf>,
     mods_query: String,
     mods_source: Option<mods::Source>,
+    mods_kind: mods::ContentKind,
+    mods_show_installed: bool,
+    mods_installed_loading: bool,
+    mods_installed: Vec<installed::InstalledEntry>,
+    mods_updates_loading: bool,
+    mods_updates: Vec<installed::UpdateCandidate>,
     mods_results: Vec<mods::Project>,
     mods_total: u64,
+    mods_offset: usize,
     mods_warnings: Vec<String>,
     mods_loading: bool,
     mods_selected: Option<mods::Project>,
@@ -204,8 +215,15 @@ impl App {
             mods_game_dir: None,
             mods_query: String::new(),
             mods_source: None,
+            mods_kind: mods::ContentKind::Mod,
+            mods_show_installed: false,
+            mods_installed_loading: false,
+            mods_installed: Vec::new(),
+            mods_updates_loading: false,
+            mods_updates: Vec::new(),
             mods_results: Vec::new(),
             mods_total: 0,
+            mods_offset: 0,
             mods_warnings: Vec::new(),
             mods_loading: false,
             mods_selected: None,
@@ -593,22 +611,29 @@ impl App {
             return;
         }
         let Some(row) = self.selected_row() else {
-            self.error = Some("先安装一个 Fabric / NeoForge / Forge 版本".into());
+            self.error = Some("先安装一个 Minecraft 版本".into());
             return;
         };
-        if mod_loader(row.loader).is_none() {
-            self.error = Some("原版没有 mods 目录，请先安装 Fabric / NeoForge / Forge".into());
-            return;
-        }
         let game_dir = row
             .game_dir
             .clone()
             .unwrap_or_else(|| self.root.version_dir(&row.profile));
+        let kind = if mod_loader(row.loader).is_some() {
+            mods::ContentKind::Mod
+        } else {
+            mods::ContentKind::ResourcePack
+        };
         self.mods_row = Some(row);
         self.mods_game_dir = Some(game_dir);
         self.show_mods = true;
         self.show_install = false;
         self.show_manage = false;
+        self.mods_kind = kind;
+        self.mods_show_installed = false;
+        self.mods_installed.clear();
+        self.mods_installed_loading = false;
+        self.mods_updates_loading = false;
+        self.mods_updates.clear();
         self.mods_query.clear();
         self.mods_source = None;
         self.mods_results.clear();
@@ -635,37 +660,225 @@ impl App {
         self.mods_rx = None;
         self.mods_loading = false;
         self.mods_deps_loading = false;
+        self.mods_show_installed = false;
+        self.mods_installed.clear();
+        self.mods_installed_loading = false;
+        self.mods_updates.clear();
+        self.mods_updates_loading = false;
         self.mods_notice = None;
         self.mods_error = None;
     }
 
-    fn start_mods_search(&mut self) {
+    fn import_local_mod(&mut self, path: PathBuf) {
+        if self.busy.is_some() {
+            self.error = Some("正在安装，请等当前任务结束".into());
+            return;
+        }
+        let Some(row) = self.selected_row() else {
+            self.error = Some("先选择一个 Fabric / NeoForge / Forge 版本".into());
+            return;
+        };
+        if mod_loader(row.loader).is_none() {
+            self.error = Some("原版不能安装 Mod".into());
+            return;
+        }
+        let game_dir = row
+            .game_dir
+            .clone()
+            .unwrap_or_else(|| self.root.version_dir(&row.profile));
+        if row.instance.is_none() {
+            if let Err(e) = std::fs::create_dir_all(&game_dir) {
+                self.error = Some(format!("创建版本目录失败: {e}"));
+                return;
+            }
+            if let Err(e) = std::fs::write(self.root.isolated_marker(&row.profile), b"1") {
+                self.error = Some(format!("启用版本隔离失败: {e}"));
+                return;
+            }
+        }
+        match installed::import_local(&game_dir, mods::ContentKind::Mod, &path) {
+            Ok(entry) => {
+                self.notice = Some(format!("已导入 {}", entry.name));
+                self.error = None;
+                self.refresh();
+            }
+            Err(e) => self.error = Some(e.to_string()),
+        }
+    }
+
+    fn start_mods_scan(&mut self) {
+        let Some(game_dir) = self.mods_game_dir.clone() else {
+            return;
+        };
+        self.mods_installed_loading = true;
+        self.mods_error = None;
+        let (tx, rx) = mpsc::channel();
+        self.mods_rx = Some(rx);
+        std::thread::spawn(move || {
+            let result = installed::scan_all(&game_dir)
+                .map(|index| index.entries)
+                .map_err(|e| e.to_string());
+            let _ = tx.send(Msg::ModsInstalled(result));
+        });
+    }
+
+    fn start_mods_update_check(&mut self) {
         let Some(row) = self.mods_row.clone() else {
             return;
         };
-        let Some(loader) = mod_loader(row.loader) else {
+        let kind = self.mods_kind;
+        let loader = mod_loader(row.loader).unwrap_or(mods::Loader::Fabric);
+        let entries: Vec<_> = self
+            .mods_installed
+            .iter()
+            .filter(|entry| {
+                entry.kind == kind && entry.source.is_some() && entry.project_id.is_some()
+            })
+            .cloned()
+            .collect();
+        if entries.is_empty() {
+            self.mods_notice = Some("没有可检查更新的在线来源内容".into());
+            return;
+        }
+        self.mods_updates_loading = true;
+        self.mods_error = None;
+        let (tx, rx) = mpsc::channel();
+        self.mods_rx = Some(rx);
+        let mc = row.mc.clone();
+        std::thread::spawn(move || {
+            let mut updates = Vec::new();
+            for entry in entries {
+                if let Ok(Some(candidate)) = installed::check_update(&entry, &mc, loader) {
+                    updates.push(candidate);
+                }
+            }
+            let _ = tx.send(Msg::ModsUpdates(Ok(updates)));
+        });
+    }
+
+    fn start_mods_update(&mut self, candidates: Vec<installed::UpdateCandidate>) {
+        if self.busy.is_some() || candidates.is_empty() {
+            return;
+        }
+        let Some(game_dir) = self.mods_game_dir.clone() else {
             return;
         };
+        let Some(row) = self.mods_row.clone() else {
+            return;
+        };
+        let kind = self.mods_kind;
+        let loader = mod_loader(row.loader).unwrap_or(mods::Loader::Fabric);
+        let mc = row.mc.clone();
+        let dir = game_dir.join(kind.folder());
+        cancel::reset();
+        self.cancel_requested = false;
+        self.busy = Some(Task::Mods);
+        self.progress = Some(Progress::stage("更新内容"));
+        self.progress_label = format!("{} 个更新", candidates.len());
+        let (tx, rx) = mpsc::channel();
+        self.rx = Some(rx);
+        let tx = Arc::new(Mutex::new(tx));
+        let sink: Sink = {
+            let tx = tx.clone();
+            from_fn(move |p| {
+                if let Ok(tx) = tx.lock() {
+                    let _ = tx.send(Msg::Progress(p));
+                }
+            })
+        };
+        std::thread::spawn(move || {
+            let old_entries = installed::load(&game_dir).entries;
+            let empty = BTreeSet::new();
+            let mut updated = 0usize;
+            let mut error = None;
+            for candidate in candidates {
+                if cancel::is_cancelled() {
+                    error = Some(Error::Cancelled);
+                    break;
+                }
+                let plan = match mods::plan(&candidate.latest, &mc, loader, &empty) {
+                    Ok(plan) => plan,
+                    Err(e) => {
+                        error = Some(e);
+                        break;
+                    }
+                };
+                if mods::download_plan(&dir, &plan, true, &sink).is_err() {
+                    error = Some(Error::Install("下载更新失败".into()));
+                    break;
+                }
+                if installed::record_versions(&game_dir, kind, &plan).is_err() {
+                    error = Some(Error::Install("写入内容索引失败".into()));
+                    break;
+                }
+                for version in &plan {
+                    for entry in old_entries.iter().filter(|entry| {
+                        entry.source == Some(version.source)
+                            && entry.project_id.as_deref() == Some(version.project_id.as_str())
+                            && entry.file != version.file_name
+                    }) {
+                        let _ = installed::remove(&game_dir, entry);
+                    }
+                }
+                updated += 1;
+            }
+            let msg = match error {
+                Some(Error::Cancelled) => Msg::ModsCancelled,
+                Some(e) => Msg::ModsFailed(e.to_string()),
+                None => Msg::ModsDone(format!("已更新 {updated} 个项目")),
+            };
+            if let Ok(tx) = tx.lock() {
+                let _ = tx.send(msg);
+            }
+        });
+    }
+
+    fn start_mods_search(&mut self) {
+        self.start_mods_search_at(0);
+    }
+
+    fn start_mods_search_more(&mut self) {
+        let offset = self.mods_results.len();
+        self.start_mods_search_at(offset);
+    }
+
+    fn start_mods_search_at(&mut self, offset: usize) {
+        let Some(row) = self.mods_row.clone() else {
+            return;
+        };
+        let loader = mod_loader(row.loader);
         let query = self.mods_query.trim().to_string();
+        let kind = self.mods_kind;
+        if kind == mods::ContentKind::Mod && loader.is_none() {
+            self.mods_error = Some("原版不能安装 Mod，请切到资源包或光影".into());
+            return;
+        }
         self.mods_loading = true;
         self.mods_error = None;
         self.mods_notice = None;
-        self.mods_warnings.clear();
-        self.mods_results.clear();
-        self.mods_total = 0;
-        self.mods_selected = None;
-        self.mods_versions.clear();
-        self.mods_version = None;
-        self.mods_choices.clear();
-        self.mods_optional.clear();
+        if offset == 0 {
+            self.mods_warnings.clear();
+            self.mods_results.clear();
+            self.mods_total = 0;
+            self.mods_offset = 0;
+            self.mods_selected = None;
+            self.mods_versions.clear();
+            self.mods_version = None;
+            self.mods_choices.clear();
+            self.mods_optional.clear();
+        }
         let source = self.mods_source;
         let mc = row.mc.clone();
         let (tx, rx) = mpsc::channel();
         self.mods_rx = Some(rx);
         std::thread::spawn(move || {
-            let result =
-                mods::search(&query, source, &mc, loader, 0, 20).map_err(|e| e.to_string());
-            let _ = tx.send(Msg::ModsSearch { query, result });
+            let result = mods::search(&query, source, &mc, loader, kind, offset, 20)
+                .map_err(|e| e.to_string());
+            let _ = tx.send(Msg::ModsSearch {
+                query,
+                offset,
+                result,
+            });
         });
     }
 
@@ -673,9 +886,7 @@ impl App {
         let Some(row) = self.mods_row.clone() else {
             return;
         };
-        let Some(loader) = mod_loader(row.loader) else {
-            return;
-        };
+        let loader = mod_loader(row.loader).unwrap_or(mods::Loader::Fabric);
         self.mods_selected = Some(project.clone());
         self.mods_versions.clear();
         self.mods_version = None;
@@ -701,9 +912,7 @@ impl App {
         let Some(row) = self.mods_row.clone() else {
             return;
         };
-        let Some(loader) = mod_loader(row.loader) else {
-            return;
-        };
+        let loader = mod_loader(row.loader).unwrap_or(mods::Loader::Fabric);
         self.mods_version = Some(version.clone());
         self.mods_choices.clear();
         self.mods_optional.clear();
@@ -730,9 +939,11 @@ impl App {
         let Some(row) = self.mods_row.clone() else {
             return;
         };
-        let Some(loader) = mod_loader(row.loader) else {
+        let loader = mod_loader(row.loader).unwrap_or(mods::Loader::Fabric);
+        if self.mods_kind == mods::ContentKind::Mod && mod_loader(row.loader).is_none() {
+            self.mods_error = Some("原版不能安装 Mod，请切到资源包或光影".into());
             return;
-        };
+        }
         let Some(version) = self.mods_version.clone() else {
             self.mods_error = Some("先选择一个 Mod 版本".into());
             return;
@@ -761,7 +972,8 @@ impl App {
             self.mods_error = Some("目标目录无效".into());
             return;
         };
-        let mods_dir = game_dir.join("mods");
+        let kind = self.mods_kind;
+        let mods_dir = game_dir.join(kind.folder());
         if let Err(e) = std::fs::create_dir_all(&mods_dir) {
             self.mods_error = Some(format!("创建 mods 目录失败: {e}"));
             return;
@@ -780,7 +992,10 @@ impl App {
         self.busy = Some(Task::Mods);
         self.mods_error = None;
         self.mods_notice = None;
-        self.progress = Some(Progress::stage("解析 Mod 依赖"));
+        self.progress = Some(Progress::stage(format!(
+            "解析{}依赖",
+            self.mods_kind.label()
+        )));
         self.progress_label = version.file_name.clone();
         let optional = self.mods_optional.clone();
         let mc = row.mc.clone();
@@ -796,8 +1011,13 @@ impl App {
             })
         };
         std::thread::spawn(move || {
-            let result = mods::plan(&version, &mc, loader, &optional)
-                .and_then(|plan| mods::download_plan(&mods_dir, &plan, false, &sink));
+            let result = mods::plan(&version, &mc, loader, &optional).and_then(|plan| {
+                let report = mods::download_plan(&mods_dir, &plan, false, &sink)?;
+                if let Some(game_dir) = mods_dir.parent() {
+                    installed::record_versions(game_dir, kind, &plan)?;
+                }
+                Ok(report)
+            });
             let msg = match result {
                 Ok(report) => Msg::ModsDone(format!(
                     "已下载 {} 个文件，跳过 {} 个已存在文件",
@@ -898,7 +1118,11 @@ impl App {
                     self.log.push("安装已取消".into());
                     self.refresh();
                 }
-                Msg::ModsSearch { query, result } => {
+                Msg::ModsSearch {
+                    query,
+                    offset,
+                    result,
+                } => {
                     self.mods_loading = false;
                     self.mods_rx = None;
                     if query != self.mods_query.trim() {
@@ -906,8 +1130,20 @@ impl App {
                     }
                     match result {
                         Ok(page) => {
-                            self.mods_results = page.hits;
-                            self.mods_total = page.total;
+                            if offset == 0 {
+                                self.mods_results = page.hits;
+                            } else {
+                                for project in page.hits {
+                                    if !self.mods_results.iter().any(|existing| {
+                                        existing.source == project.source
+                                            && existing.id == project.id
+                                    }) {
+                                        self.mods_results.push(project);
+                                    }
+                                }
+                            }
+                            self.mods_offset = self.mods_results.len();
+                            self.mods_total = page.total.max(self.mods_offset as u64);
                             self.mods_warnings = page.warnings;
                             self.mods_error = None;
                         }
@@ -958,6 +1194,9 @@ impl App {
                     self.mods_notice = Some(note);
                     self.mods_error = None;
                     self.refresh();
+                    if self.show_mods && self.mods_show_installed {
+                        self.start_mods_scan();
+                    }
                 }
                 Msg::ModsFailed(e) => {
                     self.busy = None;
@@ -973,6 +1212,31 @@ impl App {
                     self.rx = None;
                     self.mods_notice = Some("Mod 下载已取消".into());
                     self.mods_error = None;
+                }
+                Msg::ModsInstalled(inst) => {
+                    self.mods_installed_loading = false;
+                    self.mods_rx = None;
+                    match inst {
+                        Ok(entries) => {
+                            self.mods_installed = entries;
+                            self.mods_updates.clear();
+                            self.mods_error = None;
+                        }
+                        Err(e) => self.mods_error = Some(e),
+                    }
+                }
+                Msg::ModsUpdates(updates) => {
+                    self.mods_updates_loading = false;
+                    self.mods_rx = None;
+                    match updates {
+                        Ok(updates) => {
+                            self.mods_updates = updates;
+                            self.mods_error = None;
+                            self.mods_notice =
+                                Some(format!("检查完成，{} 个可更新", self.mods_updates.len()));
+                        }
+                        Err(e) => self.mods_error = Some(e),
+                    }
                 }
                 Msg::LaunchDone(code) => {
                     self.busy = None;
@@ -995,9 +1259,7 @@ impl App {
     }
 
     fn top_bar(&mut self, ui: &mut egui::Ui) {
-        let can_mods = self
-            .selected_row()
-            .is_some_and(|row| mod_loader(row.loader).is_some());
+        let can_mods = self.selected_row().is_some();
         egui::Panel::top("top")
             .default_size(64.0)
             .frame(egui::Frame::new().fill(PANEL))
@@ -1028,7 +1290,7 @@ impl App {
                         } else if self.busy.is_none() && !self.show_install {
                             if can_mods {
                                 ui.add_space(4.0);
-                                if ghost_button(ui, "下载 Mod").clicked() {
+                                if ghost_button(ui, "下载中心").clicked() {
                                     self.open_mods();
                                 }
                             }
@@ -1217,7 +1479,59 @@ impl App {
                     ui.add_space(pad);
                     ui.vertical(|ui| {
                         ui.set_width(width);
-                        ui.label(egui::RichText::new("下载 Mod").size(28.0).strong());
+                        ui.label(egui::RichText::new("下载中心").size(28.0).strong());
+                        ui.add_space(8.0);
+                        let mut kind = self.mods_kind;
+                        ui.horizontal(|ui| {
+                            for candidate in [
+                                mods::ContentKind::Mod,
+                                mods::ContentKind::ResourcePack,
+                                mods::ContentKind::Shader,
+                            ] {
+                                if ui
+                                    .selectable_label(kind == candidate, candidate.label())
+                                    .clicked()
+                                {
+                                    kind = candidate;
+                                }
+                            }
+                        });
+                        if kind != self.mods_kind {
+                            self.mods_kind = kind;
+                            self.mods_selected = None;
+                            self.mods_results.clear();
+                            self.mods_versions.clear();
+                            self.mods_version = None;
+                            self.mods_choices.clear();
+                            self.mods_optional.clear();
+                            self.mods_total = 0;
+                            self.mods_offset = 0;
+                            self.mods_notice = None;
+                            self.mods_error = None;
+                            if !self.mods_query.trim().is_empty() {
+                                self.start_mods_search();
+                            }
+                        }
+                        ui.horizontal(|ui| {
+                            if ui
+                                .selectable_label(!self.mods_show_installed, "搜索")
+                                .clicked()
+                            {
+                                self.mods_show_installed = false;
+                            }
+                            if ui
+                                .selectable_label(self.mods_show_installed, "已安装")
+                                .clicked()
+                                && !self.mods_show_installed
+                            {
+                                self.mods_show_installed = true;
+                                self.start_mods_scan();
+                            }
+                        });
+                        if self.mods_show_installed {
+                            self.installed_view(ui);
+                            return;
+                        }
                         if let Some(row) = &self.mods_row {
                             ui.add_space(4.0);
                             ui.label(
@@ -1331,6 +1645,21 @@ impl App {
                                 });
                             if let Some(project) = chosen {
                                 self.select_mods_project(project);
+                            }
+                            if !self.mods_loading
+                                && (self.mods_results.len() as u64) < self.mods_total
+                            {
+                                ui.add_space(6.0);
+                                if ui
+                                    .button(format!(
+                                        "加载更多（{}/{}）",
+                                        self.mods_results.len(),
+                                        self.mods_total
+                                    ))
+                                    .clicked()
+                                {
+                                    self.start_mods_search_more();
+                                }
                             }
                         }
 
@@ -1545,6 +1874,178 @@ impl App {
                     });
                 });
             });
+    }
+
+    fn installed_view(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(14.0);
+        let Some(game_dir) = self.mods_game_dir.clone() else {
+            return;
+        };
+        let kind = self.mods_kind;
+        ui.horizontal(|ui| {
+            if ui.button("导入本地文件").clicked()
+                && let Some(path) = pick_content_file(kind)
+            {
+                match installed::import_local(&game_dir, kind, &path) {
+                    Ok(entry) => {
+                        self.mods_notice = Some(format!("已导入 {}", entry.name));
+                        self.mods_error = None;
+                        self.start_mods_scan();
+                    }
+                    Err(e) => self.mods_error = Some(e.to_string()),
+                }
+            }
+            if ui.button("重新扫描").clicked() {
+                self.start_mods_scan();
+            }
+            if ui.button("检查更新").clicked() {
+                self.start_mods_update_check();
+            }
+            if !self.mods_updates.is_empty()
+                && ui
+                    .button(format!("全部更新 ({})", self.mods_updates.len()))
+                    .clicked()
+            {
+                let candidates = self.mods_updates.clone();
+                self.start_mods_update(candidates);
+            }
+        });
+        if self.mods_updates_loading {
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(egui::RichText::new("检查版本更新…").color(MUTED));
+            });
+        }
+        if self.mods_installed_loading {
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(egui::RichText::new("扫描内容目录…").color(MUTED));
+            });
+            return;
+        }
+        if let Some(note) = &self.mods_notice {
+            ui.add_space(6.0);
+            ui.label(
+                egui::RichText::new(note)
+                    .size(12.0)
+                    .color(egui::Color32::from_rgb(120, 190, 140)),
+            );
+        }
+        if let Some(err) = &self.mods_error {
+            ui.add_space(6.0);
+            ui.label(
+                egui::RichText::new(err)
+                    .size(12.0)
+                    .color(egui::Color32::from_rgb(230, 120, 110)),
+            );
+        }
+        let entries: Vec<installed::InstalledEntry> = self
+            .mods_installed
+            .iter()
+            .filter(|entry| entry.kind == kind)
+            .cloned()
+            .collect();
+        if entries.is_empty() {
+            ui.add_space(12.0);
+            ui.label(
+                egui::RichText::new(format!("{}目录里还没有内容。", kind.label())).color(MUTED),
+            );
+            return;
+        }
+        let groups = installed::duplicates(&entries);
+        if !groups.is_empty() {
+            ui.add_space(8.0);
+            for (key, items) in groups {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "重复项目 {key}: {}",
+                        items
+                            .iter()
+                            .map(|entry| entry.file.clone())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ))
+                    .size(11.5)
+                    .color(WARN),
+                );
+            }
+        }
+        if !self.mods_updates.is_empty() {
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new("可用更新").size(14.0).strong());
+            let updates = self.mods_updates.clone();
+            for candidate in &updates {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{} → {}",
+                            candidate.entry.name, candidate.latest.version_number
+                        ))
+                        .size(12.0),
+                    );
+                    if ui.button("更新").clicked() {
+                        self.start_mods_update(vec![candidate.clone()]);
+                    }
+                });
+            }
+        }
+        ui.add_space(10.0);
+        for entry in entries {
+            card().show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let mut enabled = entry.enabled;
+                    if ui.checkbox(&mut enabled, "").changed() {
+                        let mut copy = entry.clone();
+                        match installed::set_enabled(&game_dir, &mut copy, enabled) {
+                            Ok(()) => {
+                                self.mods_notice = Some(format!(
+                                    "{} {}",
+                                    if enabled { "已启用" } else { "已禁用" },
+                                    entry.name
+                                ));
+                                self.mods_error = None;
+                                self.start_mods_scan();
+                            }
+                            Err(e) => self.mods_error = Some(e.to_string()),
+                        }
+                    }
+                    ui.label(egui::RichText::new(&entry.name).size(14.0).strong());
+                    ui.label(egui::RichText::new(&entry.file).size(10.5).color(MUTED));
+                    if !entry.enabled {
+                        ui.label(egui::RichText::new("已禁用").size(10.5).color(WARN));
+                    }
+                    if ui.button("删除").clicked() {
+                        match installed::remove(&game_dir, &entry) {
+                            Ok(()) => {
+                                self.mods_notice = Some(format!("已删除 {}", entry.name));
+                                self.mods_error = None;
+                                self.start_mods_scan();
+                            }
+                            Err(e) => self.mods_error = Some(e.to_string()),
+                        }
+                    }
+                });
+                let mut meta = Vec::new();
+                if let Some(source) = entry.source {
+                    meta.push(source.label().to_string());
+                }
+                if let Some(version) = &entry.version_number {
+                    meta.push(version.clone());
+                }
+                if let Some(id) = &entry.mod_id {
+                    meta.push(format!("modId={id}"));
+                }
+                if !meta.is_empty() {
+                    ui.label(
+                        egui::RichText::new(meta.join(" · "))
+                            .size(10.5)
+                            .color(MUTED),
+                    );
+                }
+            });
+        }
     }
 
     fn manage_view(&mut self, ui: &mut egui::Ui) {
@@ -1965,16 +2466,19 @@ impl eframe::App for App {
                     ext.eq_ignore_ascii_case("mrpack") || ext.eq_ignore_ascii_case("zip")
                 })
                 .unwrap_or(false);
+            let is_mod = path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("jar"));
             if is_pack {
                 if self.busy.is_none() {
                     self.start_modpack(path);
                 } else {
                     self.error = Some("正在安装，请等当前任务结束".into());
                 }
+            } else if is_mod {
+                self.import_local_mod(path);
             } else {
-                self.error = Some(
-                    "支持 Modrinth / CurseForge / Prism / HMCL / ATLauncher / MCBBS 整合包".into(),
-                );
+                self.error = Some("支持整合包 .mrpack/.zip，或单个 Mod .jar".into());
             }
         }
         if self.busy.is_some() || self.mods_rx.is_some() {
@@ -2287,6 +2791,16 @@ fn ghost_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
             .corner_radius(8)
             .min_size(egui::vec2(72.0, 30.0)),
     )
+}
+
+fn pick_content_file(kind: mods::ContentKind) -> Option<PathBuf> {
+    let dialog = rfd::FileDialog::new().set_title(format!("选择{}文件", kind.label()));
+    match kind {
+        mods::ContentKind::Mod => dialog.add_filter("Mod", &["jar"]).pick_file(),
+        mods::ContentKind::ResourcePack | mods::ContentKind::Shader => {
+            dialog.add_filter("内容包", &["zip", "jar"]).pick_file()
+        }
+    }
 }
 
 fn pick_modpack() -> Option<PathBuf> {
