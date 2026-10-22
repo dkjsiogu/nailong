@@ -76,8 +76,8 @@ nailong 的思路很直：
 
 | 平台 | 文件 | 大小 | 要求 |
 |---|---|---:|---|
-| Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | 约 7.7 MB | Windows 10/11，Java 21 |
-| Linux x64 (deb) | [nailong_0.9.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.9.0_amd64.deb) | 约 3.2 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
+| Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | 约 7.8 MB | Windows 10/11，Java 21 |
+| Linux x64 (deb) | [nailong_0.9.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.9.0_amd64.deb) | 约 3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
 
 校验值：[SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS)。
 

@@ -76,8 +76,8 @@ Drag a `.mrpack` or `.zip` into the window to start an import. A single mod `.ja
 
 | Platform | File | Size | Requirements |
 |---|---|---:|---|
-| Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | ~7.7 MB | Windows 10/11, Java 21 |
-| Linux x64 (deb) | [nailong_0.9.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.9.0_amd64.deb) | ~3.2 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
+| Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | ~7.8 MB | Windows 10/11, Java 21 |
+| Linux x64 (deb) | [nailong_0.9.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.9.0_amd64.deb) | ~3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
 
 Checksums: [SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS).
 
