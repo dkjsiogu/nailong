@@ -25,6 +25,11 @@
   <url type="bugtracker">https://github.com/dkjsiogu/nailong/issues</url>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.11.2" date="2026-10-23">
+      <description>
+        <p>Category chips are capped at twelve with a “more categories” toggle, so the browse header stays compact.</p>
+      </description>
+    </release>
     <release version="0.11.1" date="2026-10-23">
       <description>
         <p>Only top-level CurseForge categories are shown as chips by default, keeping the browse header compact.</p>

@@ -184,6 +184,7 @@ struct App {
     mods_browse_loading: bool,
     mods_category: Option<mods::CategoryFilter>,
     mods_source_filter: Option<mods::Source>,
+    mods_chips_expanded: bool,
     cf_categories: HashMap<mods::ContentKind, Vec<mods::CurseCategory>>,
     cf_loading: HashSet<mods::ContentKind>,
     cf_rx: Option<mpsc::Receiver<CfCategoryFetch>>,
@@ -269,6 +270,7 @@ impl App {
             mods_browse_loading: false,
             mods_category: None,
             mods_source_filter: None,
+            mods_chips_expanded: false,
             cf_categories: HashMap::new(),
             cf_loading: HashSet::new(),
             cf_rx: None,
@@ -721,6 +723,7 @@ impl App {
         self.mods_browse_loading = false;
         self.mods_category = None;
         self.mods_source_filter = None;
+        self.mods_chips_expanded = false;
         self.mods_shelf = None;
         self.mods_searching = false;
         self.mods_quick = None;
@@ -2152,17 +2155,37 @@ impl App {
         }
 
         let chips = self.browse_chips();
+        const COLLAPSED_CHIPS: usize = 12;
+        let shown = if self.mods_chips_expanded {
+            chips.len()
+        } else {
+            chips.len().min(COLLAPSED_CHIPS)
+        };
         let mut wanted: Option<Option<mods::CategoryFilter>> = None;
+        let mut toggle_chips = false;
         ui.horizontal_wrapped(|ui| {
             if chip(ui, "全部", self.mods_category.is_none()).clicked() {
                 wanted = Some(None);
             }
-            for (label, filter) in &chips {
+            for (label, filter) in chips.iter().take(shown) {
                 if chip(ui, label, self.mods_category == *filter).clicked() {
                     wanted = Some(*filter);
                 }
             }
+            if chips.len() > COLLAPSED_CHIPS {
+                let label = if self.mods_chips_expanded {
+                    "收起".to_string()
+                } else {
+                    format!("更多品类 +{}", chips.len() - COLLAPSED_CHIPS)
+                };
+                if chip(ui, &label, false).clicked() {
+                    toggle_chips = true;
+                }
+            }
         });
+        if toggle_chips {
+            self.mods_chips_expanded = !self.mods_chips_expanded;
+        }
         if let Some(category) = wanted
             && category != self.mods_category
         {
