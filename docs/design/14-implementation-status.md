@@ -1,7 +1,7 @@
-# 14 · 原型实现状态（0.1 → 0.11.0）
+# 14 · 原型实现状态（0.1 → 0.11.1）
 
 > 日期：2026-10-23
-> 对应发布：GitHub Release `v0.11.0` 的 `nailong.exe`、`nailong_0.11.0_amd64.deb`
+> 对应发布：GitHub Release `v0.11.1` 的 `nailong.exe`、`nailong_0.11.1_amd64.deb`
 > 目的：把「设计稿」和「已经跑起来的代码」分开记账，避免把计划当成已完成。
 
 ## 1. 一句话结论
@@ -80,7 +80,7 @@
 | 大文件分段下载 | `core::http` | 完成 | client jar 4 段并行、段续传、源回退 |
 | 重复安装快速路径 | `core::install::forge` / `neoforge` | 完成 | health 通过则 0 下载、0 processor |
 | Windows 交叉编译 | `x86_64-pc-windows-gnu` | 通过 | 无 MinGW DLL 依赖，仅系统 DLL |
-| 发布包 | GitHub Release `v0.11.0` | 完成（CI 构建） | 单 exe 约 8 MB / deb 约 3.3 MB |
+| 发布包 | GitHub Release `v0.11.1` | 完成（CI 构建） | 单 exe 约 8 MB / deb 约 3.3 MB |
 
 ### 2.1 实测记录
 

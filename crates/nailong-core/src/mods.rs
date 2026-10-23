@@ -294,6 +294,8 @@ pub struct CurseCategory {
     pub name: String,
     pub slug: String,
     pub display_index: i64,
+    /// 子品类会带上父品类 id；界面默认只显示顶层品类，避免一次铺三四十个胶囊。
+    pub parent: Option<u32>,
 }
 
 /// 拉 CurseForge 的真实品类树，界面直接用它当胶囊。
@@ -334,6 +336,10 @@ fn curse_category(value: &Value) -> Option<CurseCategory> {
             .get("displayIndex")
             .and_then(|v| v.as_i64())
             .unwrap_or_default(),
+        parent: value
+            .get("parentCategoryId")
+            .and_then(|v| v.as_u64())
+            .and_then(|id| id.try_into().ok()),
     })
 }
 
@@ -1356,13 +1362,22 @@ mod tests {
             "id": 447,
             "name": "Technology",
             "slug": "technology",
-            "displayIndex": 3
+            "displayIndex": 3,
+            "parentCategoryId": null
         });
         let category = curse_category(&value).unwrap();
         assert_eq!(category.id, 447);
         assert_eq!(category.name, "Technology");
         assert_eq!(category.slug, "technology");
         assert_eq!(category.display_index, 3);
+        assert!(category.parent.is_none());
+        let child = serde_json::json!({
+            "id": 448,
+            "name": "Tech Sub",
+            "slug": "tech-sub",
+            "parentCategoryId": 447
+        });
+        assert_eq!(curse_category(&child).unwrap().parent, Some(447));
     }
 
     #[test]

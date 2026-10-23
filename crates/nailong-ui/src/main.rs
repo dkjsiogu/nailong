@@ -1176,7 +1176,14 @@ impl App {
         if let Some(items) = self.cf_categories.get(&kind)
             && !items.is_empty()
         {
-            for category in items {
+            let top: Vec<&mods::CurseCategory> =
+                items.iter().filter(|item| item.parent.is_none()).collect();
+            let picked: Vec<&mods::CurseCategory> = if top.len() >= 4 {
+                top
+            } else {
+                items.iter().collect()
+            };
+            for category in picked {
                 let alias = mods::category_alias(&category.slug, &category.name);
                 let label = alias
                     .map(|a| a.0.to_string())
