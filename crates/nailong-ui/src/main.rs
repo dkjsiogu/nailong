@@ -7,7 +7,7 @@ use nailong_core::launch::{self, LaunchOptions};
 use nailong_core::mods;
 use nailong_core::progress::{Progress, Sink, from_fn};
 use nailong_core::{Error, Root, cancel, java};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
@@ -18,6 +18,7 @@ const PANEL: egui::Color32 = egui::Color32::from_rgb(20, 22, 27);
 const LINE: egui::Color32 = egui::Color32::from_rgb(42, 46, 56);
 const MUTED: egui::Color32 = egui::Color32::from_rgb(145, 148, 156);
 const WARN: egui::Color32 = egui::Color32::from_rgb(242, 160, 90);
+const OK: egui::Color32 = egui::Color32::from_rgb(120, 190, 140);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum LoaderKind {
@@ -135,8 +136,23 @@ enum Msg {
     ModsCancelled,
     ModsInstalled(Result<Vec<installed::InstalledEntry>, String>),
     ModsUpdates(Result<Vec<installed::UpdateCandidate>, String>),
+    Browse {
+        kind: mods::ContentKind,
+        category: Option<usize>,
+        result: Result<Vec<Shelf>, String>,
+    },
     LaunchDone(i32),
     LaunchFailed(String),
+}
+
+/// 浏览页的一排内容：热门 / 最新。
+struct Shelf {
+    title: &'static str,
+    projects: Vec<mods::Project>,
+}
+
+fn project_key(project: &mods::Project) -> String {
+    format!("{:?}:{}", project.source, project.id)
 }
 
 struct App {
@@ -154,8 +170,17 @@ struct App {
     mods_row: Option<Row>,
     mods_game_dir: Option<PathBuf>,
     mods_query: String,
-    mods_source: Option<mods::Source>,
     mods_kind: mods::ContentKind,
+    mods_browse: Vec<Shelf>,
+    mods_browse_loading: bool,
+    mods_category: Option<usize>,
+    mods_searching: bool,
+    mods_quick: Option<String>,
+    mods_icons: HashMap<String, egui::TextureHandle>,
+    mods_icons_pending: HashSet<String>,
+    icon_jobs: mpsc::Sender<(String, String)>,
+    icon_rx: mpsc::Receiver<(String, Vec<u8>)>,
+    mods_installed_keys: HashSet<String>,
     mods_show_installed: bool,
     mods_installed_loading: bool,
     mods_installed: Vec<installed::InstalledEntry>,
@@ -199,6 +224,17 @@ struct App {
 impl App {
     fn new(root: Root) -> Self {
         let java_ok = java::find_all().iter().any(|j| j.major >= 21);
+        let (icon_jobs, icon_job_rx) = mpsc::channel::<(String, String)>();
+        let (icon_done, icon_rx) = mpsc::channel::<(String, Vec<u8>)>();
+        std::thread::spawn(move || {
+            while let Ok((key, url)) = icon_job_rx.recv() {
+                if let Ok(bytes) = mods::fetch_icon(&url)
+                    && icon_done.send((key, bytes)).is_err()
+                {
+                    break;
+                }
+            }
+        });
         let mut app = Self {
             root,
             rows: Vec::new(),
@@ -214,8 +250,17 @@ impl App {
             mods_row: None,
             mods_game_dir: None,
             mods_query: String::new(),
-            mods_source: None,
             mods_kind: mods::ContentKind::Mod,
+            mods_browse: Vec::new(),
+            mods_browse_loading: false,
+            mods_category: None,
+            mods_searching: false,
+            mods_quick: None,
+            mods_icons: HashMap::new(),
+            mods_icons_pending: HashSet::new(),
+            icon_jobs,
+            icon_rx,
+            mods_installed_keys: HashSet::new(),
             mods_show_installed: false,
             mods_installed_loading: false,
             mods_installed: Vec::new(),
@@ -256,6 +301,11 @@ impl App {
             catalog_rx: None,
         };
         app.refresh();
+        // 调试钩子：跳过点击直接进下载中心，方便无头冒烟测试（仅 debug 构建）。
+        #[cfg(debug_assertions)]
+        if std::env::var_os("NAILONG_DEBUG_OPEN_MODS").is_some() && app.selected_row().is_some() {
+            app.open_mods();
+        }
         if app.visible_count() == 0 {
             if app.rows.is_empty() {
                 app.open_install();
@@ -635,7 +685,6 @@ impl App {
         self.mods_updates_loading = false;
         self.mods_updates.clear();
         self.mods_query.clear();
-        self.mods_source = None;
         self.mods_results.clear();
         self.mods_total = 0;
         self.mods_warnings.clear();
@@ -649,8 +698,34 @@ impl App {
         self.mods_loading = false;
         self.mods_deps_loading = false;
         self.mods_rx = None;
+        self.mods_browse.clear();
+        self.mods_browse_loading = false;
+        self.mods_category = None;
+        self.mods_searching = false;
+        self.mods_quick = None;
         self.error = None;
         self.notice = None;
+        self.refresh_installed_keys();
+        self.start_browse();
+    }
+
+    /// 只读本地索引，用来在卡片上显示“已装”。比在线扫描快，也不会占用消息通道。
+    fn refresh_installed_keys(&mut self) {
+        let Some(dir) = self.mods_game_dir.clone() else {
+            return;
+        };
+        let index = installed::load(&dir);
+        self.mods_installed_keys = index
+            .entries
+            .iter()
+            .filter_map(|entry| {
+                Some(format!(
+                    "{:?}:{}",
+                    entry.source?,
+                    entry.project_id.as_ref()?
+                ))
+            })
+            .collect();
     }
 
     fn close_mods(&mut self) {
@@ -667,6 +742,12 @@ impl App {
         self.mods_updates_loading = false;
         self.mods_notice = None;
         self.mods_error = None;
+        self.mods_browse.clear();
+        self.mods_browse_loading = false;
+        self.mods_searching = false;
+        self.mods_quick = None;
+        self.mods_icons.clear();
+        self.mods_icons_pending.clear();
     }
 
     fn import_local_mod(&mut self, path: PathBuf) {
@@ -854,6 +935,8 @@ impl App {
             return;
         }
         self.mods_loading = true;
+        self.mods_searching = true;
+        self.mods_browse.clear();
         self.mods_error = None;
         self.mods_notice = None;
         if offset == 0 {
@@ -867,12 +950,11 @@ impl App {
             self.mods_choices.clear();
             self.mods_optional.clear();
         }
-        let source = self.mods_source;
         let mc = row.mc.clone();
         let (tx, rx) = mpsc::channel();
         self.mods_rx = Some(rx);
         std::thread::spawn(move || {
-            let result = mods::search(&query, source, &mc, loader, kind, offset, 20)
+            let result = mods::search(&query, None, &mc, loader, kind, offset, 20)
                 .map_err(|e| e.to_string());
             let _ = tx.send(Msg::ModsSearch {
                 query,
@@ -882,11 +964,205 @@ impl App {
         });
     }
 
+    /// 回到浏览页（清掉搜索态）。
+    fn show_browse(&mut self) {
+        self.mods_searching = false;
+        self.mods_selected = None;
+        self.mods_results.clear();
+        self.mods_total = 0;
+        self.mods_offset = 0;
+        self.mods_query.clear();
+        self.mods_error = None;
+        if self.mods_browse.is_empty() && !self.mods_browse_loading {
+            self.start_browse();
+        }
+    }
+
+    fn switch_mods_kind(&mut self, kind: mods::ContentKind) {
+        if self.mods_kind == kind {
+            return;
+        }
+        self.mods_kind = kind;
+        self.mods_category = None;
+        self.mods_searching = false;
+        self.mods_selected = None;
+        self.mods_results.clear();
+        self.mods_total = 0;
+        self.mods_offset = 0;
+        self.mods_versions.clear();
+        self.mods_version = None;
+        self.mods_choices.clear();
+        self.mods_optional.clear();
+        self.mods_notice = None;
+        self.mods_error = None;
+        self.start_browse();
+    }
+
+    /// 按当前品类拉两排内容：热门 + 最新。
+    fn start_browse(&mut self) {
+        let Some(row) = self.mods_row.clone() else {
+            return;
+        };
+        let kind = self.mods_kind;
+        let loader = mod_loader(row.loader);
+        if kind == mods::ContentKind::Mod && loader.is_none() {
+            self.mods_browse.clear();
+            self.mods_browse_loading = false;
+            self.mods_error =
+                Some("原版不能装 Mod，先装一个 Fabric / NeoForge / Forge 版本".into());
+            return;
+        }
+        let category = self
+            .mods_category
+            .and_then(|index| mods::categories(kind).get(index).copied());
+        let mc = row.mc.clone();
+        self.mods_browse_loading = true;
+        self.mods_browse.clear();
+        self.mods_error = None;
+        let (tx, rx) = mpsc::channel();
+        self.mods_rx = Some(rx);
+        std::thread::spawn(move || {
+            let load =
+                |sort| mods::browse(kind, category, &mc, loader, sort, 0, 9).map(|page| page.hits);
+            let popular = load(mods::Sort::Popular);
+            let newest = load(mods::Sort::Newest);
+            let result = match (popular, newest) {
+                (Ok(popular), Ok(newest)) => Ok(vec![
+                    Shelf {
+                        title: "热门",
+                        projects: popular,
+                    },
+                    Shelf {
+                        title: "最新",
+                        projects: newest,
+                    },
+                ]),
+                (Ok(popular), Err(_)) => Ok(vec![Shelf {
+                    title: "热门",
+                    projects: popular,
+                }]),
+                (Err(e), _) => Err(e.to_string()),
+            };
+            let _ = tx.send(Msg::Browse {
+                kind,
+                category: category.map(|c| {
+                    mods::categories(kind)
+                        .iter()
+                        .position(|x| x.slug == c.slug)
+                        .unwrap_or(0)
+                }),
+                result,
+            });
+        });
+    }
+
+    /// 给还没缓存的卡片排图标下载任务。
+    fn request_icons(&mut self, projects: impl IntoIterator<Item = mods::Project>) {
+        for project in projects {
+            let Some(url) = project.icon_url.clone() else {
+                continue;
+            };
+            let key = project_key(&project);
+            if self.mods_icons.contains_key(&key) || self.mods_icons_pending.contains(&key) {
+                continue;
+            }
+            self.mods_icons_pending.insert(key.clone());
+            let _ = self.icon_jobs.send((key, url));
+        }
+    }
+
+    /// 把后台取回的图标解码成纹理（必须在 UI 线程做）。
+    fn drain_icons(&mut self, ctx: &egui::Context) {
+        let mut got = Vec::new();
+        while let Ok(item) = self.icon_rx.try_recv() {
+            got.push(item);
+        }
+        for (key, bytes) in got {
+            self.mods_icons_pending.remove(&key);
+            let Ok(image) = image::load_from_memory(&bytes) else {
+                continue;
+            };
+            let rgba = image.to_rgba8();
+            let size = [rgba.width() as usize, rgba.height() as usize];
+            let color = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
+            let texture = ctx.load_texture(&key, color, egui::TextureOptions::LINEAR);
+            self.mods_icons.insert(key, texture);
+        }
+    }
+
+    /// 一键安装：不选版本、不点详情，直接装最新兼容版 + 必需前置。
+    fn quick_install(&mut self, project: mods::Project) {
+        if self.busy.is_some() {
+            return;
+        }
+        let Some(row) = self.mods_row.clone() else {
+            return;
+        };
+        let kind = self.mods_kind;
+        let loader = match (kind, mod_loader(row.loader)) {
+            (mods::ContentKind::Mod, None) => {
+                self.mods_error = Some("原版不能装 Mod".into());
+                return;
+            }
+            (_, Some(loader)) => loader,
+            (_, None) => mods::Loader::Fabric,
+        };
+        let Some(game_dir) = self.mods_game_dir.clone() else {
+            self.mods_error = Some("目标目录无效".into());
+            return;
+        };
+        if row.instance.is_none() {
+            if let Some(parent) = game_dir.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Err(e) = std::fs::write(self.root.isolated_marker(&row.profile), b"1") {
+                self.mods_error = Some(format!("启用版本隔离失败: {e}"));
+                return;
+            }
+        }
+        cancel::reset();
+        self.cancel_requested = false;
+        self.mods_quick = Some(project_key(&project));
+        self.busy = Some(Task::Mods);
+        self.mods_error = None;
+        self.mods_notice = None;
+        self.progress = Some(Progress::stage(format!("安装 {}", project.name)));
+        self.progress_label = project.name.clone();
+        let mc = row.mc.clone();
+        let (tx, rx) = mpsc::channel();
+        self.rx = Some(rx);
+        let tx = Arc::new(Mutex::new(tx));
+        let sink: Sink = {
+            let tx = tx.clone();
+            from_fn(move |p| {
+                if let Ok(tx) = tx.lock() {
+                    let _ = tx.send(Msg::Progress(p));
+                }
+            })
+        };
+        std::thread::spawn(move || {
+            let result = mods::install_project(&game_dir, kind, &project, &mc, loader, &sink);
+            let msg = match result {
+                Ok(report) => Msg::ModsDone(format!(
+                    "{} 已安装（{} 个文件）",
+                    project.name, report.downloaded
+                )),
+                Err(Error::Cancelled) => Msg::ModsCancelled,
+                Err(e) => Msg::ModsFailed(e.to_string()),
+            };
+            if let Ok(tx) = tx.lock() {
+                let _ = tx.send(msg);
+            }
+        });
+    }
+
     fn select_mods_project(&mut self, project: mods::Project) {
         let Some(row) = self.mods_row.clone() else {
             return;
         };
         let loader = mod_loader(row.loader).unwrap_or(mods::Loader::Fabric);
+        self.mods_loading = false;
+        self.mods_browse_loading = false;
         self.mods_selected = Some(project.clone());
         self.mods_versions.clear();
         self.mods_version = None;
@@ -1146,6 +1422,9 @@ impl App {
                             self.mods_total = page.total.max(self.mods_offset as u64);
                             self.mods_warnings = page.warnings;
                             self.mods_error = None;
+                            self.mods_searching = true;
+                            let projects = self.mods_results.clone();
+                            self.request_icons(projects);
                         }
                         Err(e) => self.mods_error = Some(e),
                     }
@@ -1191,10 +1470,11 @@ impl App {
                     self.cancel_requested = false;
                     self.progress = None;
                     self.rx = None;
+                    self.mods_quick = None;
                     self.mods_notice = Some(note);
                     self.mods_error = None;
                     self.refresh();
-                    if self.show_mods && self.mods_show_installed {
+                    if self.show_mods {
                         self.start_mods_scan();
                     }
                 }
@@ -1203,6 +1483,7 @@ impl App {
                     self.cancel_requested = false;
                     self.progress = None;
                     self.rx = None;
+                    self.mods_quick = None;
                     self.mods_error = Some(e);
                 }
                 Msg::ModsCancelled => {
@@ -1210,6 +1491,7 @@ impl App {
                     self.cancel_requested = false;
                     self.progress = None;
                     self.rx = None;
+                    self.mods_quick = None;
                     self.mods_notice = Some("Mod 下载已取消".into());
                     self.mods_error = None;
                 }
@@ -1218,6 +1500,16 @@ impl App {
                     self.mods_rx = None;
                     match inst {
                         Ok(entries) => {
+                            self.mods_installed_keys = entries
+                                .iter()
+                                .filter_map(|entry| {
+                                    Some(format!(
+                                        "{:?}:{}",
+                                        entry.source?,
+                                        entry.project_id.as_ref()?
+                                    ))
+                                })
+                                .collect();
                             self.mods_installed = entries;
                             self.mods_updates.clear();
                             self.mods_error = None;
@@ -1234,6 +1526,27 @@ impl App {
                             self.mods_error = None;
                             self.mods_notice =
                                 Some(format!("检查完成，{} 个可更新", self.mods_updates.len()));
+                        }
+                        Err(e) => self.mods_error = Some(e),
+                    }
+                }
+                Msg::Browse {
+                    kind,
+                    category,
+                    result,
+                } => {
+                    if kind != self.mods_kind || category != self.mods_category {
+                        continue;
+                    }
+                    self.mods_browse_loading = false;
+                    self.mods_rx = None;
+                    match result {
+                        Ok(shelves) => {
+                            self.request_icons(
+                                shelves.iter().flat_map(|shelf| shelf.projects.clone()),
+                            );
+                            self.mods_browse = shelves;
+                            self.mods_error = None;
                         }
                         Err(e) => self.mods_error = Some(e),
                     }
@@ -1469,411 +1782,519 @@ impl App {
     }
 
     fn mods_view(&mut self, ui: &mut egui::Ui) {
-        let width = ui.available_width().min(760.0);
+        let width = ui.available_width().min(850.0);
         let pad = ((ui.available_width() - width) / 2.0).max(24.0);
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                ui.add_space(22.0);
+                ui.add_space(20.0);
                 ui.horizontal(|ui| {
                     ui.add_space(pad);
                     ui.vertical(|ui| {
                         ui.set_width(width);
-                        ui.label(egui::RichText::new("下载中心").size(28.0).strong());
-                        ui.add_space(8.0);
-                        let mut kind = self.mods_kind;
-                        ui.horizontal(|ui| {
-                            for candidate in [
-                                mods::ContentKind::Mod,
-                                mods::ContentKind::ResourcePack,
-                                mods::ContentKind::Shader,
-                            ] {
-                                if ui
-                                    .selectable_label(kind == candidate, candidate.label())
-                                    .clicked()
-                                {
-                                    kind = candidate;
-                                }
-                            }
-                        });
-                        if kind != self.mods_kind {
-                            self.mods_kind = kind;
-                            self.mods_selected = None;
-                            self.mods_results.clear();
-                            self.mods_versions.clear();
-                            self.mods_version = None;
-                            self.mods_choices.clear();
-                            self.mods_optional.clear();
-                            self.mods_total = 0;
-                            self.mods_offset = 0;
-                            self.mods_notice = None;
-                            self.mods_error = None;
-                            if !self.mods_query.trim().is_empty() {
-                                self.start_mods_search();
-                            }
-                        }
-                        ui.horizontal(|ui| {
-                            if ui
-                                .selectable_label(!self.mods_show_installed, "搜索")
-                                .clicked()
-                            {
-                                self.mods_show_installed = false;
-                            }
-                            if ui
-                                .selectable_label(self.mods_show_installed, "已安装")
-                                .clicked()
-                                && !self.mods_show_installed
-                            {
-                                self.mods_show_installed = true;
-                                self.start_mods_scan();
-                            }
-                        });
+                        self.mods_header(ui);
+                        ui.add_space(14.0);
                         if self.mods_show_installed {
                             self.installed_view(ui);
                             return;
                         }
-                        if let Some(row) = &self.mods_row {
-                            ui.add_space(4.0);
-                            ui.label(
-                                egui::RichText::new(format!(
-                                    "{} · {} · 下载到该版本的 mods/",
-                                    row.mc,
-                                    row.loader.name()
-                                ))
-                                .size(12.0)
-                                .color(MUTED),
-                            );
-                        }
-                        ui.add_space(16.0);
-
-                        let mut search = false;
-                        card().show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                let response = ui.add(
-                                    egui::TextEdit::singleline(&mut self.mods_query)
-                                        .hint_text("搜索 Mod 名称或描述…")
-                                        .desired_width(420.0),
-                                );
-                                if (response.lost_focus() || response.has_focus())
-                                    && ui.input(|i| i.key_pressed(egui::Key::Enter))
-                                {
-                                    search = true;
-                                }
-                                let mut source = self.mods_source;
-                                egui::ComboBox::from_id_salt("mods_source")
-                                    .selected_text(source_label(source))
-                                    .width(120.0)
-                                    .show_ui(ui, |ui| {
-                                        if ui
-                                            .selectable_label(source.is_none(), "全部来源")
-                                            .clicked()
-                                        {
-                                            source = None;
-                                        }
-                                        if ui
-                                            .selectable_label(
-                                                source == Some(mods::Source::Modrinth),
-                                                "Modrinth",
-                                            )
-                                            .clicked()
-                                        {
-                                            source = Some(mods::Source::Modrinth);
-                                        }
-                                        if ui
-                                            .selectable_label(
-                                                source == Some(mods::Source::CurseForge),
-                                                "CurseForge",
-                                            )
-                                            .clicked()
-                                        {
-                                            source = Some(mods::Source::CurseForge);
-                                        }
-                                    });
-                                self.mods_source = source;
-                                if ui.button("搜索").clicked() {
-                                    search = true;
-                                }
-                            });
-                        });
-                        if search {
-                            self.start_mods_search();
-                        }
-                        if self.mods_loading {
-                            ui.add_space(10.0);
-                            ui.horizontal(|ui| {
-                                ui.spinner();
-                                ui.label(egui::RichText::new("正在搜索…").color(MUTED));
-                            });
-                        }
-                        for warning in &self.mods_warnings {
-                            ui.add_space(4.0);
-                            ui.label(egui::RichText::new(warning).size(11.5).color(WARN));
-                        }
-                        if !self.mods_results.is_empty() {
-                            ui.add_space(10.0);
-                            ui.label(
-                                egui::RichText::new(format!(
-                                    "找到 {} 个结果（合并显示，来源见前缀）",
-                                    self.mods_total
-                                ))
-                                .size(11.5)
-                                .color(MUTED),
-                            );
-                            let mut chosen = None;
-                            egui::ScrollArea::vertical()
-                                .max_height(235.0)
-                                .auto_shrink([false, false])
-                                .show(ui, |ui| {
-                                    for project in &self.mods_results {
-                                        let selected =
-                                            self.mods_selected.as_ref().is_some_and(|p| {
-                                                p.source == project.source && p.id == project.id
-                                            });
-                                        let text = format!(
-                                            "[{}] {}\n{} · {} · {} downloads\n{}",
-                                            project.source.label(),
-                                            project.name,
-                                            project.author,
-                                            project.categories.join(", "),
-                                            project.downloads,
-                                            project.summary
-                                        );
-                                        if ui.selectable_label(selected, text).clicked() {
-                                            chosen = Some(project.clone());
-                                        }
-                                    }
-                                });
-                            if let Some(project) = chosen {
-                                self.select_mods_project(project);
-                            }
-                            if !self.mods_loading
-                                && (self.mods_results.len() as u64) < self.mods_total
-                            {
-                                ui.add_space(6.0);
-                                if ui
-                                    .button(format!(
-                                        "加载更多（{}/{}）",
-                                        self.mods_results.len(),
-                                        self.mods_total
-                                    ))
-                                    .clicked()
-                                {
-                                    self.start_mods_search_more();
-                                }
-                            }
-                        }
-
-                        let project = self.mods_selected.clone();
-                        let Some(project) = project else {
-                            if !self.mods_loading && self.mods_results.is_empty() {
-                                ui.add_space(16.0);
-                                ui.label(
-                                    egui::RichText::new(
-                                        "输入关键词，搜索 Modrinth 和 CurseForge。",
-                                    )
-                                    .color(MUTED),
-                                );
-                            }
+                        if self.mods_selected.is_some() {
+                            self.detail_view(ui);
                             return;
-                        };
-
-                        ui.add_space(16.0);
-                        card().show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                ui.label(egui::RichText::new(&project.name).size(19.0).strong());
-                                ui.label(
-                                    egui::RichText::new(project.source.label())
-                                        .size(11.0)
-                                        .color(ACCENT),
-                                );
-                            });
-                            ui.label(
-                                egui::RichText::new(&project.summary)
-                                    .size(12.0)
-                                    .color(MUTED),
-                            );
-                            ui.add_space(8.0);
-                            ui.label(
-                                egui::RichText::new(format!(
-                                    "作者 {} · {} downloads",
-                                    project.author, project.downloads
-                                ))
-                                .size(11.0)
-                                .color(MUTED),
-                            );
-                            ui.add_space(12.0);
-
-                            if self.mods_versions.is_empty() {
-                                ui.label(
-                                    egui::RichText::new("没有匹配当前 Minecraft/加载器的版本")
-                                        .color(WARN),
-                                );
-                            } else {
-                                let versions = self.mods_versions.clone();
-                                let selected = self.mods_version.clone();
-                                let selected_text = selected
-                                    .as_ref()
-                                    .map(|v| format!("{} · {}", v.version_number, v.file_name))
-                                    .unwrap_or_else(|| "选择版本".into());
-                                let mut chosen: Option<mods::Version> = None;
-                                egui::ComboBox::from_id_salt("mods_version")
-                                    .selected_text(selected_text)
-                                    .width(500.0)
-                                    .show_ui(ui, |ui| {
-                                        for version in &versions {
-                                            let label = format!(
-                                                "{} · {}",
-                                                version.version_number, version.file_name
-                                            );
-                                            if ui
-                                                .selectable_label(
-                                                    selected
-                                                        .as_ref()
-                                                        .is_some_and(|v| v.id == version.id),
-                                                    label,
-                                                )
-                                                .clicked()
-                                            {
-                                                chosen = Some(version.clone());
-                                            }
-                                        }
-                                    });
-                                if let Some(version) = chosen {
-                                    self.select_mods_version(version);
-                                }
-                                if let Some(version) = &self.mods_version {
-                                    ui.add_space(4.0);
-                                    ui.label(
-                                        egui::RichText::new(format!(
-                                            "文件: {} · {}",
-                                            version.file_name,
-                                            version
-                                                .size
-                                                .map(format_bytes)
-                                                .unwrap_or_else(|| "未知大小".into())
-                                        ))
-                                        .size(11.0)
-                                        .color(MUTED),
-                                    );
-                                }
-                            }
-
-                            if self.mods_deps_loading {
-                                ui.add_space(10.0);
-                                ui.horizontal(|ui| {
-                                    ui.spinner();
-                                    ui.label(egui::RichText::new("解析前置依赖…").color(MUTED));
-                                });
-                            } else if !self.mods_choices.is_empty() {
-                                ui.add_space(12.0);
-                                ui.label(egui::RichText::new("前置依赖").size(14.0).strong());
-                                let choices = self.mods_choices.clone();
-                                for choice in &choices {
-                                    ui.horizontal(|ui| {
-                                        let (label, color) = match choice.dependency.kind {
-                                            mods::DependencyKind::Required => ("必需", ACCENT),
-                                            mods::DependencyKind::Optional => ("可选", MUTED),
-                                            mods::DependencyKind::Incompatible => ("不兼容", WARN),
-                                            _ => ("嵌入/工具", MUTED),
-                                        };
-                                        ui.label(
-                                            egui::RichText::new(label).size(11.0).color(color),
-                                        );
-                                        let name = choice
-                                            .project
-                                            .as_ref()
-                                            .map(|p| p.name.clone())
-                                            .or_else(|| choice.dependency.name.clone())
-                                            .unwrap_or_else(|| {
-                                                choice.dependency.project_id.clone()
-                                            });
-                                        if choice.dependency.kind == mods::DependencyKind::Optional
-                                        {
-                                            let key = (
-                                                choice.dependency.source,
-                                                choice.dependency.project_id.clone(),
-                                            );
-                                            let mut checked = self.mods_optional.contains(&key);
-                                            if ui.checkbox(&mut checked, name).changed() {
-                                                if checked {
-                                                    self.mods_optional.insert(key);
-                                                } else {
-                                                    self.mods_optional.remove(&key);
-                                                }
-                                            }
-                                        } else {
-                                            ui.label(name);
-                                        }
-                                        match &choice.version {
-                                            Some(version) => {
-                                                ui.label(
-                                                    egui::RichText::new(&version.file_name)
-                                                        .size(11.0)
-                                                        .color(MUTED),
-                                                );
-                                            }
-                                            None => {
-                                                ui.label(
-                                                    egui::RichText::new("找不到兼容版本")
-                                                        .size(11.0)
-                                                        .color(WARN),
-                                                );
-                                            }
-                                        }
-                                    });
-                                }
-                            }
-
-                            ui.add_space(16.0);
-                            let incompatible = self
-                                .mods_choices
-                                .iter()
-                                .any(|c| c.dependency.kind == mods::DependencyKind::Incompatible);
-                            let missing_required = self.mods_choices.iter().any(|c| {
-                                c.dependency.kind == mods::DependencyKind::Required
-                                    && c.version.is_none()
-                            });
-                            let can_download = self.mods_version.is_some()
-                                && !self.mods_deps_loading
-                                && !incompatible
-                                && !missing_required
-                                && self.busy.is_none();
-                            if let Some(dir) = &self.mods_game_dir {
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "目标: {}",
-                                        dir.join("mods").display()
-                                    ))
-                                    .size(10.5)
-                                    .color(MUTED),
-                                );
-                            }
-                            if let Some(note) = &self.mods_notice {
-                                ui.add_space(6.0);
-                                ui.label(
-                                    egui::RichText::new(note)
-                                        .size(12.0)
-                                        .color(egui::Color32::from_rgb(120, 190, 140)),
-                                );
-                            }
-                            if let Some(err) = &self.mods_error {
-                                ui.add_space(6.0);
-                                ui.label(
-                                    egui::RichText::new(err)
-                                        .size(12.0)
-                                        .color(egui::Color32::from_rgb(230, 120, 110)),
-                                );
-                            }
-                            ui.add_space(10.0);
-                            ui.vertical_centered(|ui| {
-                                if primary_button(ui, "下载到该版本", can_download) {
-                                    self.start_mods_download();
-                                }
-                            });
-                        });
+                        }
+                        if self.mods_searching {
+                            self.results_view(ui);
+                            return;
+                        }
+                        self.browse_view(ui);
                     });
                 });
             });
+    }
+
+    fn mods_header(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("下载中心").size(24.0).strong());
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let go = ui
+                    .add(
+                        egui::Button::new(egui::RichText::new("搜索").size(12.0).color(MUTED))
+                            .fill(PANEL)
+                            .stroke(egui::Stroke::new(1.0, LINE))
+                            .corner_radius(8)
+                            .min_size(egui::vec2(54.0, 30.0)),
+                    )
+                    .clicked();
+                let resp = ui.add(
+                    egui::TextEdit::singleline(&mut self.mods_query)
+                        .hint_text("搜索")
+                        .desired_width(190.0),
+                );
+                let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if go || enter {
+                    if self.mods_query.trim().is_empty() {
+                        self.show_browse();
+                    } else {
+                        self.start_mods_search();
+                    }
+                }
+            });
+        });
+        ui.add_space(12.0);
+        ui.horizontal(|ui| {
+            for candidate in [
+                mods::ContentKind::Mod,
+                mods::ContentKind::ResourcePack,
+                mods::ContentKind::Shader,
+            ] {
+                let selected = self.mods_kind == candidate && !self.mods_show_installed;
+                let fill = if selected { ACCENT } else { CARD };
+                let text = if selected {
+                    egui::Color32::BLACK
+                } else {
+                    MUTED
+                };
+                let button = egui::Button::new(
+                    egui::RichText::new(candidate.label())
+                        .size(13.0)
+                        .color(text),
+                )
+                .fill(fill)
+                .stroke(egui::Stroke::new(1.0, LINE))
+                .corner_radius(9)
+                .min_size(egui::vec2(78.0, 32.0));
+                if ui.add(button).clicked() {
+                    self.mods_show_installed = false;
+                    let changed = self.mods_kind != candidate;
+                    self.switch_mods_kind(candidate);
+                    if changed && self.mods_searching {
+                        self.start_mods_search();
+                    }
+                }
+            }
+            ui.add_space(8.0);
+            let label = if self.mods_installed.is_empty() {
+                "已安装".to_string()
+            } else {
+                format!("已安装 {}", self.mods_installed.len())
+            };
+            if chip(ui, &label, self.mods_show_installed).clicked() && !self.mods_show_installed {
+                self.mods_show_installed = true;
+                self.start_mods_scan();
+            }
+        });
+        if let Some(row) = &self.mods_row {
+            ui.add_space(8.0);
+            let text = format!("{} · {}", row.mc, row.loader.name());
+            ui.label(egui::RichText::new(text).size(10.5).color(MUTED));
+        }
+    }
+
+    fn browse_view(&mut self, ui: &mut egui::Ui) {
+        let categories = mods::categories(self.mods_kind);
+        let mut wanted: Option<Option<usize>> = None;
+        ui.horizontal_wrapped(|ui| {
+            if chip(ui, "全部", self.mods_category.is_none()).clicked() {
+                wanted = Some(None);
+            }
+            for (index, category) in categories.iter().enumerate() {
+                if chip(ui, category.label, self.mods_category == Some(index)).clicked() {
+                    wanted = Some(Some(index));
+                }
+            }
+        });
+        if let Some(category) = wanted
+            && category != self.mods_category
+        {
+            self.mods_category = category;
+            self.start_browse();
+        }
+
+        ui.add_space(8.0);
+        if let Some(error) = &self.mods_error {
+            ui.label(egui::RichText::new(error).size(12.0).color(WARN));
+        }
+        if self.mods_browse_loading && self.mods_browse.is_empty() {
+            ui.add_space(40.0);
+            ui.vertical_centered(|ui| {
+                ui.spinner();
+            });
+            return;
+        }
+
+        let per_row = if ui.available_width() >= 820.0 { 3 } else { 2 };
+        let card_width = ((ui.available_width() - 10.0 * (per_row as f32 - 1.0)) / per_row as f32)
+            .clamp(240.0, 300.0);
+        let shelves = std::mem::take(&mut self.mods_browse);
+        if shelves.is_empty() {
+            ui.add_space(40.0);
+            ui.vertical_centered(|ui| {
+                ui.label(
+                    egui::RichText::new("这里还没有内容")
+                        .size(13.0)
+                        .color(MUTED),
+                );
+            });
+        }
+        let mut installs = Vec::new();
+        for shelf in &shelves {
+            ui.add_space(16.0);
+            ui.label(egui::RichText::new(shelf.title).size(15.0).strong());
+            ui.add_space(8.0);
+            for row in shelf.projects.chunks(per_row) {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 10.0;
+                    for project in row {
+                        if let Some(chosen) = self.project_card(ui, project, card_width) {
+                            installs.push(chosen);
+                        }
+                    }
+                });
+                ui.add_space(10.0);
+            }
+        }
+        self.mods_browse = shelves;
+        for project in installs {
+            self.quick_install(project);
+        }
+        if let Some(note) = &self.mods_notice {
+            ui.add_space(10.0);
+            ui.label(egui::RichText::new(note).size(12.0).color(OK));
+        }
+    }
+
+    fn results_view(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            if ui
+                .add(
+                    egui::Button::new(egui::RichText::new("‹ 浏览").size(12.0).color(MUTED))
+                        .fill(PANEL)
+                        .stroke(egui::Stroke::new(1.0, LINE))
+                        .corner_radius(8)
+                        .min_size(egui::vec2(64.0, 28.0)),
+                )
+                .clicked()
+            {
+                self.show_browse();
+            }
+            ui.label(
+                egui::RichText::new(format!("{} 个结果", self.mods_total))
+                    .size(12.0)
+                    .color(MUTED),
+            );
+        });
+        ui.add_space(6.0);
+        for warning in &self.mods_warnings {
+            ui.label(egui::RichText::new(warning).size(11.0).color(WARN));
+        }
+        if self.mods_loading {
+            ui.add_space(20.0);
+            ui.vertical_centered(|ui| {
+                ui.spinner();
+            });
+        }
+        let per_row = if ui.available_width() >= 820.0 { 3 } else { 2 };
+        let card_width = ((ui.available_width() - 10.0 * (per_row as f32 - 1.0)) / per_row as f32)
+            .clamp(240.0, 300.0);
+        let results = std::mem::take(&mut self.mods_results);
+        let mut installs = Vec::new();
+        for chunk in results.chunks(per_row) {
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 10.0;
+                for project in chunk {
+                    if let Some(chosen) = self.project_card(ui, project, card_width) {
+                        installs.push(chosen);
+                    }
+                }
+            });
+        }
+        self.mods_results = results;
+        for project in installs {
+            self.quick_install(project);
+        }
+        if !self.mods_loading && (self.mods_results.len() as u64) < self.mods_total {
+            ui.add_space(12.0);
+            ui.vertical_centered(|ui| {
+                if ui
+                    .add(
+                        egui::Button::new(egui::RichText::new("加载更多").size(12.0).color(MUTED))
+                            .fill(CARD)
+                            .stroke(egui::Stroke::new(1.0, LINE))
+                            .corner_radius(8)
+                            .min_size(egui::vec2(120.0, 30.0)),
+                    )
+                    .clicked()
+                {
+                    self.start_mods_search_more();
+                }
+            });
+        }
+    }
+
+    /// 画一张项目卡片；点 + 返回要安装的项目，点别处进详情。
+    fn project_card(
+        &mut self,
+        ui: &mut egui::Ui,
+        project: &mods::Project,
+        width: f32,
+    ) -> Option<mods::Project> {
+        let key = project_key(project);
+        let installed = self.mods_installed_keys.contains(&key);
+        let quick = self.mods_quick.as_deref() == Some(key.as_str());
+        let busy = self.busy.is_some();
+        let (rect, response) =
+            ui.allocate_exact_size(egui::vec2(width, 72.0), egui::Sense::click());
+        let hovered = response.hovered();
+        let fill = if hovered {
+            egui::Color32::from_rgb(31, 35, 43)
+        } else {
+            CARD
+        };
+        let border = if hovered { ACCENT } else { LINE };
+        ui.painter().rect(
+            rect,
+            12,
+            fill,
+            egui::Stroke::new(1.0, border),
+            egui::StrokeKind::Inside,
+        );
+
+        let inner = rect.shrink2(egui::vec2(10.0, 9.0));
+        let mut install = None;
+        let mut child = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(inner)
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
+        child.spacing_mut().item_spacing.x = 10.0;
+
+        let icon_size = egui::vec2(44.0, 44.0);
+        if let Some(texture) = self.mods_icons.get(&key) {
+            child.add(
+                egui::Image::from_texture(egui::load::SizedTexture::new(texture.id(), icon_size))
+                    .corner_radius(9),
+            );
+        } else {
+            let (icon_rect, _) = child.allocate_exact_size(icon_size, egui::Sense::hover());
+            child
+                .painter()
+                .rect_filled(icon_rect, 9, project_color(project));
+            let letter = project
+                .name
+                .chars()
+                .next()
+                .map(|c| c.to_uppercase().to_string())
+                .unwrap_or_default();
+            child.painter().text(
+                icon_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                letter,
+                egui::FontId::proportional(18.0),
+                egui::Color32::WHITE,
+            );
+        }
+
+        child.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if installed {
+                ui.label(
+                    egui::RichText::new("已装")
+                        .size(11.0)
+                        .color(egui::Color32::from_rgb(120, 190, 140)),
+                );
+            } else if quick {
+                ui.spinner();
+            } else if ui
+                .add_enabled(
+                    !busy,
+                    egui::Button::new(
+                        egui::RichText::new("+")
+                            .size(19.0)
+                            .strong()
+                            .color(egui::Color32::BLACK),
+                    )
+                    .fill(ACCENT)
+                    .corner_radius(15)
+                    .min_size(egui::vec2(30.0, 30.0)),
+                )
+                .clicked()
+            {
+                install = Some(project.clone());
+            }
+            ui.vertical(|ui| {
+                ui.add_space(2.0);
+                ui.label(egui::RichText::new(&project.name).size(13.5).strong());
+                ui.label(
+                    egui::RichText::new(format!("{} 下载", compact(project.downloads)))
+                        .size(10.5)
+                        .color(MUTED),
+                );
+            });
+        });
+
+        if response.clicked() && install.is_none() {
+            self.select_mods_project(project.clone());
+        }
+        install
+    }
+
+    fn detail_view(&mut self, ui: &mut egui::Ui) {
+        let Some(project) = self.mods_selected.clone() else {
+            return;
+        };
+        if ui
+            .add(
+                egui::Button::new(egui::RichText::new("‹ 浏览").size(12.0).color(MUTED))
+                    .fill(PANEL)
+                    .stroke(egui::Stroke::new(1.0, LINE))
+                    .corner_radius(8)
+                    .min_size(egui::vec2(64.0, 28.0)),
+            )
+            .clicked()
+        {
+            self.mods_selected = None;
+            self.mods_versions.clear();
+            self.mods_version = None;
+            self.mods_choices.clear();
+            self.mods_optional.clear();
+            return;
+        }
+        ui.add_space(8.0);
+        card().show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(&project.name).size(20.0).strong());
+                ui.label(
+                    egui::RichText::new(project.source.label())
+                        .size(11.0)
+                        .color(ACCENT),
+                );
+            });
+            ui.label(
+                egui::RichText::new(&project.summary)
+                    .size(12.0)
+                    .color(MUTED),
+            );
+            ui.add_space(10.0);
+
+            if self.mods_versions.is_empty() {
+                ui.label(egui::RichText::new("没有匹配当前版本的版本").color(WARN));
+            } else {
+                let versions = self.mods_versions.clone();
+                let selected = self.mods_version.clone();
+                let selected_text = selected
+                    .as_ref()
+                    .map(|v| v.version_number.clone())
+                    .unwrap_or_else(|| "选择版本".into());
+                let mut chosen: Option<mods::Version> = None;
+                egui::ComboBox::from_id_salt("mods_version")
+                    .selected_text(selected_text)
+                    .width(420.0)
+                    .show_ui(ui, |ui| {
+                        for version in &versions {
+                            if ui
+                                .selectable_label(
+                                    selected.as_ref().is_some_and(|v| v.id == version.id),
+                                    &version.version_number,
+                                )
+                                .clicked()
+                            {
+                                chosen = Some(version.clone());
+                            }
+                        }
+                    });
+                if let Some(version) = chosen {
+                    self.select_mods_version(version);
+                }
+            }
+
+            if self.mods_deps_loading {
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(egui::RichText::new("解析前置…").color(MUTED));
+                });
+            } else if !self.mods_choices.is_empty() {
+                ui.add_space(10.0);
+                let choices = self.mods_choices.clone();
+                for choice in &choices {
+                    ui.horizontal(|ui| {
+                        let (label, color) = match choice.dependency.kind {
+                            mods::DependencyKind::Required => ("必需", ACCENT),
+                            mods::DependencyKind::Optional => ("可选", MUTED),
+                            mods::DependencyKind::Incompatible => ("不兼容", WARN),
+                            _ => ("嵌入", MUTED),
+                        };
+                        ui.label(egui::RichText::new(label).size(11.0).color(color));
+                        let name = choice
+                            .project
+                            .as_ref()
+                            .map(|p| p.name.clone())
+                            .or_else(|| choice.dependency.name.clone())
+                            .unwrap_or_else(|| choice.dependency.project_id.clone());
+                        if choice.dependency.kind == mods::DependencyKind::Optional {
+                            let key = (
+                                choice.dependency.source,
+                                choice.dependency.project_id.clone(),
+                            );
+                            let mut checked = self.mods_optional.contains(&key);
+                            if ui.checkbox(&mut checked, name).changed() {
+                                if checked {
+                                    self.mods_optional.insert(key);
+                                } else {
+                                    self.mods_optional.remove(&key);
+                                }
+                            }
+                        } else {
+                            ui.label(name);
+                        }
+                        if let Some(version) = &choice.version {
+                            ui.label(
+                                egui::RichText::new(&version.version_number)
+                                    .size(11.0)
+                                    .color(MUTED),
+                            );
+                        } else {
+                            ui.label(egui::RichText::new("缺失").size(11.0).color(WARN));
+                        }
+                    });
+                }
+            }
+
+            ui.add_space(14.0);
+            let incompatible = self
+                .mods_choices
+                .iter()
+                .any(|c| c.dependency.kind == mods::DependencyKind::Incompatible);
+            let missing_required = self.mods_choices.iter().any(|c| {
+                c.dependency.kind == mods::DependencyKind::Required && c.version.is_none()
+            });
+            let can_download = self.mods_version.is_some()
+                && !self.mods_deps_loading
+                && !incompatible
+                && !missing_required
+                && self.busy.is_none();
+            if let Some(note) = &self.mods_notice {
+                ui.label(
+                    egui::RichText::new(note)
+                        .size(12.0)
+                        .color(egui::Color32::from_rgb(120, 190, 140)),
+                );
+                ui.add_space(4.0);
+            }
+            if let Some(err) = &self.mods_error {
+                ui.label(
+                    egui::RichText::new(err)
+                        .size(12.0)
+                        .color(egui::Color32::from_rgb(230, 120, 110)),
+                );
+                ui.add_space(4.0);
+            }
+            ui.vertical_centered(|ui| {
+                if primary_button(ui, "安装", can_download) {
+                    self.start_mods_download();
+                }
+            });
+        });
     }
 
     fn installed_view(&mut self, ui: &mut egui::Ui) {
@@ -2454,6 +2875,7 @@ impl App {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll();
+        self.drain_icons(ui.ctx());
         let dropped = ui
             .ctx()
             .input_mut(|i| std::mem::take(&mut i.raw.dropped_files));
@@ -2481,7 +2903,11 @@ impl eframe::App for App {
                 self.error = Some("支持整合包 .mrpack/.zip，或单个 Mod .jar".into());
             }
         }
-        if self.busy.is_some() || self.mods_rx.is_some() {
+        if self.busy.is_some()
+            || self.mods_rx.is_some()
+            || self.mods_browse_loading
+            || !self.mods_icons_pending.is_empty()
+        {
             ui.ctx().request_repaint_after(Duration::from_millis(100));
         }
         self.top_bar(ui);
@@ -2757,22 +3183,46 @@ fn mc_key(v: &str) -> Vec<u64> {
         .collect()
 }
 
-fn source_label(source: Option<mods::Source>) -> &'static str {
-    match source {
-        None => "全部来源",
-        Some(mods::Source::Modrinth) => "Modrinth",
-        Some(mods::Source::CurseForge) => "CurseForge",
+/// 品类胶囊 / 已安装切换用的小按钮。
+fn chip(ui: &mut egui::Ui, text: &str, selected: bool) -> egui::Response {
+    let (fill, color, border) = if selected {
+        (egui::Color32::from_rgb(58, 52, 34), ACCENT, ACCENT)
+    } else {
+        (CARD, MUTED, LINE)
+    };
+    ui.add(
+        egui::Button::new(egui::RichText::new(text).size(12.0).color(color))
+            .fill(fill)
+            .stroke(egui::Stroke::new(1.0, border))
+            .corner_radius(14)
+            .min_size(egui::vec2(0.0, 26.0)),
+    )
+}
+
+/// 下载量用中文单位，避免卡片里塞一长串数字。
+fn compact(count: u64) -> String {
+    if count >= 100_000_000 {
+        format!("{:.1} 亿", count as f64 / 100_000_000.0)
+    } else if count >= 10_000 {
+        format!("{:.1} 万", count as f64 / 10_000.0)
+    } else {
+        count.to_string()
     }
 }
 
-fn format_bytes(bytes: u64) -> String {
-    if bytes >= 1024 * 1024 {
-        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
-    } else if bytes >= 1024 {
-        format!("{:.0} KB", bytes as f64 / 1024.0)
-    } else {
-        format!("{bytes} B")
-    }
+fn project_color(project: &mods::Project) -> egui::Color32 {
+    const PALETTE: [egui::Color32; 6] = [
+        egui::Color32::from_rgb(86, 108, 168),
+        egui::Color32::from_rgb(150, 96, 96),
+        egui::Color32::from_rgb(96, 140, 110),
+        egui::Color32::from_rgb(140, 112, 160),
+        egui::Color32::from_rgb(160, 134, 84),
+        egui::Color32::from_rgb(80, 128, 152),
+    ];
+    let hash = project.id.bytes().fold(0usize, |acc, byte| {
+        acc.wrapping_mul(31).wrapping_add(byte as usize)
+    });
+    PALETTE[hash % PALETTE.len()]
 }
 
 fn card() -> egui::Frame {

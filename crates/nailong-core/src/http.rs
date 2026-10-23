@@ -120,6 +120,44 @@ impl Http {
         serde_json::from_str(&text).map_err(|e| Error::Install(format!("JSON 解析失败: {e}")))
     }
 
+    /// 取回二进制内容（图标之类的小文件），上限 4 MiB，避免误拉大文件。
+    pub fn get_bytes(&self, url: &str) -> Result<Vec<u8>> {
+        cancel::check()?;
+        let url = self.url(url);
+        let mut last = None;
+        for attempt in 0..3 {
+            cancel::check()?;
+            match self.client.get(&url).send() {
+                Ok(resp) => {
+                    let status = resp.status();
+                    if !status.is_success() {
+                        last = Some(Error::Http {
+                            url: url.clone(),
+                            status: status.as_u16(),
+                        });
+                    } else {
+                        let bytes = resp.bytes().map_err(|e| Error::Net {
+                            url: url.clone(),
+                            source: e,
+                        })?;
+                        if bytes.len() > 4 * 1024 * 1024 {
+                            return Err(Error::Install(format!("文件过大: {url}")));
+                        }
+                        return Ok(bytes.to_vec());
+                    }
+                }
+                Err(e) => {
+                    last = Some(Error::Net {
+                        url: url.clone(),
+                        source: e,
+                    })
+                }
+            }
+            std::thread::sleep(Duration::from_millis(400 * (attempt + 1) as u64));
+        }
+        Err(last.unwrap_or_else(|| Error::Install(format!("请求失败: {url}"))))
+    }
+
     pub fn get_json_with_headers(
         &self,
         url: &str,

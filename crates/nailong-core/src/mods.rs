@@ -120,6 +120,166 @@ pub enum DependencyKind {
     Tool,
 }
 
+/// 浏览时的排序方式。搜索仍然用 `Relevance`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sort {
+    Popular,
+    Newest,
+    Relevance,
+}
+
+impl Sort {
+    fn modrinth_index(self) -> &'static str {
+        match self {
+            Self::Popular => "downloads",
+            Self::Newest => "newest",
+            Self::Relevance => "relevance",
+        }
+    }
+
+    /// CurseForge sortField：6 = 总下载量，11 = 发布日期，2 = 热度。
+    fn curseforge_field(self) -> Option<u32> {
+        match self {
+            Self::Popular => Some(6),
+            Self::Newest => Some(11),
+            Self::Relevance => None,
+        }
+    }
+}
+
+/// 一个品类胶囊。`label` 是界面文字，`slug` 是 Modrinth 的分类标识。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Category {
+    pub label: &'static str,
+    pub slug: &'static str,
+}
+
+const MOD_CATEGORIES: &[Category] = &[
+    Category {
+        label: "优化",
+        slug: "optimization",
+    },
+    Category {
+        label: "科技",
+        slug: "technology",
+    },
+    Category {
+        label: "冒险",
+        slug: "adventure",
+    },
+    Category {
+        label: "魔法",
+        slug: "magic",
+    },
+    Category {
+        label: "装饰",
+        slug: "decoration",
+    },
+    Category {
+        label: "生物",
+        slug: "mobs",
+    },
+    Category {
+        label: "世界",
+        slug: "worldgen",
+    },
+    Category {
+        label: "工具",
+        slug: "utility",
+    },
+    Category {
+        label: "存储",
+        slug: "storage",
+    },
+    Category {
+        label: "库",
+        slug: "library",
+    },
+];
+
+const RESOURCE_PACK_CATEGORIES: &[Category] = &[
+    Category {
+        label: "写实",
+        slug: "realistic",
+    },
+    Category {
+        label: "简约",
+        slug: "simplistic",
+    },
+    Category {
+        label: "原版风",
+        slug: "vanilla-like",
+    },
+    Category {
+        label: "主题",
+        slug: "themed",
+    },
+    Category {
+        label: "音频",
+        slug: "audio",
+    },
+    Category {
+        label: "界面",
+        slug: "gui",
+    },
+    Category {
+        label: "方块",
+        slug: "blocks",
+    },
+    Category {
+        label: "生物",
+        slug: "entities",
+    },
+];
+
+const SHADER_CATEGORIES: &[Category] = &[
+    Category {
+        label: "写实",
+        slug: "realistic",
+    },
+    Category {
+        label: "奇幻",
+        slug: "fantasy",
+    },
+    Category {
+        label: "卡通",
+        slug: "cartoon",
+    },
+    Category {
+        label: "原版风",
+        slug: "vanilla-like",
+    },
+    Category {
+        label: "低配",
+        slug: "potato",
+    },
+    Category {
+        label: "光追",
+        slug: "path-tracing",
+    },
+    Category {
+        label: "反射",
+        slug: "reflections",
+    },
+    Category {
+        label: "阴影",
+        slug: "shadows",
+    },
+];
+
+pub fn categories(kind: ContentKind) -> &'static [Category] {
+    match kind {
+        ContentKind::Mod => MOD_CATEGORIES,
+        ContentKind::ResourcePack => RESOURCE_PACK_CATEGORIES,
+        ContentKind::Shader => SHADER_CATEGORIES,
+    }
+}
+
+/// 当前构建能不能用 CurseForge（没有内置 key 时直接跳过，不弹警告）。
+pub fn curseforge_available() -> bool {
+    builtin::curseforge_api_key().is_some()
+}
+
 #[derive(Debug, Clone)]
 pub struct Project {
     pub source: Source,
@@ -202,6 +362,16 @@ fn curse_headers(key: &str) -> [(&str, &str); 2] {
     [("x-api-key", key), ("Accept", "application/json")]
 }
 
+/// 一次查询的固定条件，避免内部函数参数爆炸。
+struct Query<'a> {
+    text: &'a str,
+    category: Option<Category>,
+    sort: Sort,
+    mc: &'a str,
+    loader: Option<Loader>,
+    kind: ContentKind,
+}
+
 pub fn search(
     query: &str,
     source: Option<Source>,
@@ -222,7 +392,18 @@ pub fn search(
     let want = |candidate: Source| source.is_none_or(|wanted| wanted == candidate);
 
     if want(Source::Modrinth) {
-        match search_modrinth(query, mc, loader, kind, offset, limit) {
+        match search_modrinth(
+            Query {
+                text: query,
+                category: None,
+                sort: Sort::Relevance,
+                mc,
+                loader,
+                kind,
+            },
+            offset,
+            limit,
+        ) {
             Ok(mut result) => {
                 page.hits.append(&mut result.hits);
                 page.total = page.total.max(result.total);
@@ -234,7 +415,18 @@ pub fn search(
         }
     }
     if want(Source::CurseForge) {
-        match search_curseforge(query, mc, loader, kind, offset, limit) {
+        match search_curseforge(
+            Query {
+                text: query,
+                category: None,
+                sort: Sort::Relevance,
+                mc,
+                loader,
+                kind,
+            },
+            offset,
+            limit,
+        ) {
             Ok(mut result) => {
                 page.hits.append(&mut result.hits);
                 page.total = page.total.max(result.total);
@@ -255,31 +447,106 @@ pub fn search(
     Ok(page)
 }
 
-fn search_modrinth(
-    query: &str,
+/// 浏览：按品类/热度拿内容，不需要输入关键词。
+///
+/// 选了品类时只查 Modrinth（CurseForge 的品类 id 需要额外接口，暂不映射）；
+/// 没选品类时两个源都查，和搜索一致。
+pub fn browse(
+    kind: ContentKind,
+    category: Option<Category>,
     mc: &str,
     loader: Option<Loader>,
-    kind: ContentKind,
+    sort: Sort,
     offset: usize,
     limit: usize,
 ) -> Result<SearchPage> {
+    cancel::check()?;
+    let limit = limit.clamp(1, 50);
+    let mut page = SearchPage {
+        hits: Vec::new(),
+        total: 0,
+        warnings: Vec::new(),
+    };
+    let mut last_error = None;
+
+    match search_modrinth(
+        Query {
+            text: "",
+            category,
+            sort,
+            mc,
+            loader,
+            kind,
+        },
+        offset,
+        limit,
+    ) {
+        Ok(mut result) => {
+            page.hits.append(&mut result.hits);
+            page.total = page.total.max(result.total);
+        }
+        Err(e) => {
+            page.warnings.push(format!("Modrinth: {e}"));
+            last_error = Some(e);
+        }
+    }
+    if category.is_none() && curseforge_available() {
+        match search_curseforge(
+            Query {
+                text: "",
+                category: None,
+                sort,
+                mc,
+                loader,
+                kind,
+            },
+            offset,
+            limit,
+        ) {
+            Ok(mut result) => {
+                page.hits.append(&mut result.hits);
+                page.total = page.total.max(result.total);
+            }
+            Err(e) => {
+                page.warnings.push(format!("CurseForge: {e}"));
+                last_error = Some(e);
+            }
+        }
+    }
+    if page.hits.is_empty()
+        && let Some(error) = last_error
+    {
+        return Err(error);
+    }
+    if sort == Sort::Relevance {
+        page.hits
+            .sort_by_key(|project| std::cmp::Reverse(project.downloads));
+    }
+    Ok(page)
+}
+
+fn search_modrinth(query: Query<'_>, offset: usize, limit: usize) -> Result<SearchPage> {
     let mut facets = vec![
-        vec![format!("project_type:{}", kind.modrinth_type())],
-        vec![format!("versions:{mc}")],
+        vec![format!("project_type:{}", query.kind.modrinth_type())],
+        vec![format!("versions:{}", query.mc)],
     ];
-    if kind == ContentKind::Mod {
+    if query.kind == ContentKind::Mod {
         facets.push(vec![format!(
             "categories:{}",
-            loader.unwrap_or(Loader::Fabric).modrinth_category()
+            query.loader.unwrap_or(Loader::Fabric).modrinth_category()
         )]);
+    }
+    if let Some(category) = query.category {
+        facets.push(vec![format!("categories:{}", category.slug)]);
     }
     let facets = serde_json::to_string(&facets)
         .map_err(|e| Error::Install(format!("Modrinth facets 序列化失败: {e}")))?;
     let url = query_url(
         &format!("{MODRINTH_API}/search"),
         &[
-            ("query", query.to_string()),
+            ("query", query.text.to_string()),
             ("facets", facets),
+            ("index", query.sort.modrinth_index().to_string()),
             ("offset", offset.to_string()),
             ("limit", limit.to_string()),
         ],
@@ -291,7 +558,7 @@ fn search_modrinth(
         .map(|items| {
             items
                 .iter()
-                .filter_map(|value| modrinth_project(value, kind))
+                .filter_map(|value| modrinth_project(value, query.kind))
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
@@ -305,30 +572,26 @@ fn search_modrinth(
     })
 }
 
-fn search_curseforge(
-    query: &str,
-    mc: &str,
-    loader: Option<Loader>,
-    kind: ContentKind,
-    offset: usize,
-    limit: usize,
-) -> Result<SearchPage> {
+fn search_curseforge(query: Query<'_>, offset: usize, limit: usize) -> Result<SearchPage> {
     let key = curse_key()?;
     let mut params = vec![
         ("gameId", CURSEFORGE_GAME_ID.to_string()),
-        ("classId", kind.curseforge_class().to_string()),
-        ("gameVersion", mc.to_string()),
+        ("classId", query.kind.curseforge_class().to_string()),
+        ("gameVersion", query.mc.to_string()),
         ("index", offset.to_string()),
         ("pageSize", limit.min(50).to_string()),
         ("sortOrder", "desc".to_string()),
     ];
-    if kind == ContentKind::Mod
-        && let Some(loader) = loader
+    if let Some(field) = query.sort.curseforge_field() {
+        params.push(("sortField", field.to_string()));
+    }
+    if query.kind == ContentKind::Mod
+        && let Some(loader) = query.loader
     {
         params.push(("modLoaderType", loader.curseforge_id().to_string()));
     }
-    if !query.trim().is_empty() {
-        params.push(("searchFilter", query.trim().to_string()));
+    if !query.text.trim().is_empty() {
+        params.push(("searchFilter", query.text.trim().to_string()));
     }
     let url = query_url(&format!("{CURSEFORGE_API}/mods/search"), &params)?;
     let value = Http::new("official")?.get_json_with_headers(&url, &curse_headers(&key))?;
@@ -338,7 +601,7 @@ fn search_curseforge(
         .map(|items| {
             items
                 .iter()
-                .filter_map(|value| curseforge_project(value, kind))
+                .filter_map(|value| curseforge_project(value, query.kind))
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
@@ -898,9 +1161,74 @@ pub fn download_plan(
     })
 }
 
+/// 拉项目图标（PNG/JPEG 原始字节）。
+pub fn fetch_icon(url: &str) -> Result<Vec<u8>> {
+    Http::new("official")?.get_bytes(url)
+}
+
+/// 一键安装：挑最新兼容版本、带上必需前置、下载并写进内容索引。
+///
+/// 界面上的卡片按钮直接调这个，不需要先选版本。
+pub fn install_project(
+    game_dir: &Path,
+    kind: ContentKind,
+    project: &Project,
+    mc: &str,
+    loader: Loader,
+    sink: &Sink,
+) -> Result<DownloadReport> {
+    cancel::check()?;
+    let versions = versions(project, mc, loader)?;
+    let latest = versions.first().ok_or_else(|| {
+        Error::Install(format!(
+            "{} 没有适配 {mc} / {} 的版本",
+            project.name,
+            loader.label()
+        ))
+    })?;
+    let plan = plan(latest, mc, loader, &BTreeSet::new())?;
+    let dir = game_dir.join(kind.folder());
+    let report = download_plan(&dir, &plan, false, sink)?;
+    crate::installed::record_versions(game_dir, kind, &plan)?;
+    Ok(report)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn category_tables_are_unique_and_nonempty() {
+        for kind in [
+            ContentKind::Mod,
+            ContentKind::ResourcePack,
+            ContentKind::Shader,
+        ] {
+            let items = categories(kind);
+            assert!(!items.is_empty(), "{kind:?} 没有品类");
+            let mut labels = HashSet::new();
+            let mut slugs = HashSet::new();
+            for category in items {
+                assert!(!category.label.is_empty());
+                assert!(!category.slug.is_empty());
+                assert!(
+                    labels.insert(category.label),
+                    "重复品类名: {}",
+                    category.label
+                );
+                assert!(slugs.insert(category.slug), "重复 slug: {}", category.slug);
+            }
+        }
+    }
+
+    #[test]
+    fn sort_maps_to_api_fields() {
+        assert_eq!(Sort::Popular.modrinth_index(), "downloads");
+        assert_eq!(Sort::Newest.modrinth_index(), "newest");
+        assert_eq!(Sort::Popular.curseforge_field(), Some(6));
+        assert_eq!(Sort::Newest.curseforge_field(), Some(11));
+        assert_eq!(Sort::Relevance.curseforge_field(), None);
+    }
 
     #[test]
     fn parses_modrinth_dependency_types() {

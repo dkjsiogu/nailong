@@ -1,7 +1,7 @@
-# 14 · 原型实现状态（0.1 → 0.9.0）
+# 14 · 原型实现状态（0.1 → 0.10.0）
 
-> 日期：2026-10-21
-> 对应发布：GitHub Release `v0.9.0` 的 `nailong.exe`、`nailong_0.9.0_amd64.deb`
+> 日期：2026-10-23
+> 对应发布：GitHub Release `v0.10.0` 的 `nailong.exe`、`nailong_0.10.0_amd64.deb`
 > 目的：把「设计稿」和「已经跑起来的代码」分开记账，避免把计划当成已完成。
 
 ## 1. 一句话结论
@@ -38,6 +38,8 @@
 
 0.9.0 把下载中心补齐：资源包/光影搜索与下载、结果分页、已安装内容索引（扫描、启用/禁用、删除、重复检测、更新检查/一键更新）、本地 `.jar`/`.zip` 导入。Mod 更新会按最新兼容版本重解依赖并把旧文件从索引/目录移除；CurseForge 依赖仍只有 `modId`，因此只能选目标版本下最新的兼容文件。
 
+0.10.0 把下载中心从“先搜索”改成“先浏览”：打开就是品类胶囊（每类内容 8–10 个品类）+「热门」「最新」两排卡片；卡片带项目图标、下载量和一个 `+`，点一下即装最新兼容版本和必需前置（`mods::install_project`），装完卡片变「已装」。搜索保留在右上角，结果复用同一套卡片。图标走后台线程拉取、`image` 解码后在 UI 线程建纹理，并做了占位色块兜底。
+
 发布形态刻意保持简单：Windows 只发一个 `nailong.exe`；Linux 只发一个可双击/`apt install` 的 `.deb`。
 
 这不是 v1.0。它刻意只做一条路径，用来验证三件事：
@@ -66,15 +68,16 @@
 | 四加载器选择 | `nailong-ui` | 完成 | 安装页按 Minecraft / Fabric / NeoForge / Forge / 原版排列 |
 | 整合包导入 | `core::install::modpack` | 完成（6 种格式） | Modrinth、CurseForge、Prism/MultiMC、MCBBS、HMCL、ATLauncher；真实 CurseForge 文件 + 各格式合成包验证 |
 | 下载中心 | `core::mods` / `core::installed` + `nailong-ui` | 完成 | Mod/资源包/光影检索；分页；真实 API；依赖解析；已安装扫描/启停/删除/重复检测/更新；本地导入 |
+| 浏览式发现 + 一键安装 | `core::mods::browse` / `install_project` + `nailong-ui` | 完成 | 品类胶囊 + 热门/最新两排卡片；图标异步加载；卡片 `+` 一键装最新兼容版 + 必需前置；Xvfb 下点击真实安装 fabric-api 并写索引 |
 | Windows 便携目录 | `core::paths` | 完成 | 默认使用 exe 同目录 `.minecraft` |
 | CLI（list/java/info/install/launch） | `nailong-cli` | 完成 | 打包产物冒烟 |
-| GUI（版本下拉、安装进度、取消、缺文件补全、启动、下载中心） | `nailong-ui` | 可用 | Xvfb 下走完安装 / 补全 / 启动；安装中取消；下载中心检索/版本/依赖/已安装页实测；实际 NeoForge 到主菜单 |
+| GUI（版本下拉、安装进度、取消、缺文件补全、启动、下载中心） | `nailong-ui` | 可用 | Xvfb 下走完安装 / 补全 / 启动；安装中取消；下载中心检索/版本/依赖/已安装页实测；浏览页点卡片 `+` 实际下载并落索引；实际 NeoForge 到主菜单 |
 | 版本管理 | `nailong-ui` | 完成 | 基础版本隐藏、版本/整合包删除、被依赖保护 |
 | CAS / patched client 复用 | `core::blob` / `core::install::reuse` | 完成（第一阶段） | client/libraries 新文件走 blob+硬链接；复用后跳过补丁与 processor；Forge 实测 5.3s、NeoForge 3.7s |
 | 大文件分段下载 | `core::http` | 完成 | client jar 4 段并行、段续传、源回退 |
 | 重复安装快速路径 | `core::install::forge` / `neoforge` | 完成 | health 通过则 0 下载、0 processor |
 | Windows 交叉编译 | `x86_64-pc-windows-gnu` | 通过 | 无 MinGW DLL 依赖，仅系统 DLL |
-| 发布包 | GitHub Release `v0.9.0` | 完成（CI 构建） | 单 exe 约 7.8 MB / deb 约 3.3 MB |
+| 发布包 | GitHub Release `v0.10.0` | 完成（CI 构建） | 单 exe 约 8 MB / deb 约 3.3 MB |
 
 ### 2.1 实测记录
 
@@ -111,11 +114,11 @@
 | 托管 JRE（Mojang runtime） | 只用系统 Java 21 | 用户需预装 Java；这是“开箱即用”目标的主要缺口 |
 | 异步 runtime + 事件总线 + 可取消任务 | 阻塞调用 + 线程 + 进程级取消标志（单任务） | 下载、分段、解压和 processor 已可取消；未引入 async runtime |
 | 实例（Instance）抽象、配置存储 | 整合包实例已有独立 game dir；普通版本下载 Mod 后启用 `.nailong-isolated`，game dir 指向版本目录 | 版本级隔离已可用；仍无每实例 Java/内存配置 |
-| 完整 GUI（路由/向导/下载中心） | 版本页、安装页、版本管理、下载中心（Mod / 资源包 / 光影，含已安装管理与更新检查） | 无整合包浏览器；更新需手动点，不做后台静默更新 |
+| 完整 GUI（路由/向导/下载中心） | 版本页、安装页、版本管理、下载中心（浏览 + 搜索，Mod / 资源包 / 光影，含已安装管理与更新检查） | 无整合包浏览器；更新需手动点，不做后台静默更新 |
 | 正版登录 / 自动更新 | 未实现 | 下一步做账户与更新 |
 | 微软正版登录 | 未实现（离线） | 按决定推迟到 M3.5 |
 | 自动更新 / 签名 / 崩溃报告 | 未实现 | 发布前补齐 |
-| 单元/集成测试体系 | **44 个测试**（42 core + 2 UI），另有 2 个真实网络冒烟测试默认忽略 | 缺夹具、mock HTTP、启动 argv 快照、Windows CI |
+| 单元/集成测试体系 | **44 个测试**（42 core + 2 UI），另有 4 个真实网络冒烟测试默认忽略（搜索、下载、浏览、一键安装） | 缺夹具、mock HTTP、启动 argv 快照、Windows CI |
 
 ## 4. 已知问题与风险
 
@@ -136,7 +139,7 @@
 3. **测试与 CI**：版本 JSON 夹具、规则/合并/argv 快照、mock HTTP（重试/哈希失败）、`fmt/clippy/test`。
 4. **托管 JRE**：至少做“检测缺失 → 引导安装/下载 Temurin”的闭环。
 5. **实例与配置**：在现有 JSON 配置上增加每实例 game dir/Java/内存，脱离“版本即实例”。
-6. **Mod 管理**：已安装 Mod 清单、启用/禁用、删除、更新检查；依赖冲突与重复版本检测。
+6. **下载中心后续**：CurseForge 品类 id 映射（现在选品类只查 Modrinth）、整合包/世界浏览、按加载器/版本筛选项。
 7. **发布工程**：版本号、CHANGELOG、SHA256、签名、自动更新。
 
 ## 6. 复现命令

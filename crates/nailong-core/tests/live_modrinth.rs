@@ -98,3 +98,90 @@ fn curseforge_search_smoke() {
         Err(e) => println!("curseforge 搜索不可用: {e}"),
     }
 }
+
+#[test]
+#[ignore = "需要网络，手动运行"]
+fn browse_categories_return_results() {
+    for (kind, category) in [
+        (ContentKind::Mod, mods::categories(ContentKind::Mod)[0]),
+        (
+            ContentKind::ResourcePack,
+            mods::categories(ContentKind::ResourcePack)[0],
+        ),
+        (
+            ContentKind::Shader,
+            mods::categories(ContentKind::Shader)[0],
+        ),
+    ] {
+        let page = mods::browse(
+            kind,
+            Some(category),
+            "1.21.1",
+            Some(Loader::Fabric),
+            mods::Sort::Popular,
+            0,
+            5,
+        )
+        .unwrap_or_else(|e| panic!("{kind:?} 浏览失败: {e}"));
+        println!(
+            "{:?} / {} -> {} hits, warnings={:?}",
+            kind,
+            category.label,
+            page.hits.len(),
+            page.warnings
+        );
+        assert!(
+            !page.hits.is_empty(),
+            "{kind:?} 的「{}」品类没有结果",
+            category.label
+        );
+    }
+}
+
+#[test]
+#[ignore = "需要网络，手动运行"]
+fn one_click_install_writes_index() {
+    let page = mods::search(
+        "sodium",
+        Some(Source::Modrinth),
+        "1.21.1",
+        Some(Loader::Fabric),
+        ContentKind::Mod,
+        0,
+        5,
+    )
+    .expect("搜索失败");
+    let project = page
+        .hits
+        .iter()
+        .find(|p| p.slug == "sodium")
+        .expect("没找到 sodium");
+
+    let root = std::env::temp_dir().join(format!("nailong-1click-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let report = mods::install_project(
+        &root,
+        ContentKind::Mod,
+        project,
+        "1.21.1",
+        Loader::Fabric,
+        &progress::noop(),
+    )
+    .expect("一键安装失败");
+    println!(
+        "installed: downloaded={} skipped={:?}",
+        report.downloaded, report.skipped
+    );
+    assert!(report.downloaded >= 1);
+
+    let index = nailong_core::installed::load(&root);
+    let entry = index
+        .entries
+        .iter()
+        .find(|entry| entry.project_id.as_deref() == Some(project.id.as_str()))
+        .expect("索引里没有记录安装的项目");
+    assert!(root.join("mods").join(&entry.file).is_file());
+    println!("index entry: {} ({:?})", entry.file, entry.version_number);
+
+    let _ = std::fs::remove_dir_all(&root);
+}

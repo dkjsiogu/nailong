@@ -8,7 +8,7 @@ A small, native Minecraft: Java Edition launcher written in Rust. Windows ships 
 
 [简体中文](README.md) | **English**
 
-> Current version: **0.9.0** (preview)
+> Current version: **0.10.0** (preview)
 >
 > Goals: small binaries, few dependencies, visible install progress, and a repair path after interruption. See [implementation status](docs/design/14-implementation-status.md) for exact boundaries.
 
@@ -56,10 +56,10 @@ Drag a `.mrpack` or `.zip` into the window to start an import. A single mod `.ja
 
 ### Download center: mods, resource packs and shaders
 
-- Select a target version first. Mod searches are locked to its Minecraft version and loader; resource packs and shaders are locked to its Minecraft version.
-- Search Modrinth and CurseForge together, or filter to one source; results support “load more” pagination.
-- Pick a compatible file version. For mods, review `required` / `optional` / `incompatible` dependencies.
-- `required` dependencies are added automatically; `optional` ones are checkboxes (off by default); `incompatible` ones block the download.
+- The download center opens on a browse page: Mod / Resource pack / Shader tabs, a row of category chips (optimization, technology, adventure, realistic, fantasy, …), then “Popular” and “Newest” shelves of cards. No keyword required.
+- Each card shows the project icon, name and download count, with a `+` button that installs the latest build compatible with the selected version and loader, plus required dependencies. The card turns into “installed” when done.
+- Clicking the rest of a card opens details: pick a specific file version and review `required` / `optional` / `incompatible` dependencies. `required` is added automatically, `optional` is a checkbox (off by default), `incompatible` blocks the download.
+- Search stays in the top bar (Enter to run) and renders the same cards with “load more” pagination. Browse and search merge Modrinth and CurseForge; with a category selected only Modrinth is queried, because CurseForge category ids would need an extra mapping we do not hardcode.
 - Files go into that version's `mods/`, `resourcepacks/` or `shaderpacks/`. A normal version gets an isolated `gameDir` (`versions/<id>/`) on first download; existing saves in the root are not migrated.
 - The installed page can scan existing files, enable/disable, delete, detect duplicates, check for updates and update all.
 - Local `.jar` drag/import is supported, as is local `.zip` import for resource packs and shaders.
@@ -76,8 +76,8 @@ Drag a `.mrpack` or `.zip` into the window to start an import. A single mod `.ja
 
 | Platform | File | Size | Requirements |
 |---|---|---:|---|
-| Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | ~7.8 MB | Windows 10/11, Java 21 |
-| Linux x64 (deb) | [nailong_0.9.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.9.0_amd64.deb) | ~3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
+| Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | ~8 MB | Windows 10/11, Java 21 |
+| Linux x64 (deb) | [nailong_0.10.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.10.0_amd64.deb) | ~3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
 
 Checksums: [SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS).
 
@@ -94,7 +94,7 @@ Java 21 must be installed. nailong searches for it automatically and shows a war
 ### Linux (Debian / Ubuntu)
 
 ```bash
-sudo apt install ./nailong_0.9.0_amd64.deb
+sudo apt install ./nailong_0.10.0_amd64.deb
 nailong
 ```
 
@@ -133,7 +133,7 @@ Ran for real:
 - Fabulously Optimized `.mrpack`: 151 mods loaded and launched.
 - CurseForge: a real file was downloaded through the no-key official-page fallback; the approved API key returned the official file name, size, SHA1, and download URL.
 - GUI cancellation: cancelled an install under Xvfb and returned to the “continue install” page without crashing.
-- Download center: real Modrinth + CurseForge APIs; mod/resource-pack/shader search; Jade plus its required dependency downloaded into the version-isolated `mods/`; installed scan, toggles, duplicate detection and update checks.
+- Download center: real Modrinth + CurseForge APIs; mod/resource-pack/shader search; Jade plus its required dependency downloaded into the version-isolated `mods/`; installed scan, toggles, duplicate detection and update checks. 0.10.0 adds a real click-through test: the `+` button on a browse card downloaded Fabric API into the isolated `mods/` and wrote the content index.
 - Prism, MCBBS, HMCL, and ATLauncher: real or synthetic samples passed format detection and instance creation.
 
 Not verified yet:
