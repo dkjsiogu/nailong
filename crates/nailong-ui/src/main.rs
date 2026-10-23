@@ -141,6 +141,11 @@ enum Msg {
         category: Option<usize>,
         result: Result<Vec<Shelf>, String>,
     },
+    BrowseMore {
+        sort: mods::Sort,
+        offset: usize,
+        result: Result<mods::SearchPage, String>,
+    },
     LaunchDone(i32),
     LaunchFailed(String),
 }
@@ -148,6 +153,7 @@ enum Msg {
 /// 浏览页的一排内容：热门 / 最新。
 struct Shelf {
     title: &'static str,
+    sort: mods::Sort,
     projects: Vec<mods::Project>,
 }
 
@@ -174,6 +180,7 @@ struct App {
     mods_browse: Vec<Shelf>,
     mods_browse_loading: bool,
     mods_category: Option<usize>,
+    mods_shelf: Option<mods::Sort>,
     mods_searching: bool,
     mods_quick: Option<String>,
     mods_icons: HashMap<String, egui::TextureHandle>,
@@ -254,6 +261,7 @@ impl App {
             mods_browse: Vec::new(),
             mods_browse_loading: false,
             mods_category: None,
+            mods_shelf: None,
             mods_searching: false,
             mods_quick: None,
             mods_icons: HashMap::new(),
@@ -701,6 +709,7 @@ impl App {
         self.mods_browse.clear();
         self.mods_browse_loading = false;
         self.mods_category = None;
+        self.mods_shelf = None;
         self.mods_searching = false;
         self.mods_quick = None;
         self.error = None;
@@ -744,6 +753,7 @@ impl App {
         self.mods_error = None;
         self.mods_browse.clear();
         self.mods_browse_loading = false;
+        self.mods_shelf = None;
         self.mods_searching = false;
         self.mods_quick = None;
         self.mods_icons.clear();
@@ -936,6 +946,7 @@ impl App {
         }
         self.mods_loading = true;
         self.mods_searching = true;
+        self.mods_shelf = None;
         self.mods_browse.clear();
         self.mods_error = None;
         self.mods_notice = None;
@@ -967,6 +978,7 @@ impl App {
     /// 回到浏览页（清掉搜索态）。
     fn show_browse(&mut self) {
         self.mods_searching = false;
+        self.mods_shelf = None;
         self.mods_selected = None;
         self.mods_results.clear();
         self.mods_total = 0;
@@ -984,6 +996,7 @@ impl App {
         }
         self.mods_kind = kind;
         self.mods_category = None;
+        self.mods_shelf = None;
         self.mods_searching = false;
         self.mods_selected = None;
         self.mods_results.clear();
@@ -1030,15 +1043,18 @@ impl App {
                 (Ok(popular), Ok(newest)) => Ok(vec![
                     Shelf {
                         title: "热门",
+                        sort: mods::Sort::Popular,
                         projects: popular,
                     },
                     Shelf {
                         title: "最新",
+                        sort: mods::Sort::Newest,
                         projects: newest,
                     },
                 ]),
                 (Ok(popular), Err(_)) => Ok(vec![Shelf {
                     title: "热门",
+                    sort: mods::Sort::Popular,
                     projects: popular,
                 }]),
                 (Err(e), _) => Err(e.to_string()),
@@ -1051,6 +1067,45 @@ impl App {
                         .position(|x| x.slug == c.slug)
                         .unwrap_or(0)
                 }),
+                result,
+            });
+        });
+    }
+
+    /// 打开某一排的完整列表（热门/最新）。
+    fn start_shelf(&mut self, sort: mods::Sort) {
+        self.mods_shelf = Some(sort);
+        self.mods_searching = true;
+        self.mods_selected = None;
+        self.mods_results.clear();
+        self.mods_total = 0;
+        self.mods_offset = 0;
+        self.mods_error = None;
+        self.start_shelf_more(0);
+    }
+
+    fn start_shelf_more(&mut self, offset: usize) {
+        let Some(row) = self.mods_row.clone() else {
+            return;
+        };
+        let Some(sort) = self.mods_shelf else {
+            return;
+        };
+        let kind = self.mods_kind;
+        let loader = mod_loader(row.loader);
+        let category = self
+            .mods_category
+            .and_then(|index| mods::categories(kind).get(index).copied());
+        let mc = row.mc.clone();
+        self.mods_loading = true;
+        let (tx, rx) = mpsc::channel();
+        self.mods_rx = Some(rx);
+        std::thread::spawn(move || {
+            let result = mods::browse(kind, category, &mc, loader, sort, offset, 24)
+                .map_err(|e| e.to_string());
+            let _ = tx.send(Msg::BrowseMore {
+                sort,
+                offset,
                 result,
             });
         });
@@ -1530,6 +1585,40 @@ impl App {
                         Err(e) => self.mods_error = Some(e),
                     }
                 }
+                Msg::BrowseMore {
+                    sort,
+                    offset,
+                    result,
+                } => {
+                    self.mods_loading = false;
+                    self.mods_rx = None;
+                    if self.mods_shelf != Some(sort) {
+                        continue;
+                    }
+                    match result {
+                        Ok(page) => {
+                            if offset == 0 {
+                                self.mods_results = page.hits;
+                            } else {
+                                for project in page.hits {
+                                    if !self.mods_results.iter().any(|existing| {
+                                        existing.source == project.source
+                                            && existing.id == project.id
+                                    }) {
+                                        self.mods_results.push(project);
+                                    }
+                                }
+                            }
+                            self.mods_offset = self.mods_results.len();
+                            self.mods_total = page.total.max(self.mods_offset as u64);
+                            self.mods_warnings = page.warnings;
+                            self.mods_error = None;
+                            let projects = self.mods_results.clone();
+                            self.request_icons(projects);
+                        }
+                        Err(e) => self.mods_error = Some(e),
+                    }
+                }
                 Msg::Browse {
                     kind,
                     category,
@@ -1937,9 +2026,28 @@ impl App {
             });
         }
         let mut installs = Vec::new();
+        let mut more: Option<mods::Sort> = None;
         for shelf in &shelves {
             ui.add_space(16.0);
-            ui.label(egui::RichText::new(shelf.title).size(15.0).strong());
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(shelf.title).size(15.0).strong());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                egui::RichText::new("更多 ›").size(11.5).color(MUTED),
+                            )
+                            .fill(CARD)
+                            .stroke(egui::Stroke::new(1.0, LINE))
+                            .corner_radius(8)
+                            .min_size(egui::vec2(64.0, 24.0)),
+                        )
+                        .clicked()
+                    {
+                        more = Some(shelf.sort);
+                    }
+                });
+            });
             ui.add_space(8.0);
             for row in shelf.projects.chunks(per_row) {
                 ui.horizontal(|ui| {
@@ -1954,6 +2062,9 @@ impl App {
             }
         }
         self.mods_browse = shelves;
+        if let Some(sort) = more {
+            self.start_shelf(sort);
+        }
         for project in installs {
             self.quick_install(project);
         }
@@ -1977,11 +2088,12 @@ impl App {
             {
                 self.show_browse();
             }
-            ui.label(
-                egui::RichText::new(format!("{} 个结果", self.mods_total))
-                    .size(12.0)
-                    .color(MUTED),
-            );
+            let title = match self.mods_shelf {
+                Some(mods::Sort::Popular) => "热门".to_string(),
+                Some(mods::Sort::Newest) => "最新".to_string(),
+                _ => format!("{} 个结果", self.mods_total),
+            };
+            ui.label(egui::RichText::new(title).size(12.0).color(MUTED));
         });
         ui.add_space(6.0);
         for warning in &self.mods_warnings {
@@ -2026,7 +2138,11 @@ impl App {
                     )
                     .clicked()
                 {
-                    self.start_mods_search_more();
+                    if self.mods_shelf.is_some() {
+                        self.start_shelf_more(self.mods_results.len());
+                    } else {
+                        self.start_mods_search_more();
+                    }
                 }
             });
         }

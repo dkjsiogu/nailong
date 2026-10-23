@@ -59,7 +59,8 @@ Drag a `.mrpack` or `.zip` into the window to start an import. A single mod `.ja
 - The download center opens on a browse page: Mod / Resource pack / Shader tabs, a row of category chips (optimization, technology, adventure, realistic, fantasy, …), then “Popular” and “Newest” shelves of cards. No keyword required.
 - Each card shows the project icon, name and download count, with a `+` button that installs the latest build compatible with the selected version and loader, plus required dependencies. The card turns into “installed” when done.
 - Clicking the rest of a card opens details: pick a specific file version and review `required` / `optional` / `incompatible` dependencies. `required` is added automatically, `optional` is a checkbox (off by default), `incompatible` blocks the download.
-- Search stays in the top bar (Enter to run) and renders the same cards with “load more” pagination. Browse and search merge Modrinth and CurseForge; with a category selected only Modrinth is queried, because CurseForge category ids would need an extra mapping we do not hardcode.
+- Each shelf has “More ›” in its corner: it opens the full list for that shelf (24 per page) with “load more” pagination.
+- Search stays in the top bar (Enter to run) and renders the same cards with pagination. Browse and search merge Modrinth and CurseForge; with a category selected only Modrinth is queried, because CurseForge category ids would need an extra mapping we do not hardcode.
 - Files go into that version's `mods/`, `resourcepacks/` or `shaderpacks/`. A normal version gets an isolated `gameDir` (`versions/<id>/`) on first download; existing saves in the root are not migrated.
 - The installed page can scan existing files, enable/disable, delete, detect duplicates, check for updates and update all.
 - Local `.jar` drag/import is supported, as is local `.zip` import for resource packs and shaders.
