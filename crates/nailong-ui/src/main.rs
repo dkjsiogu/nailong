@@ -184,6 +184,8 @@ struct App {
     mods_browse_loading: bool,
     mods_category: Option<mods::CategoryFilter>,
     mods_source_filter: Option<mods::Source>,
+    mods_mc: Option<String>,
+    mods_loader: Option<mods::Loader>,
     mods_chips_expanded: bool,
     cf_categories: HashMap<mods::ContentKind, Vec<mods::CurseCategory>>,
     cf_loading: HashSet<mods::ContentKind>,
@@ -270,6 +272,8 @@ impl App {
             mods_browse_loading: false,
             mods_category: None,
             mods_source_filter: None,
+            mods_mc: None,
+            mods_loader: None,
             mods_chips_expanded: false,
             cf_categories: HashMap::new(),
             cf_loading: HashSet::new(),
@@ -681,21 +685,20 @@ impl App {
         if self.busy.is_some() {
             return;
         }
-        let Some(row) = self.selected_row() else {
-            self.error = Some("先安装一个 Minecraft 版本".into());
-            return;
+        let row = self.selected_row();
+        let game_dir = row.as_ref().map(|row| {
+            row.game_dir
+                .clone()
+                .unwrap_or_else(|| self.root.version_dir(&row.profile))
+        });
+        let kind = match row.as_ref() {
+            Some(row) if mod_loader(row.loader).is_none() => mods::ContentKind::ResourcePack,
+            _ => mods::ContentKind::Mod,
         };
-        let game_dir = row
-            .game_dir
-            .clone()
-            .unwrap_or_else(|| self.root.version_dir(&row.profile));
-        let kind = if mod_loader(row.loader).is_some() {
-            mods::ContentKind::Mod
-        } else {
-            mods::ContentKind::ResourcePack
-        };
-        self.mods_row = Some(row);
-        self.mods_game_dir = Some(game_dir);
+        self.mods_mc = row.as_ref().map(|row| row.mc.clone());
+        self.mods_loader = row.as_ref().and_then(|row| mod_loader(row.loader));
+        self.mods_row = row;
+        self.mods_game_dir = game_dir;
         self.show_mods = true;
         self.show_install = false;
         self.show_manage = false;
@@ -954,13 +957,11 @@ impl App {
         let Some(row) = self.mods_row.clone() else {
             return;
         };
-        let loader = mod_loader(row.loader);
+        let _ = &row;
+        let loader = self.mods_loader;
+        let mc = self.mods_mc.clone();
         let query = self.mods_query.trim().to_string();
         let kind = self.mods_kind;
-        if kind == mods::ContentKind::Mod && loader.is_none() {
-            self.mods_error = Some("原版不能安装 Mod，请切到资源包或光影".into());
-            return;
-        }
         self.mods_loading = true;
         self.mods_searching = true;
         self.mods_shelf = None;
@@ -978,12 +979,11 @@ impl App {
             self.mods_choices.clear();
             self.mods_optional.clear();
         }
-        let mc = row.mc.clone();
         let source = self.mods_source_filter;
         let (tx, rx) = mpsc::channel();
         self.mods_rx = Some(rx);
         std::thread::spawn(move || {
-            let result = mods::search(&query, source, &mc, loader, kind, offset, 20)
+            let result = mods::search(&query, source, mc.as_deref(), loader, kind, offset, 20)
                 .map_err(|e| e.to_string());
             let _ = tx.send(Msg::ModsSearch {
                 query,
@@ -1006,6 +1006,17 @@ impl App {
         if self.mods_browse.is_empty() && !self.mods_browse_loading {
             self.start_browse();
         }
+    }
+
+    fn reset_browse_selection(&mut self) {
+        self.mods_selected = None;
+        self.mods_versions.clear();
+        self.mods_version = None;
+        self.mods_choices.clear();
+        self.mods_optional.clear();
+        self.mods_results.clear();
+        self.mods_total = 0;
+        self.mods_offset = 0;
     }
 
     fn switch_mods_kind(&mut self, kind: mods::ContentKind) {
@@ -1033,18 +1044,8 @@ impl App {
 
     /// 按当前品类拉两排内容：热门 + 最新。
     fn start_browse(&mut self) {
-        let Some(row) = self.mods_row.clone() else {
-            return;
-        };
         let kind = self.mods_kind;
-        let loader = mod_loader(row.loader);
-        if kind == mods::ContentKind::Mod && loader.is_none() {
-            self.mods_browse.clear();
-            self.mods_browse_loading = false;
-            self.mods_error =
-                Some("原版不能装 Mod，先装一个 Fabric / NeoForge / Forge 版本".into());
-            return;
-        }
+        let loader = self.mods_loader;
         if self.mods_category.is_some()
             && self.mods_source_filter == Some(mods::Source::CurseForge)
             && !mods::curseforge_available()
@@ -1056,7 +1057,7 @@ impl App {
         }
         let category = self.mods_category;
         let source = self.mods_source_filter;
-        let mc = row.mc.clone();
+        let mc = self.mods_mc.clone();
         self.mods_browse_loading = true;
         self.mods_browse.clear();
         self.mods_error = None;
@@ -1068,7 +1069,7 @@ impl App {
                     kind,
                     category,
                     source,
-                    mc: &mc,
+                    mc: mc.as_deref(),
                     loader,
                     sort,
                     offset: 0,
@@ -1120,17 +1121,14 @@ impl App {
     }
 
     fn start_shelf_more(&mut self, offset: usize) {
-        let Some(row) = self.mods_row.clone() else {
-            return;
-        };
         let Some(sort) = self.mods_shelf else {
             return;
         };
         let kind = self.mods_kind;
-        let loader = mod_loader(row.loader);
+        let loader = self.mods_loader;
         let category = self.mods_category;
         let source = self.mods_source_filter;
-        let mc = row.mc.clone();
+        let mc = self.mods_mc.clone();
         self.mods_loading = true;
         let (tx, rx) = mpsc::channel();
         self.mods_rx = Some(rx);
@@ -1139,7 +1137,7 @@ impl App {
                 kind,
                 category,
                 source,
-                mc: &mc,
+                mc: mc.as_deref(),
                 loader,
                 sort,
                 offset,
@@ -1271,12 +1269,13 @@ impl App {
             return;
         }
         let Some(row) = self.mods_row.clone() else {
+            self.mods_error = Some("先回主界面安装一个版本，再回来点 +".into());
             return;
         };
         let kind = self.mods_kind;
         let loader = match (kind, mod_loader(row.loader)) {
             (mods::ContentKind::Mod, None) => {
-                self.mods_error = Some("原版不能装 Mod".into());
+                self.mods_error = Some("原版不能装 Mod，先装 Fabric / NeoForge / Forge".into());
                 return;
             }
             (_, Some(loader)) => loader,
@@ -1335,7 +1334,7 @@ impl App {
         let Some(row) = self.mods_row.clone() else {
             return;
         };
-        let loader = mod_loader(row.loader).unwrap_or(mods::Loader::Fabric);
+        let _ = &row;
         self.mods_loading = false;
         self.mods_browse_loading = false;
         self.mods_selected = Some(project.clone());
@@ -1347,7 +1346,11 @@ impl App {
         self.mods_error = None;
         self.mods_notice = None;
         let project_key = format!("{:?}:{}", project.source, project.id);
-        let mc = row.mc.clone();
+        let Some(mc) = self.mods_mc.clone() else {
+            self.mods_error = Some("选一个具体游戏版本后可以看文件列表".into());
+            return;
+        };
+        let loader = self.mods_loader.unwrap_or(mods::Loader::Fabric);
         let (tx, rx) = mpsc::channel();
         self.mods_rx = Some(rx);
         std::thread::spawn(move || {
@@ -1360,10 +1363,10 @@ impl App {
     }
 
     fn select_mods_version(&mut self, version: mods::Version) {
-        let Some(row) = self.mods_row.clone() else {
+        let Some(mc) = self.mods_mc.clone() else {
             return;
         };
-        let loader = mod_loader(row.loader).unwrap_or(mods::Loader::Fabric);
+        let loader = self.mods_loader.unwrap_or(mods::Loader::Fabric);
         self.mods_version = Some(version.clone());
         self.mods_choices.clear();
         self.mods_optional.clear();
@@ -1371,7 +1374,6 @@ impl App {
         self.mods_error = None;
         self.mods_notice = None;
         let version_key = format!("{:?}:{}", version.source, version.id);
-        let mc = row.mc.clone();
         let (tx, rx) = mpsc::channel();
         self.mods_rx = Some(rx);
         std::thread::spawn(move || {
@@ -1813,7 +1815,6 @@ impl App {
     }
 
     fn top_bar(&mut self, ui: &mut egui::Ui) {
-        let can_mods = self.selected_row().is_some();
         egui::Panel::top("top")
             .default_size(64.0)
             .frame(egui::Frame::new().fill(PANEL))
@@ -1841,30 +1842,30 @@ impl App {
                                 self.show_manage = false;
                                 self.delete_confirm = None;
                             }
-                        } else if self.busy.is_none() && !self.show_install {
-                            if can_mods {
-                                ui.add_space(4.0);
-                                if ghost_button(ui, "下载中心").clicked() {
-                                    self.open_mods();
-                                }
-                            }
-                            if !self.rows.is_empty() {
-                                ui.add_space(4.0);
-                                if ghost_button(ui, "版本管理").clicked() {
-                                    self.show_manage = true;
-                                    self.delete_confirm = None;
-                                    self.error = None;
-                                }
-                            }
+                        } else if self.busy.is_none() {
                             ui.add_space(4.0);
-                            if ghost_button(ui, "+ 安装").clicked() {
-                                self.open_install();
+                            if ghost_button(ui, "下载中心").clicked() {
+                                self.open_mods();
                             }
-                            ui.add_space(4.0);
-                            if ghost_button(ui, "导入整合包").clicked()
-                                && let Some(path) = pick_modpack()
-                            {
-                                self.start_modpack(path);
+                            if !self.show_install {
+                                if !self.rows.is_empty() {
+                                    ui.add_space(4.0);
+                                    if ghost_button(ui, "版本管理").clicked() {
+                                        self.show_manage = true;
+                                        self.delete_confirm = None;
+                                        self.error = None;
+                                    }
+                                }
+                                ui.add_space(4.0);
+                                if ghost_button(ui, "+ 安装").clicked() {
+                                    self.open_install();
+                                }
+                                ui.add_space(4.0);
+                                if ghost_button(ui, "导入整合包").clicked()
+                                    && let Some(path) = pick_modpack()
+                                {
+                                    self.start_modpack(path);
+                                }
                             }
                         }
                     });
@@ -2124,10 +2125,94 @@ impl App {
                 self.start_mods_scan();
             }
         });
-        if let Some(row) = &self.mods_row {
-            ui.add_space(8.0);
-            let text = format!("{} · {}", row.mc, row.loader.name());
-            ui.label(egui::RichText::new(text).size(10.5).color(MUTED));
+        ui.add_space(8.0);
+        let mut wanted_mc: Option<Option<String>> = None;
+        let mut wanted_loader: Option<Option<mods::Loader>> = None;
+        ui.horizontal(|ui| {
+            let mc_label = self
+                .mods_mc
+                .clone()
+                .unwrap_or_else(|| "全部版本".to_string());
+            egui::ComboBox::from_id_salt("browse_mc")
+                .selected_text(mc_label)
+                .width(110.0)
+                .show_ui(ui, |ui| {
+                    if ui
+                        .selectable_label(self.mods_mc.is_none(), "全部版本")
+                        .clicked()
+                    {
+                        wanted_mc = Some(None);
+                    }
+                    let versions = self
+                        .catalog
+                        .as_ref()
+                        .map(|catalog| catalog.minecraft.clone())
+                        .unwrap_or_else(|| vec!["1.21.1".to_string()]);
+                    for version in versions.iter().take(80) {
+                        if ui
+                            .selectable_label(
+                                self.mods_mc.as_deref() == Some(version.as_str()),
+                                version,
+                            )
+                            .clicked()
+                        {
+                            wanted_mc = Some(Some(version.clone()));
+                        }
+                    }
+                });
+            if self.mods_kind == mods::ContentKind::Mod {
+                let loader_label = self
+                    .mods_loader
+                    .map(|loader| loader.label().to_string())
+                    .unwrap_or_else(|| "全部加载器".to_string());
+                egui::ComboBox::from_id_salt("browse_loader")
+                    .selected_text(loader_label)
+                    .width(110.0)
+                    .show_ui(ui, |ui| {
+                        if ui
+                            .selectable_label(self.mods_loader.is_none(), "全部加载器")
+                            .clicked()
+                        {
+                            wanted_loader = Some(None);
+                        }
+                        for loader in [
+                            mods::Loader::Fabric,
+                            mods::Loader::NeoForge,
+                            mods::Loader::Forge,
+                            mods::Loader::Quilt,
+                        ] {
+                            if ui
+                                .selectable_label(self.mods_loader == Some(loader), loader.label())
+                                .clicked()
+                            {
+                                wanted_loader = Some(Some(loader));
+                            }
+                        }
+                    });
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let target = self
+                    .mods_row
+                    .as_ref()
+                    .map(|row| format!("装到 {} · {}", row.mc, row.loader.name()))
+                    .unwrap_or_else(|| "未选择安装目标".to_string());
+                ui.label(egui::RichText::new(target).size(10.5).color(MUTED));
+            });
+        });
+        if let Some(mc) = wanted_mc {
+            self.mods_mc = mc;
+            if self.mods_mc.is_none() {
+                self.mods_loader = None;
+            }
+            self.reset_browse_selection();
+            self.start_browse();
+        }
+        if let Some(loader) = wanted_loader
+            && self.mods_loader != loader
+        {
+            self.mods_loader = loader;
+            self.reset_browse_selection();
+            self.start_browse();
         }
     }
 
@@ -2354,7 +2439,7 @@ impl App {
         let quick = self.mods_quick.as_deref() == Some(key.as_str());
         let busy = self.busy.is_some();
         let (rect, response) =
-            ui.allocate_exact_size(egui::vec2(width, 72.0), egui::Sense::click());
+            ui.allocate_exact_size(egui::vec2(width, 96.0), egui::Sense::click());
         let hovered = response.hovered();
         let fill = if hovered {
             egui::Color32::from_rgb(31, 35, 43)
@@ -2434,9 +2519,17 @@ impl App {
             ui.vertical(|ui| {
                 ui.add_space(2.0);
                 ui.label(egui::RichText::new(&project.name).size(13.5).strong());
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(short_text(&project.summary, 72))
+                            .size(10.0)
+                            .color(MUTED),
+                    )
+                    .wrap(),
+                );
                 ui.label(
                     egui::RichText::new(format!("{} 下载", compact(project.downloads)))
-                        .size(10.5)
+                        .size(10.0)
                         .color(MUTED),
                 );
             });
@@ -2479,10 +2572,23 @@ impl App {
                         .color(ACCENT),
                 );
             });
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(&project.summary)
+                        .size(12.0)
+                        .color(MUTED),
+                )
+                .wrap(),
+            );
+            ui.add_space(4.0);
             ui.label(
-                egui::RichText::new(&project.summary)
-                    .size(12.0)
-                    .color(MUTED),
+                egui::RichText::new(format!(
+                    "{} · {} 次下载",
+                    project.author,
+                    compact(project.downloads)
+                ))
+                .size(10.5)
+                .color(MUTED),
             );
             ui.add_space(10.0);
 
@@ -3510,6 +3616,19 @@ fn chip(ui: &mut egui::Ui, text: &str, selected: bool) -> egui::Response {
 }
 
 /// 下载量用中文单位，避免卡片里塞一长串数字。
+/// 卡片上只留一小段介绍，完整描述在详情页。
+fn short_text(text: &str, max_chars: usize) -> String {
+    let mut out = String::new();
+    for (index, ch) in text.chars().enumerate() {
+        if index >= max_chars {
+            out.push('…');
+            break;
+        }
+        out.push(ch);
+    }
+    out
+}
+
 fn compact(count: u64) -> String {
     if count >= 100_000_000 {
         format!("{:.1} 亿", count as f64 / 100_000_000.0)

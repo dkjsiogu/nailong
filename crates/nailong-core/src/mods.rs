@@ -479,7 +479,7 @@ struct Query<'a> {
     modrinth_category: Option<&'a str>,
     curseforge_category: Option<u32>,
     sort: Sort,
-    mc: &'a str,
+    mc: Option<&'a str>,
     loader: Option<Loader>,
     kind: ContentKind,
 }
@@ -487,7 +487,7 @@ struct Query<'a> {
 pub fn search(
     query: &str,
     source: Option<Source>,
-    mc: &str,
+    mc: Option<&str>,
     loader: Option<Loader>,
     kind: ContentKind,
     offset: usize,
@@ -566,7 +566,7 @@ pub struct BrowseOptions<'a> {
     pub kind: ContentKind,
     pub category: Option<CategoryFilter>,
     pub source: Option<Source>,
-    pub mc: &'a str,
+    pub mc: Option<&'a str>,
     pub loader: Option<Loader>,
     pub sort: Sort,
     pub offset: usize,
@@ -658,15 +658,14 @@ pub fn browse(options: BrowseOptions<'_>) -> Result<SearchPage> {
 }
 
 fn search_modrinth(query: Query<'_>, offset: usize, limit: usize) -> Result<SearchPage> {
-    let mut facets = vec![
-        vec![format!("project_type:{}", query.kind.modrinth_type())],
-        vec![format!("versions:{}", query.mc)],
-    ];
-    if query.kind == ContentKind::Mod {
-        facets.push(vec![format!(
-            "categories:{}",
-            query.loader.unwrap_or(Loader::Fabric).modrinth_category()
-        )]);
+    let mut facets = vec![vec![format!("project_type:{}", query.kind.modrinth_type())]];
+    if let Some(mc) = query.mc {
+        facets.push(vec![format!("versions:{mc}")]);
+    }
+    if query.kind == ContentKind::Mod
+        && let Some(loader) = query.loader
+    {
+        facets.push(vec![format!("categories:{}", loader.modrinth_category())]);
     }
     if let Some(category) = query.modrinth_category {
         facets.push(vec![format!("categories:{category}")]);
@@ -709,7 +708,6 @@ fn search_curseforge(query: Query<'_>, offset: usize, limit: usize) -> Result<Se
     let mut params = vec![
         ("gameId", CURSEFORGE_GAME_ID.to_string()),
         ("classId", query.kind.curseforge_class().to_string()),
-        ("gameVersion", query.mc.to_string()),
         ("index", offset.to_string()),
         ("pageSize", limit.min(50).to_string()),
         ("sortOrder", "desc".to_string()),
@@ -719,6 +717,9 @@ fn search_curseforge(query: Query<'_>, offset: usize, limit: usize) -> Result<Se
     }
     if let Some(category) = query.curseforge_category {
         params.push(("categoryId", category.to_string()));
+    }
+    if let Some(mc) = query.mc {
+        params.push(("gameVersion", mc.to_string()));
     }
     if query.kind == ContentKind::Mod
         && let Some(loader) = query.loader

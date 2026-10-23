@@ -17,7 +17,7 @@ fn search_plan_download_roundtrip() {
     let page = mods::search(
         "sodium",
         Some(Source::Modrinth),
-        "1.21.1",
+        Some("1.21.1"),
         Some(Loader::Fabric),
         ContentKind::Mod,
         0,
@@ -83,7 +83,7 @@ fn curseforge_search_smoke() {
     match mods::search(
         "jei",
         Some(Source::CurseForge),
-        "1.21.1",
+        Some("1.21.1"),
         Some(Loader::NeoForge),
         ContentKind::Mod,
         0,
@@ -120,7 +120,7 @@ fn browse_categories_return_results() {
                 curseforge: None,
             }),
             source: None,
-            mc: "1.21.1",
+            mc: Some("1.21.1"),
             loader: Some(Loader::Fabric),
             sort: mods::Sort::Popular,
             offset: 0,
@@ -148,7 +148,7 @@ fn one_click_install_writes_index() {
     let page = mods::search(
         "sodium",
         Some(Source::Modrinth),
-        "1.21.1",
+        Some("1.21.1"),
         Some(Loader::Fabric),
         ContentKind::Mod,
         0,
@@ -188,4 +188,32 @@ fn one_click_install_writes_index() {
     println!("index entry: {} ({:?})", entry.file, entry.version_number);
 
     let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+#[ignore = "需要网络，手动运行"]
+fn browse_without_version_or_loader() {
+    let page = mods::browse(mods::BrowseOptions {
+        kind: ContentKind::Mod,
+        category: None,
+        source: Some(Source::Modrinth),
+        mc: None,
+        loader: None,
+        sort: mods::Sort::Popular,
+        offset: 0,
+        limit: 6,
+    })
+    .expect("无版本浏览失败");
+    println!(
+        "no-filter browse: {} hits, total {}",
+        page.hits.len(),
+        page.total
+    );
+    assert!(!page.hits.is_empty());
+    let loaders: Vec<String> = page
+        .hits
+        .iter()
+        .flat_map(|project| project.categories.clone())
+        .collect();
+    println!("sample categories: {loaders:?}");
 }

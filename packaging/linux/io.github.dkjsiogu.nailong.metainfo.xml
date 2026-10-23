@@ -25,6 +25,11 @@
   <url type="bugtracker">https://github.com/dkjsiogu/nailong/issues</url>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.12.0" date="2026-10-23">
+      <description>
+        <p>Browsing no longer forces a Minecraft version or loader: pick any version or “all versions” (all loaders) and browse the whole catalogue without installing anything first. Cards now show a short description.</p>
+      </description>
+    </release>
     <release version="0.11.2" date="2026-10-23">
       <description>
         <p>Category chips are capped at twelve with a “more categories” toggle, so the browse header stays compact.</p>
