@@ -180,6 +180,18 @@ Build the Linux deb:
 
 Windows release builds use MSVC with the static CRT in GitHub Actions. `x86_64-pc-windows-gnu` can also be used for a local cross-compile check.
 
+> Building from source without `NAILONG_CURSEFORGE_API_KEY` produces a binary with the **CurseForge source disabled** (Modrinth is unaffected). This is intentional: the key is obfuscated into the binary at build time and never read from a config file.
+>
+> ```bash
+> NAILONG_CURSEFORGE_API_KEY=... cargo build --release -p nailong-ui
+> ```
+>
+> Live network smoke tests (ignored by default):
+>
+> ```bash
+> cargo test -p nailong-core --test live_modrinth -- --ignored --nocapture
+> ```
+
 ## Not implemented yet
 
 - Microsoft account login (waiting for a client-id / Minecraft Services allowlist).

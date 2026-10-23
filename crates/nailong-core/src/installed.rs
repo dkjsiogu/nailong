@@ -48,11 +48,36 @@ fn actual_path(game_dir: &Path, entry: &InstalledEntry) -> PathBuf {
     content_dir(game_dir, entry.kind).join(format!("{}{suffix}", entry.file))
 }
 
+/// 索引里的 `file` 只能是纯文件名。否则一份被改过的索引可以把删除/改名
+/// 引到 game dir 之外（例如 `"file": "../../.bashrc"`）。
+fn is_safe_file_name(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.contains('/')
+        && !name.contains('\\')
+        && !name.contains('\0')
+        && Path::new(name).components().count() == 1
+}
+
+fn ensure_safe_entry(entry: &InstalledEntry) -> Result<()> {
+    if is_safe_file_name(&entry.file) {
+        Ok(())
+    } else {
+        Err(Error::Install(format!(
+            "内容索引里的文件名不安全，已忽略: {}",
+            entry.file
+        )))
+    }
+}
+
 pub fn load(game_dir: &Path) -> ContentIndex {
-    fs::read(index_path(game_dir))
+    let mut index: ContentIndex = fs::read(index_path(game_dir))
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    index.entries.retain(|entry| is_safe_file_name(&entry.file));
+    index
 }
 
 pub fn save(game_dir: &Path, index: &ContentIndex) -> Result<()> {
@@ -327,6 +352,7 @@ pub fn check_update(
 }
 
 pub fn set_enabled(game_dir: &Path, entry: &mut InstalledEntry, enabled: bool) -> Result<()> {
+    ensure_safe_entry(entry)?;
     if entry.enabled == enabled {
         return Ok(());
     }
@@ -356,6 +382,7 @@ pub fn set_enabled(game_dir: &Path, entry: &mut InstalledEntry, enabled: bool) -
 }
 
 pub fn remove(game_dir: &Path, entry: &InstalledEntry) -> Result<()> {
+    ensure_safe_entry(entry)?;
     let path = actual_path(game_dir, entry);
     if path.is_file() {
         fs::remove_file(&path).map_err(|e| crate::error::io(&path, e))?;
@@ -497,5 +524,48 @@ mod tests {
         let groups = duplicates(&[entry("a.jar"), entry("b.jar")]);
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].1.len(), 2);
+    }
+
+    #[test]
+    fn rejects_index_entries_that_escape_the_game_dir() {
+        let dir = temp_dir("traversal");
+        let outside = dir.parent().unwrap().join(format!(
+            "nailong-victim-{}-{}.txt",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::write(&outside, b"keep").unwrap();
+
+        let crafted = InstalledEntry {
+            kind: ContentKind::Mod,
+            file: format!("../{}", outside.file_name().unwrap().to_string_lossy()),
+            enabled: true,
+            name: "evil".into(),
+            mod_id: None,
+            source: None,
+            project_id: None,
+            version_id: None,
+            version_number: None,
+        };
+        save(
+            &dir,
+            &ContentIndex {
+                entries: vec![crafted.clone()],
+            },
+        )
+        .unwrap();
+
+        // 被篡改的索引在加载时就被丢弃。
+        assert!(load(&dir).entries.is_empty());
+        // 直接传进来的条目也不能绕过检查。
+        assert!(remove(&dir, &crafted).is_err());
+        assert!(set_enabled(&dir, &mut crafted.clone(), false).is_err());
+        assert!(outside.exists());
+
+        let _ = fs::remove_file(&outside);
+        let _ = fs::remove_dir_all(&dir);
     }
 }

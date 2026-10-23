@@ -180,6 +180,18 @@ Linux 构建 deb：
 
 Windows 发布版由 GitHub Actions 使用 MSVC + 静态 CRT 构建；也可以用 `x86_64-pc-windows-gnu` 交叉编译做本地检查。
 
+> 自己从源码构建时，如果没有设置 `NAILONG_CURSEFORGE_API_KEY`，构建出的程序会**禁用 CurseForge 源**（Modrinth 不受影响），这是有意的：key 在构建期混淆进二进制，不读配置文件。
+>
+> ```bash
+> NAILONG_CURSEFORGE_API_KEY=... cargo build --release -p nailong-ui
+> ```
+>
+> 想验证真实接口，跑被忽略的联网冒烟测试：
+>
+> ```bash
+> cargo test -p nailong-core --test live_modrinth -- --ignored --nocapture
+> ```
+
 ## 还没做
 
 - 微软正版登录（client id / Minecraft Services allowlist 审批未就绪）。
