@@ -138,7 +138,8 @@ enum Msg {
     ModsUpdates(Result<Vec<installed::UpdateCandidate>, String>),
     Browse {
         kind: mods::ContentKind,
-        category: Option<usize>,
+        category: Option<mods::CategoryFilter>,
+        source: Option<mods::Source>,
         result: Result<Vec<Shelf>, String>,
     },
     BrowseMore {
@@ -156,6 +157,8 @@ struct Shelf {
     sort: mods::Sort,
     projects: Vec<mods::Project>,
 }
+
+type CfCategoryFetch = (mods::ContentKind, Result<Vec<mods::CurseCategory>, String>);
 
 fn project_key(project: &mods::Project) -> String {
     format!("{:?}:{}", project.source, project.id)
@@ -179,7 +182,11 @@ struct App {
     mods_kind: mods::ContentKind,
     mods_browse: Vec<Shelf>,
     mods_browse_loading: bool,
-    mods_category: Option<usize>,
+    mods_category: Option<mods::CategoryFilter>,
+    mods_source_filter: Option<mods::Source>,
+    cf_categories: HashMap<mods::ContentKind, Vec<mods::CurseCategory>>,
+    cf_loading: HashSet<mods::ContentKind>,
+    cf_rx: Option<mpsc::Receiver<CfCategoryFetch>>,
     mods_shelf: Option<mods::Sort>,
     mods_searching: bool,
     mods_quick: Option<String>,
@@ -261,6 +268,10 @@ impl App {
             mods_browse: Vec::new(),
             mods_browse_loading: false,
             mods_category: None,
+            mods_source_filter: None,
+            cf_categories: HashMap::new(),
+            cf_loading: HashSet::new(),
+            cf_rx: None,
             mods_shelf: None,
             mods_searching: false,
             mods_quick: None,
@@ -709,12 +720,14 @@ impl App {
         self.mods_browse.clear();
         self.mods_browse_loading = false;
         self.mods_category = None;
+        self.mods_source_filter = None;
         self.mods_shelf = None;
         self.mods_searching = false;
         self.mods_quick = None;
         self.error = None;
         self.notice = None;
         self.refresh_installed_keys();
+        self.fetch_cf_categories(self.mods_kind);
         self.start_browse();
     }
 
@@ -756,6 +769,7 @@ impl App {
         self.mods_shelf = None;
         self.mods_searching = false;
         self.mods_quick = None;
+        self.mods_source_filter = None;
         self.mods_icons.clear();
         self.mods_icons_pending.clear();
     }
@@ -962,10 +976,11 @@ impl App {
             self.mods_optional.clear();
         }
         let mc = row.mc.clone();
+        let source = self.mods_source_filter;
         let (tx, rx) = mpsc::channel();
         self.mods_rx = Some(rx);
         std::thread::spawn(move || {
-            let result = mods::search(&query, None, &mc, loader, kind, offset, 20)
+            let result = mods::search(&query, source, &mc, loader, kind, offset, 20)
                 .map_err(|e| e.to_string());
             let _ = tx.send(Msg::ModsSearch {
                 query,
@@ -996,6 +1011,7 @@ impl App {
         }
         self.mods_kind = kind;
         self.mods_category = None;
+        self.mods_source_filter = None;
         self.mods_shelf = None;
         self.mods_searching = false;
         self.mods_selected = None;
@@ -1008,6 +1024,7 @@ impl App {
         self.mods_optional.clear();
         self.mods_notice = None;
         self.mods_error = None;
+        self.fetch_cf_categories(kind);
         self.start_browse();
     }
 
@@ -1025,9 +1042,17 @@ impl App {
                 Some("原版不能装 Mod，先装一个 Fabric / NeoForge / Forge 版本".into());
             return;
         }
-        let category = self
-            .mods_category
-            .and_then(|index| mods::categories(kind).get(index).copied());
+        if self.mods_category.is_some()
+            && self.mods_source_filter == Some(mods::Source::CurseForge)
+            && !mods::curseforge_available()
+        {
+            self.mods_browse.clear();
+            self.mods_browse_loading = false;
+            self.mods_error = Some("此构建没有 CurseForge key".into());
+            return;
+        }
+        let category = self.mods_category;
+        let source = self.mods_source_filter;
         let mc = row.mc.clone();
         self.mods_browse_loading = true;
         self.mods_browse.clear();
@@ -1035,8 +1060,19 @@ impl App {
         let (tx, rx) = mpsc::channel();
         self.mods_rx = Some(rx);
         std::thread::spawn(move || {
-            let load =
-                |sort| mods::browse(kind, category, &mc, loader, sort, 0, 9).map(|page| page.hits);
+            let load = |sort| {
+                mods::browse(mods::BrowseOptions {
+                    kind,
+                    category,
+                    source,
+                    mc: &mc,
+                    loader,
+                    sort,
+                    offset: 0,
+                    limit: 9,
+                })
+                .map(|page| page.hits)
+            };
             let popular = load(mods::Sort::Popular);
             let newest = load(mods::Sort::Newest);
             let result = match (popular, newest) {
@@ -1061,12 +1097,8 @@ impl App {
             };
             let _ = tx.send(Msg::Browse {
                 kind,
-                category: category.map(|c| {
-                    mods::categories(kind)
-                        .iter()
-                        .position(|x| x.slug == c.slug)
-                        .unwrap_or(0)
-                }),
+                category,
+                source,
                 result,
             });
         });
@@ -1093,22 +1125,100 @@ impl App {
         };
         let kind = self.mods_kind;
         let loader = mod_loader(row.loader);
-        let category = self
-            .mods_category
-            .and_then(|index| mods::categories(kind).get(index).copied());
+        let category = self.mods_category;
+        let source = self.mods_source_filter;
         let mc = row.mc.clone();
         self.mods_loading = true;
         let (tx, rx) = mpsc::channel();
         self.mods_rx = Some(rx);
         std::thread::spawn(move || {
-            let result = mods::browse(kind, category, &mc, loader, sort, offset, 24)
-                .map_err(|e| e.to_string());
+            let result = mods::browse(mods::BrowseOptions {
+                kind,
+                category,
+                source,
+                mc: &mc,
+                loader,
+                sort,
+                offset,
+                limit: 24,
+            })
+            .map_err(|e| e.to_string());
             let _ = tx.send(Msg::BrowseMore {
                 sort,
                 offset,
                 result,
             });
         });
+    }
+
+    /// 拉 CurseForge 的真实品类树（每个内容类型只拉一次）。
+    fn fetch_cf_categories(&mut self, kind: mods::ContentKind) {
+        if self.cf_categories.contains_key(&kind) || self.cf_loading.contains(&kind) {
+            return;
+        }
+        if !mods::curseforge_available() {
+            return;
+        }
+        self.cf_loading.insert(kind);
+        let (tx, rx) = mpsc::channel();
+        self.cf_rx = Some(rx);
+        std::thread::spawn(move || {
+            let result = mods::curseforge_categories(kind).map_err(|e| e.to_string());
+            let _ = tx.send((kind, result));
+        });
+    }
+
+    /// 胶囊列表：CurseForge 品类优先，缺的再补 Modrinth 自己的品类。
+    fn browse_chips(&self) -> Vec<(String, Option<mods::CategoryFilter>)> {
+        let kind = self.mods_kind;
+        let mut out: Vec<(String, Option<mods::CategoryFilter>)> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
+        if let Some(items) = self.cf_categories.get(&kind)
+            && !items.is_empty()
+        {
+            for category in items {
+                let alias = mods::category_alias(&category.slug, &category.name);
+                let label = alias
+                    .map(|a| a.0.to_string())
+                    .unwrap_or_else(|| category.name.clone());
+                if !seen.insert(label.clone()) {
+                    continue;
+                }
+                out.push((
+                    label,
+                    Some(mods::CategoryFilter {
+                        modrinth: alias.and_then(|a| a.1),
+                        curseforge: Some(category.id),
+                    }),
+                ));
+            }
+            for category in mods::categories(kind) {
+                let covered = out
+                    .iter()
+                    .any(|(_, filter)| filter.and_then(|f| f.modrinth) == Some(category.slug));
+                if covered || !seen.insert(category.label.to_string()) {
+                    continue;
+                }
+                out.push((
+                    category.label.to_string(),
+                    Some(mods::CategoryFilter {
+                        modrinth: Some(category.slug),
+                        curseforge: None,
+                    }),
+                ));
+            }
+        } else {
+            for category in mods::categories(kind) {
+                out.push((
+                    category.label.to_string(),
+                    Some(mods::CategoryFilter {
+                        modrinth: Some(category.slug),
+                        curseforge: None,
+                    }),
+                ));
+            }
+        }
+        out
     }
 
     /// 给还没缓存的卡片排图标下载任务。
@@ -1365,6 +1475,34 @@ impl App {
     }
 
     fn poll(&mut self) {
+        let mut got_cf = Vec::new();
+        let mut cf_done = false;
+        if let Some(rx) = &self.cf_rx {
+            loop {
+                match rx.try_recv() {
+                    Ok(item) => got_cf.push(item),
+                    Err(mpsc::TryRecvError::Empty) => break,
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        cf_done = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if cf_done {
+            self.cf_rx = None;
+        }
+        for (kind, result) in got_cf {
+            self.cf_loading.remove(&kind);
+            match result {
+                Ok(items) => {
+                    self.cf_categories.insert(kind, items);
+                }
+                Err(_) => {
+                    self.cf_categories.insert(kind, Vec::new());
+                }
+            }
+        }
         let mut messages = Vec::new();
         if let Some(rx) = &self.rx {
             while let Ok(msg) = rx.try_recv() {
@@ -1622,9 +1760,13 @@ impl App {
                 Msg::Browse {
                     kind,
                     category,
+                    source,
                     result,
                 } => {
-                    if kind != self.mods_kind || category != self.mods_category {
+                    if kind != self.mods_kind
+                        || category != self.mods_category
+                        || source != self.mods_source_filter
+                    {
                         continue;
                     }
                     self.mods_browse_loading = false;
@@ -1980,15 +2122,37 @@ impl App {
     }
 
     fn browse_view(&mut self, ui: &mut egui::Ui) {
-        let categories = mods::categories(self.mods_kind);
-        let mut wanted: Option<Option<usize>> = None;
+        if mods::curseforge_available() {
+            let mut wanted_source: Option<Option<mods::Source>> = None;
+            ui.horizontal_wrapped(|ui| {
+                for (label, value) in [
+                    ("全部来源", None),
+                    ("Modrinth", Some(mods::Source::Modrinth)),
+                    ("CurseForge", Some(mods::Source::CurseForge)),
+                ] {
+                    if chip(ui, label, self.mods_source_filter == value).clicked() {
+                        wanted_source = Some(value);
+                    }
+                }
+            });
+            if let Some(source) = wanted_source
+                && source != self.mods_source_filter
+            {
+                self.mods_source_filter = source;
+                self.start_browse();
+            }
+            ui.add_space(6.0);
+        }
+
+        let chips = self.browse_chips();
+        let mut wanted: Option<Option<mods::CategoryFilter>> = None;
         ui.horizontal_wrapped(|ui| {
             if chip(ui, "全部", self.mods_category.is_none()).clicked() {
                 wanted = Some(None);
             }
-            for (index, category) in categories.iter().enumerate() {
-                if chip(ui, category.label, self.mods_category == Some(index)).clicked() {
-                    wanted = Some(Some(index));
+            for (label, filter) in &chips {
+                if chip(ui, label, self.mods_category == *filter).clicked() {
+                    wanted = Some(*filter);
                 }
             }
         });

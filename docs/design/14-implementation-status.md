@@ -1,7 +1,7 @@
-# 14 · 原型实现状态（0.1 → 0.10.0）
+# 14 · 原型实现状态（0.1 → 0.11.0）
 
 > 日期：2026-10-23
-> 对应发布：GitHub Release `v0.10.0` 的 `nailong.exe`、`nailong_0.10.0_amd64.deb`
+> 对应发布：GitHub Release `v0.11.0` 的 `nailong.exe`、`nailong_0.11.0_amd64.deb`
 > 目的：把「设计稿」和「已经跑起来的代码」分开记账，避免把计划当成已完成。
 
 ## 1. 一句话结论
@@ -40,6 +40,8 @@
 
 0.10.0 把下载中心从“先搜索”改成“先浏览”：打开就是品类胶囊（每类内容 8–10 个品类）+「热门」「最新」两排卡片；卡片带项目图标、下载量和一个 `+`，点一下即装最新兼容版本和必需前置（`mods::install_project`），装完卡片变「已装」。搜索保留在右上角，结果复用同一套卡片。图标走后台线程拉取、`image` 解码后在 UI 线程建纹理，并做了占位色块兜底。
 
+0.11.0 把品类换成 CurseForge 的真实目录：运行时拉 `/v1/categories`（每种内容一次），用归一化匹配翻成中文标签并映射到 Modrinth 分类 slug，未收录的保留 CurseForge 原名；新增来源切换（全部 / Modrinth / CurseForge），浏览时把 `categoryId` 直接传给 CurseForge 搜索接口。下载路径不变，仍是启动器解析文件地址、校验后落盘。
+
 发布形态刻意保持简单：Windows 只发一个 `nailong.exe`；Linux 只发一个可双击/`apt install` 的 `.deb`。
 
 这不是 v1.0。它刻意只做一条路径，用来验证三件事：
@@ -69,6 +71,7 @@
 | 整合包导入 | `core::install::modpack` | 完成（6 种格式） | Modrinth、CurseForge、Prism/MultiMC、MCBBS、HMCL、ATLauncher；真实 CurseForge 文件 + 各格式合成包验证 |
 | 下载中心 | `core::mods` / `core::installed` + `nailong-ui` | 完成 | Mod/资源包/光影检索；分页；真实 API；依赖解析；已安装扫描/启停/删除/重复检测/更新；本地导入 |
 | 浏览式发现 + 一键安装 | `core::mods::browse` / `install_project` + `nailong-ui` | 完成 | 品类胶囊 + 热门/最新两排卡片；图标异步加载；卡片 `+` 一键装最新兼容版 + 必需前置；Xvfb 下点击真实安装 fabric-api 并写索引 |
+| CurseForge 真实品类 + 来源切换 | `core::mods::curseforge_categories` / `CategoryFilter` + `nailong-ui` | 完成 | 运行时拉 `/v1/categories`；品类翻中文并映射 Modrinth slug；`categoryId` 传给 CF 搜索；全部/Modrinth/CurseForge 切换 |
 | Windows 便携目录 | `core::paths` | 完成 | 默认使用 exe 同目录 `.minecraft` |
 | CLI（list/java/info/install/launch） | `nailong-cli` | 完成 | 打包产物冒烟 |
 | GUI（版本下拉、安装进度、取消、缺文件补全、启动、下载中心） | `nailong-ui` | 可用 | Xvfb 下走完安装 / 补全 / 启动；安装中取消；下载中心检索/版本/依赖/已安装页实测；浏览页点卡片 `+` 实际下载并落索引；实际 NeoForge 到主菜单 |
@@ -77,7 +80,7 @@
 | 大文件分段下载 | `core::http` | 完成 | client jar 4 段并行、段续传、源回退 |
 | 重复安装快速路径 | `core::install::forge` / `neoforge` | 完成 | health 通过则 0 下载、0 processor |
 | Windows 交叉编译 | `x86_64-pc-windows-gnu` | 通过 | 无 MinGW DLL 依赖，仅系统 DLL |
-| 发布包 | GitHub Release `v0.10.0` | 完成（CI 构建） | 单 exe 约 8 MB / deb 约 3.3 MB |
+| 发布包 | GitHub Release `v0.11.0` | 完成（CI 构建） | 单 exe 约 8 MB / deb 约 3.3 MB |
 
 ### 2.1 实测记录
 
@@ -118,7 +121,7 @@
 | 正版登录 / 自动更新 | 未实现 | 下一步做账户与更新 |
 | 微软正版登录 | 未实现（离线） | 按决定推迟到 M3.5 |
 | 自动更新 / 签名 / 崩溃报告 | 未实现 | 发布前补齐 |
-| 单元/集成测试体系 | **44 个测试**（42 core + 2 UI），另有 4 个真实网络冒烟测试默认忽略（搜索、下载、浏览、一键安装） | 缺夹具、mock HTTP、启动 argv 快照、Windows CI |
+| 单元/集成测试体系 | **48 个测试**（46 core + 2 UI），另有 4 个真实网络冒烟测试默认忽略（搜索、下载、浏览、一键安装） | 缺夹具、mock HTTP、启动 argv 快照、Windows CI |
 
 ## 4. 已知问题与风险
 

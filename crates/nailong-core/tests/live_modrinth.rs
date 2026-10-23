@@ -113,15 +113,19 @@ fn browse_categories_return_results() {
             mods::categories(ContentKind::Shader)[0],
         ),
     ] {
-        let page = mods::browse(
+        let page = mods::browse(mods::BrowseOptions {
             kind,
-            Some(category),
-            "1.21.1",
-            Some(Loader::Fabric),
-            mods::Sort::Popular,
-            0,
-            5,
-        )
+            category: Some(mods::CategoryFilter {
+                modrinth: Some(category.slug),
+                curseforge: None,
+            }),
+            source: None,
+            mc: "1.21.1",
+            loader: Some(Loader::Fabric),
+            sort: mods::Sort::Popular,
+            offset: 0,
+            limit: 5,
+        })
         .unwrap_or_else(|e| panic!("{kind:?} 浏览失败: {e}"));
         println!(
             "{:?} / {} -> {} hits, warnings={:?}",

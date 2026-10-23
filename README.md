@@ -8,7 +8,7 @@
 
 **简体中文** | [English](README.en.md)
 
-> 当前版本：**0.10.0**（预览版）
+> 当前版本：**0.11.0**（预览版）
 >
 > 目标：小体积、少依赖、安装过程可见、中断可补。功能边界见 [实现状态](docs/design/14-implementation-status.md)。
 
@@ -60,7 +60,9 @@ nailong 的思路很直：
 - 每张卡片是一个项目：图标、名字、下载量，右边一个 `+` 直接装。点 `+` 会取当前 Minecraft/加载器下最新的兼容版本，自动带上必需的 Modrinth 前置，装完卡片变成「已装」。
 - 点卡片其它位置进详情：挑具体版本，看 `required` / `optional` / `incompatible` 前置；`required` 自动加入，`optional` 是勾选项（默认不勾），`incompatible` 会阻止下载。
 - 每排右上角有「更多 ›」：进入该排的完整列表（每页 24 个），继续「加载更多」翻页。
-- 搜索框还在右上角，回车即搜；搜索结果同样是卡片，也可以翻页。浏览和搜索都合并 Modrinth 与 CurseForge 的结果；选了品类时只查 Modrinth（CurseForge 的品类 id 需要额外映射，暂不硬编码）。
+- 品类胶囊来自 **CurseForge 的真实品类树**：启动器运行时拉 `/v1/categories`，翻译成中文（科技、魔法、冒险、世界…），CurseForge 独有的品类照它的名字显示；Modrinth 有而 CurseForge 没有的品类补在后面。
+- 可按来源切换：全部 / Modrinth / CurseForge。选 CurseForge 时列表就是它的目录，按它的品类和排序走；下载仍由启动器解析地址并校验，不走网页。
+- 搜索框还在右上角，回车即搜；搜索结果同样是卡片，也可以翻页。
 - 浏览和安装都锁定当前选中版本：Mod 跟随该版本的加载器，资源包/光影只跟随 Minecraft 版本。
 - 下载到该版本的 `mods/`、`resourcepacks/` 或 `shaderpacks/`。普通版本首次下载会启用独立 `gameDir`（`versions/<id>/`），不会和其他版本互相污染；根目录旧存档不会自动迁移。
 - 已安装页可以扫描现有目录、启用/禁用、删除、检测重复项目、检查更新并一键更新。
@@ -79,7 +81,7 @@ nailong 的思路很直：
 | 平台 | 文件 | 大小 | 要求 |
 |---|---|---:|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | 约 8 MB | Windows 10/11，Java 21 |
-| Linux x64 (deb) | [nailong_0.10.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.10.0_amd64.deb) | 约 3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
+| Linux x64 (deb) | [nailong_0.11.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.11.0_amd64.deb) | 约 3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
 
 校验值：[SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS)。
 
@@ -96,7 +98,7 @@ nailong 的思路很直：
 ### Linux（Debian / Ubuntu）
 
 ```bash
-sudo apt install ./nailong_0.10.0_amd64.deb
+sudo apt install ./nailong_0.11.0_amd64.deb
 nailong
 ```
 

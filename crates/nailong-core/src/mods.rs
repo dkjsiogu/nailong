@@ -280,6 +280,111 @@ pub fn curseforge_available() -> bool {
     builtin::curseforge_api_key().is_some()
 }
 
+/// 一次浏览的品类过滤：Modrinth 用 slug，CurseForge 用官方 categoryId。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CategoryFilter {
+    pub modrinth: Option<&'static str>,
+    pub curseforge: Option<u32>,
+}
+
+/// CurseForge 官方品类树的一项。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CurseCategory {
+    pub id: u32,
+    pub name: String,
+    pub slug: String,
+    pub display_index: i64,
+}
+
+/// 拉 CurseForge 的真实品类树，界面直接用它当胶囊。
+pub fn curseforge_categories(kind: ContentKind) -> Result<Vec<CurseCategory>> {
+    cancel::check()?;
+    let key = curse_key()?;
+    let url = query_url(
+        &format!("{CURSEFORGE_API}/categories"),
+        &[
+            ("gameId", CURSEFORGE_GAME_ID.to_string()),
+            ("classId", kind.curseforge_class().to_string()),
+        ],
+    )?;
+    let value = Http::new("official")?.get_json_with_headers(&url, &curse_headers(&key))?;
+    let mut out: Vec<CurseCategory> = value
+        .get("data")
+        .and_then(|v| v.as_array())
+        .map(|items| items.iter().filter_map(curse_category).collect())
+        .unwrap_or_default();
+    out.sort_by(|a, b| {
+        a.display_index
+            .cmp(&b.display_index)
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    Ok(out)
+}
+
+fn curse_category(value: &Value) -> Option<CurseCategory> {
+    Some(CurseCategory {
+        id: value.get("id")?.as_u64()?.try_into().ok()?,
+        name: value.get("name")?.as_str()?.to_string(),
+        slug: value
+            .get("slug")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        display_index: value
+            .get("displayIndex")
+            .and_then(|v| v.as_i64())
+            .unwrap_or_default(),
+    })
+}
+
+fn normalize_category(text: &str) -> String {
+    text.chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .flat_map(|c| c.to_lowercase())
+        .collect()
+}
+
+/// 把 CurseForge 的品类名/slug 归一成我们的中文标签和 Modrinth slug。
+///
+/// 没收录的品类返回 None，界面就原样显示 CurseForge 的名字。
+pub fn category_alias(slug: &str, name: &str) -> Option<(&'static str, Option<&'static str>)> {
+    for key in [normalize_category(slug), normalize_category(name)] {
+        let hit = match key.as_str() {
+            "technology" | "tech" => ("科技", Some("technology")),
+            "magic" => ("魔法", Some("magic")),
+            "adventureandrp" | "adventureandrpg" | "adventure" => ("冒险", Some("adventure")),
+            "decoration" | "decorations" => ("装饰", Some("decoration")),
+            "worldgen" | "worldgeneration" => ("世界", Some("worldgen")),
+            "mobs" | "mob" => ("生物", Some("mobs")),
+            "storage" => ("存储", Some("storage")),
+            "library" | "libraryandapis" | "libraries" => ("库", Some("library")),
+            "optimization" | "performance" => ("优化", Some("optimization")),
+            "utility" | "serverutility" | "miscellaneous" => ("工具", Some("utility")),
+            "food" => ("食物", Some("food")),
+            "equipment" | "armor" | "armortoolsandweapons" => ("装备", Some("equipment")),
+            "energy" => ("能源", None),
+            "redstone" => ("红石", None),
+            "transport" | "playertransport" | "transportation" => ("交通", Some("transportation")),
+            "addons" => ("附属", None),
+            "cosmetic" => ("外观", None),
+            "mapandinformation" => ("地图信息", None),
+            "oresandresources" => ("矿物", None),
+            "structures" => ("结构", None),
+            "biomes" => ("生物群系", Some("worldgen")),
+            "dimensions" => ("维度", Some("worldgen")),
+            "minigame" | "minigames" => ("小游戏", Some("minigame")),
+            "economy" => ("经济", Some("economy")),
+            "gamemechanics" => ("机制", Some("game-mechanics")),
+            "social" => ("社交", Some("social")),
+            "management" => ("管理", Some("management")),
+            "cursed" => ("整活", Some("cursed")),
+            _ => continue,
+        };
+        return Some(hit);
+    }
+    None
+}
+
 #[derive(Debug, Clone)]
 pub struct Project {
     pub source: Source,
@@ -365,7 +470,8 @@ fn curse_headers(key: &str) -> [(&str, &str); 2] {
 /// 一次查询的固定条件，避免内部函数参数爆炸。
 struct Query<'a> {
     text: &'a str,
-    category: Option<Category>,
+    modrinth_category: Option<&'a str>,
+    curseforge_category: Option<u32>,
     sort: Sort,
     mc: &'a str,
     loader: Option<Loader>,
@@ -395,7 +501,8 @@ pub fn search(
         match search_modrinth(
             Query {
                 text: query,
-                category: None,
+                modrinth_category: None,
+                curseforge_category: None,
                 sort: Sort::Relevance,
                 mc,
                 loader,
@@ -418,7 +525,8 @@ pub fn search(
         match search_curseforge(
             Query {
                 text: query,
-                category: None,
+                modrinth_category: None,
+                curseforge_category: None,
                 sort: Sort::Relevance,
                 mc,
                 loader,
@@ -447,20 +555,33 @@ pub fn search(
     Ok(page)
 }
 
+/// 一次浏览请求：品类、来源、版本、加载器和分页。
+pub struct BrowseOptions<'a> {
+    pub kind: ContentKind,
+    pub category: Option<CategoryFilter>,
+    pub source: Option<Source>,
+    pub mc: &'a str,
+    pub loader: Option<Loader>,
+    pub sort: Sort,
+    pub offset: usize,
+    pub limit: usize,
+}
+
 /// 浏览：按品类/热度拿内容，不需要输入关键词。
 ///
-/// 选了品类时只查 Modrinth（CurseForge 的品类 id 需要额外接口，暂不映射）；
-/// 没选品类时两个源都查，和搜索一致。
-pub fn browse(
-    kind: ContentKind,
-    category: Option<Category>,
-    mc: &str,
-    loader: Option<Loader>,
-    sort: Sort,
-    offset: usize,
-    limit: usize,
-) -> Result<SearchPage> {
+/// 品类和来源都可过滤：Modrinth 用分类 slug，CurseForge 用官方 `categoryId`。
+pub fn browse(options: BrowseOptions<'_>) -> Result<SearchPage> {
     cancel::check()?;
+    let BrowseOptions {
+        kind,
+        category,
+        source,
+        mc,
+        loader,
+        sort,
+        offset,
+        limit,
+    } = options;
     let limit = limit.clamp(1, 50);
     let mut page = SearchPage {
         hits: Vec::new(),
@@ -468,33 +589,38 @@ pub fn browse(
         warnings: Vec::new(),
     };
     let mut last_error = None;
+    let want = |candidate: Source| source.is_none_or(|wanted| wanted == candidate);
 
-    match search_modrinth(
-        Query {
-            text: "",
-            category,
-            sort,
-            mc,
-            loader,
-            kind,
-        },
-        offset,
-        limit,
-    ) {
-        Ok(mut result) => {
-            page.hits.append(&mut result.hits);
-            page.total = page.total.max(result.total);
-        }
-        Err(e) => {
-            page.warnings.push(format!("Modrinth: {e}"));
-            last_error = Some(e);
+    if want(Source::Modrinth) {
+        match search_modrinth(
+            Query {
+                text: "",
+                modrinth_category: category.and_then(|c| c.modrinth),
+                curseforge_category: None,
+                sort,
+                mc,
+                loader,
+                kind,
+            },
+            offset,
+            limit,
+        ) {
+            Ok(mut result) => {
+                page.hits.append(&mut result.hits);
+                page.total = page.total.max(result.total);
+            }
+            Err(e) => {
+                page.warnings.push(format!("Modrinth: {e}"));
+                last_error = Some(e);
+            }
         }
     }
-    if category.is_none() && curseforge_available() {
+    if want(Source::CurseForge) && curseforge_available() {
         match search_curseforge(
             Query {
                 text: "",
-                category: None,
+                modrinth_category: None,
+                curseforge_category: category.and_then(|c| c.curseforge),
                 sort,
                 mc,
                 loader,
@@ -536,8 +662,8 @@ fn search_modrinth(query: Query<'_>, offset: usize, limit: usize) -> Result<Sear
             query.loader.unwrap_or(Loader::Fabric).modrinth_category()
         )]);
     }
-    if let Some(category) = query.category {
-        facets.push(vec![format!("categories:{}", category.slug)]);
+    if let Some(category) = query.modrinth_category {
+        facets.push(vec![format!("categories:{category}")]);
     }
     let facets = serde_json::to_string(&facets)
         .map_err(|e| Error::Install(format!("Modrinth facets 序列化失败: {e}")))?;
@@ -584,6 +710,9 @@ fn search_curseforge(query: Query<'_>, offset: usize, limit: usize) -> Result<Se
     ];
     if let Some(field) = query.sort.curseforge_field() {
         params.push(("sortField", field.to_string()));
+    }
+    if let Some(category) = query.curseforge_category {
+        params.push(("categoryId", category.to_string()));
     }
     if query.kind == ContentKind::Mod
         && let Some(loader) = query.loader
@@ -1219,6 +1348,34 @@ mod tests {
                 assert!(slugs.insert(category.slug), "重复 slug: {}", category.slug);
             }
         }
+    }
+
+    #[test]
+    fn parses_curseforge_categories() {
+        let value = serde_json::json!({
+            "id": 447,
+            "name": "Technology",
+            "slug": "technology",
+            "displayIndex": 3
+        });
+        let category = curse_category(&value).unwrap();
+        assert_eq!(category.id, 447);
+        assert_eq!(category.name, "Technology");
+        assert_eq!(category.slug, "technology");
+        assert_eq!(category.display_index, 3);
+    }
+
+    #[test]
+    fn aliases_curseforge_categories() {
+        let (label, modrinth) = category_alias("technology", "Technology").unwrap();
+        assert_eq!(label, "科技");
+        assert_eq!(modrinth, Some("technology"));
+        let (label, modrinth) = category_alias("world-gen", "World Gen").unwrap();
+        assert_eq!(label, "世界");
+        assert_eq!(modrinth, Some("worldgen"));
+        let (label, _) = category_alias("adventure-and-rpg", "Adventure and RPG").unwrap();
+        assert_eq!(label, "冒险");
+        assert!(category_alias("未知品类", "Unknown Thing").is_none());
     }
 
     #[test]
