@@ -158,3 +158,11 @@ xvfb-run -a ./target/release/nailong --root /tmp/nailong-fresh \
 ```
 
 > 注：CLI 包名是 `nailong-cli`，二进制名是 `nailong`；GUI 包名是 `nailong-ui`，打包时重命名为 `nailong`。构建产物路径以 `target/release/` 为准。
+
+### 6.1 测试卫生（血泪教训）
+
+手工联调/冒烟测试的 game dir **一律**放 `target/scratch/<name>` 或 `/tmp/nailong-<name>`，禁止落在 `$HOME` 下。
+
+- 每次安装都会拉 libraries/assets，单个目录 250 MB 起步；过去在 `$HOME` 下留过 17 个 `nailong-*` 测试目录，清掉后约 1.1 GB。
+- 不给 `--root`/game dir 直接跑 GUI 时，默认数据目录是 `$XDG_DATA_HOME/nailong/.minecraft`（即 `~/.local/share/nailong`），同样会累积完整实例。
+- 这些目录不在仓库里，`git status` 永远是干净的，所以**收尾时要用 `find ~ -maxdepth 2 -iname 'nailong*'` 单独查一遍**。
