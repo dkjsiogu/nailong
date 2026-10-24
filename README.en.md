@@ -8,7 +8,7 @@ A small, native Minecraft: Java Edition launcher written in Rust. Windows ships 
 
 [简体中文](README.md) | **English**
 
-> Current version: **0.15.0** (preview)
+> Current version: **0.16.0** (preview)
 >
 > Goals: small binaries, few dependencies, visible install progress, and a repair path after interruption. See [implementation status](docs/design/14-implementation-status.md) for exact boundaries.
 
@@ -24,6 +24,18 @@ nailong tries to do one thing simply:
 - Drop in a modpack and nailong detects the format, installs the loader, downloads files, and applies overrides.
 
 It is not a universal launcher, and it is not 1.0 yet. What works and what does not is laid out below.
+
+## Interface
+
+0.16 rebuilds the UI around a [design system](docs/design/15-ui-design-system.md): dark neutral surfaces, one warm accent, a fixed page header, and a single scrolling content area. Each page has one primary action; deletes confirm inline; empty states point at the next step.
+
+| Home | Download center |
+|---|---|
+| ![Home](docs/screenshots/01-main.png) | ![Download center](docs/screenshots/04-browse.png) |
+| **Project page** | **Content manager** |
+| ![Project page](docs/screenshots/06-detail.png) | ![Content manager](docs/screenshots/07-installed.png) |
+
+More screenshots (version manager, install, search, updates, saves, progress, account dialogs): [docs/screenshots](docs/screenshots).
 
 ## Features
 
@@ -58,9 +70,9 @@ Drag a `.mrpack` or `.zip` into the window to start an import. A single mod `.ja
 
 - Pick “install to: <installed version>” in the download center first. Browsing and search then lock to that version's Minecraft version and loader, and `+` writes straight into its `mods/`, `resourcepacks/` or `shaderpacks/`.
 - Prefer window-shopping? Choose “browse only”, pick any version/loader, and `+` will ask for an install target first.
-- The download center opens on a browse page: Mod / Resource pack / Shader tabs, a row of category chips (optimization, technology, adventure, realistic, fantasy, …), then “Popular” and “Newest” shelves of cards. No keyword required.
-- Each card shows the project icon, name and download count, with a `+` button that installs the latest build compatible with the selected version and loader, plus required dependencies. The card turns into “installed” when done.
-- Clicking the rest of a card opens details: pick a specific file version and review `required` / `optional` / `incompatible` dependencies. `required` is added automatically, `optional` is a checkbox (off by default), `incompatible` blocks the download.
+- The download center opens on a browse page: title, search, content type and “install to” stay pinned at the top; the content area is a row of category chips (optimization, technology, adventure, realistic, fantasy, …) plus “Popular” and “Newest” shelves. No keyword required.
+- Each card shows the icon, name, summary and download count, with a `+` in its bottom-right corner. It installs the latest build compatible with the selected version and loader, plus required dependencies, and then turns into “installed”.
+- Clicking the rest of a card opens a two-column project page: project/version info and dependencies on the left, the install panel and version history on the right. Pick a file version and review `required` / `optional` / `incompatible` dependencies; `required` is added automatically, `optional` is off by default, `incompatible` blocks the download.
 - Each shelf has “More ›” in its corner: it opens the full list for that shelf (24 per page) with “load more” pagination.
 - Category chips come from **CurseForge's real category tree**: the launcher fetches `/v1/categories` at runtime and translates it, keeping CurseForge-only categories under their own names and appending Modrinth-only ones after them.
 - Version and loader are optional: “all versions · all loaders” is the default, so window-shopping works without installing anything first.
@@ -68,7 +80,7 @@ Drag a `.mrpack` or `.zip` into the window to start an import. A single mod `.ja
 - The chip row shows 12 categories by default and folds the rest behind “more categories”. A source switch (All / Modrinth / CurseForge) lets you browse the CurseForge catalogue as-is, with its categories and sort orders. Downloads are still resolved and verified by the launcher; no website is involved.
 - Search stays in the top bar (Enter to run) and renders the same cards with pagination.
 - Files go into that version's `mods/`, `resourcepacks/` or `shaderpacks/`. A normal version gets an isolated `gameDir` (`versions/<id>/`) on first download; existing saves in the root are not migrated.
-- The installed page can scan existing files, enable/disable, delete, detect duplicates, check for updates and update all.
+- The installed page is a real content manager: filter by name, toggle files, check for updates, update one or all, and see duplicate warnings. Delete asks inline, and updating a disabled file keeps it disabled.
 - Local `.jar` drag/import is supported, as is local `.zip` import for resource packs and shaders.
 - Identical existing files are skipped; conflicts are reported, never silently overwritten. Updates replace the old version and keep the index in sync.
 
@@ -89,7 +101,7 @@ Drag a `.mrpack` or `.zip` into the window to start an import. A single mod `.ja
 | Platform | File | Size | Requirements |
 |---|---|---:|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | ~8 MB | Windows 10/11, Java 21 |
-| Linux x64 (deb) | [nailong_0.15.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.15.0_amd64.deb) | ~3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
+| Linux x64 (deb) | [nailong_0.16.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.16.0_amd64.deb) | ~3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
 
 Checksums: [SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS).
 
@@ -141,6 +153,7 @@ Official releases include a project key, so CurseForge packs use the official AP
 
 Ran for real:
 
+- GUI: every page was walked at 1120×720 and the 900×620 minimum, including browse/search/detail, content manager, update banner, delete confirmation, empty states, save snapshots, progress, and the account/login dialogs; screenshots live in `docs/screenshots/`.
 - Linux (Xvfb + Mesa): Fabric 0.19.5, NeoForge 21.1.209, and Forge 52.1.20 on 1.21.1 reached the main menu.
 - Fabulously Optimized `.mrpack`: 151 mods loaded and launched.
 - CurseForge: a real file was downloaded through the no-key official-page fallback; the approved API key returned the official file name, size, SHA1, and download URL.
@@ -151,7 +164,6 @@ Ran for real:
 Not verified yet:
 
 - Windows is built natively in CI but has not been launched on a real Windows machine.
-- Microsoft account login is not implemented; it needs a Minecraft Services client-id allowlist first.
 - macOS is not supported.
 
 ## Command line

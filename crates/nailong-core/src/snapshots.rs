@@ -189,6 +189,28 @@ pub fn restore(game_dir: &Path, world: &str, id: &str) -> Result<PathBuf> {
     Ok(target)
 }
 
+/// 对象库的块数和占用字节数（用于界面展示“仓库”规模）。
+pub fn repo_stats(game_dir: &Path) -> (usize, u64) {
+    let objects = objects_dir(game_dir);
+    let mut count = 0usize;
+    let mut bytes = 0u64;
+    if let Ok(prefixes) = fs::read_dir(&objects) {
+        for prefix in prefixes.flatten() {
+            if let Ok(entries) = fs::read_dir(prefix.path()) {
+                for entry in entries.flatten() {
+                    if let Ok(meta) = entry.metadata()
+                        && meta.is_file()
+                    {
+                        count += 1;
+                        bytes += meta.len();
+                    }
+                }
+            }
+        }
+    }
+    (count, bytes)
+}
+
 pub fn delete(game_dir: &Path, world: &str, id: &str) -> Result<()> {
     let world = safe_name(world)?;
     let path = snapshots_dir(game_dir, world).join(format!("{id}.json"));

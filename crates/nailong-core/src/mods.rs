@@ -527,7 +527,7 @@ pub fn search(
             }
         }
     }
-    if want(Source::CurseForge) {
+    if want(Source::CurseForge) && curseforge_available() {
         match search_curseforge(
             Query {
                 text: query,

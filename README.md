@@ -8,7 +8,7 @@
 
 **简体中文** | [English](README.en.md)
 
-> 当前版本：**0.15.0**（预览版）
+> 当前版本：**0.16.0**（预览版）
 >
 > 目标：小体积、少依赖、安装过程可见、中断可补。功能边界见 [实现状态](docs/design/14-implementation-status.md)。
 
@@ -24,6 +24,18 @@ nailong 的思路很直：
 - 整合包拖进来就能识别，装加载器、下文件、解压覆盖一步到位。
 
 它不是“万能启动器”，也还不是 1.0。能做和不能做的，下文列清楚了。
+
+## 界面
+
+0.16 的界面按 [设计系统](docs/design/15-ui-design-system.md) 重做：深色中性底、暖黄强调色、固定的页面头部、单一滚动区。每个页面只有一个主操作，删除走行内确认，空状态直接给出下一步。
+
+| 启动台 | 下载中心 |
+|---|---|
+| ![启动台](docs/screenshots/01-main.png) | ![下载中心](docs/screenshots/04-browse.png) |
+| **项目详情** | **内容管理** |
+| ![项目详情](docs/screenshots/06-detail.png) | ![内容管理](docs/screenshots/07-installed.png) |
+
+更多截图（版本管理、安装、搜索、更新、存档、进度、账户弹窗）：[docs/screenshots](docs/screenshots)。
 
 ## 特性
 
@@ -58,9 +70,9 @@ nailong 的思路很直：
 
 - 下载中心右上角先选「安装到：<已装版本>」：选定后浏览、搜索都锁定这个版本的 Minecraft 版本和加载器，`+` 直接下进该版本的 `mods/` / `resourcepacks/` / `shaderpacks/`，不会再下错地方。
 - 不想装也能纯逛：选「只浏览」，版本和加载器自己挑，点 `+` 会提示先选安装目标。
-- 打开下载中心就是浏览页：顶上是 Mod / 资源包 / 光影，下面一排品类胶囊（优化、科技、冒险、写实、奇幻…），再往下是「热门」「最新」两排内容卡片。不用先搜索，也不用先想关键词。
-- 每张卡片是一个项目：图标、名字、下载量，右边一个 `+` 直接装。点 `+` 会取当前 Minecraft/加载器下最新的兼容版本，自动带上必需的 Modrinth 前置，装完卡片变成「已装」。
-- 点卡片其它位置进详情：挑具体版本，看 `required` / `optional` / `incompatible` 前置；`required` 自动加入，`optional` 是勾选项（默认不勾），`incompatible` 会阻止下载。
+- 打开下载中心就是浏览页：标题、搜索、内容类型和「安装到」固定在顶部，内容区是一排品类胶囊（优化、科技、冒险、写实、奇幻…）加「热门」「最新」两排卡片。不用先搜索，也不用先想关键词。
+- 每张卡片是一个项目：图标、名字、简介、下载量，右下角一个 `+` 直接装。点 `+` 会取当前 Minecraft/加载器下最新的兼容版本，自动带上必需的 Modrinth 前置，装完卡片变成「已装」。
+- 点卡片其它位置进详情：左边是项目信息、版本信息和前置，右边是安装面板与版本记录；挑具体版本，看 `required` / `optional` / `incompatible` 前置；`required` 自动加入，`optional` 是勾选项（默认不勾），`incompatible` 会阻止下载。
 - 每排右上角有「更多 ›」：进入该排的完整列表（每页 24 个），继续「加载更多」翻页。
 - 品类胶囊来自 **CurseForge 的真实品类树**：启动器运行时拉 `/v1/categories`，翻译成中文（科技、魔法、冒险、世界…），CurseForge 独有的品类照它的名字显示；Modrinth 有而 CurseForge 没有的品类补在后面。
 - 品类默认只铺前 12 个，其余收进「更多品类」；可按来源切换：全部 / Modrinth / CurseForge。
@@ -69,7 +81,7 @@ nailong 的思路很直：
 - 搜索框还在右上角，回车即搜；搜索结果同样是卡片，也可以翻页。
 - 浏览和安装都锁定当前选中版本：Mod 跟随该版本的加载器，资源包/光影只跟随 Minecraft 版本。
 - 下载到该版本的 `mods/`、`resourcepacks/` 或 `shaderpacks/`。普通版本首次下载会启用独立 `gameDir`（`versions/<id>/`），不会和其他版本互相污染；根目录旧存档不会自动迁移。
-- 已安装页可以扫描现有目录、启用/禁用、删除、检测重复项目、检查更新并一键更新。
+- 已安装页是独立的内容管理：按名称筛选、开关启用、检查更新、逐项/全部更新、重复项目提醒；删除在行内二次确认，更新一个禁用项不会把它悄悄启用。
 - 支持本地 `.jar` 拖入/导入，以及资源包/光影的本地 `.zip` 导入。
 - 同名文件内容相同则跳过，内容不同会报冲突，不静默覆盖；更新会替换旧版本并保留索引。
 
@@ -90,7 +102,7 @@ nailong 的思路很直：
 | 平台 | 文件 | 大小 | 要求 |
 |---|---|---:|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | 约 8 MB | Windows 10/11，Java 21 |
-| Linux x64 (deb) | [nailong_0.15.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.15.0_amd64.deb) | 约 3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
+| Linux x64 (deb) | [nailong_0.16.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.16.0_amd64.deb) | 约 3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
 
 校验值：[SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS)。
 
@@ -107,7 +119,7 @@ nailong 的思路很直：
 ### Linux（Debian / Ubuntu）
 
 ```bash
-sudo apt install ./nailong_0.15.0_amd64.deb
+sudo apt install ./nailong_0.16.0_amd64.deb
 nailong
 ```
 
@@ -142,6 +154,7 @@ sudo apt remove nailong
 
 已经实际跑过的：
 
+- GUI：1120×720 与最小 900×620 下逐页走查，覆盖浏览、搜索、详情、内容管理、更新横幅、删除确认、空状态、存档快照、进度页和账户/登录弹窗；截图在 `docs/screenshots/`。
 - Linux（Xvfb + Mesa）：Fabric 0.19.5、NeoForge 21.1.209、Forge 52.1.20 在 1.21.1 启动到主菜单。
 - Fabulously Optimized `.mrpack`：151 个模组加载并启动。
 - CurseForge：真实文件通过无 key 的官方下载页回退下载成功；官方 API key 实测返回文件名、大小、SHA1 和下载地址。
@@ -207,7 +220,6 @@ Windows 发布版由 GitHub Actions 使用 MSVC + 静态 CRT 构建；也可以�
 
 ## 还没做
 
-- 微软正版登录（client id / Minecraft Services allowlist 审批未就绪）。
 - 启动器自身自动更新、皮肤、完整整合包更新。
 - 启动后的停止游戏 / 启动取消。
 - Windows 实机验证、macOS 支持。
