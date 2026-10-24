@@ -25,6 +25,11 @@
   <url type="bugtracker">https://github.com/dkjsiogu/nailong/issues</url>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.13.3" date="2026-10-25">
+      <description>
+        <p>The loopback probe now recognises the login_required redirect as success instead of treating every AADSTS response as a rejection.</p>
+      </description>
+    </release>
     <release version="0.13.2" date="2026-10-25">
       <description>
         <p>The login probe now follows the whole redirect chain, so a missing loopback redirect URI is reported with an actionable message instead of failing later in the browser.</p>

@@ -523,7 +523,7 @@ fn pick_redirect_uri(port: u16, challenge: &str, state: &str) -> Result<String> 
     ];
     let _ = rustls::crypto::ring::default_provider().install_default();
     let client = reqwest::blocking::Client::builder()
-        .redirect(reqwest::redirect::Policy::limited(6))
+        .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(25))
         .build()
         .map_err(|e| Error::Install(format!("HTTP 客户端创建失败: {e}")))?;
@@ -533,17 +533,34 @@ fn pick_redirect_uri(port: u16, challenge: &str, state: &str) -> Result<String> 
             continue;
         };
         let status = response.status().as_u16();
-        let body = response.text().unwrap_or_default();
-        let rejected = body.contains("invalid_request")
-            || body.contains("AADSTS")
-            || body.contains("redirect_uri")
-            || status >= 400;
-        if !rejected {
+        let location = response
+            .headers()
+            .get("location")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        if !(300..400).contains(&status) {
+            continue;
+        }
+        // 注册成功时，登录服务器会直接把 login_required/code 回给我们的回环地址。
+        if location.starts_with(&candidate) {
             return Ok(candidate);
+        }
+        // 注册失败时先跳到 login.live.com，再由它显示 invalid_request。
+        if location.contains("login.live.com") || location.contains("login.microsoftonline.com") {
+            let body = client
+                .get(&location)
+                .send()
+                .ok()
+                .and_then(|response| response.text().ok())
+                .unwrap_or_default();
+            if !body.contains("invalid_request") && !body.contains("AADSTS50011") {
+                return Ok(candidate);
+            }
         }
     }
     Err(Error::Install(
-        "微软拒绝了所有回环重定向地址：Azure 应用还没有注册 http://localhost。请到「身份验证 → 添加平台 → 移动和桌面应用程序」勾选 http://localhost，并在「高级设置」把「允许公共客户端流」设为「是」，保存后重试。".into(),
+        "微软拒绝了所有回环重定向地址：请确认 Azure 应用「身份验证」里 http://localhost 已保存（移动和桌面应用程序平台）。".into(),
     ))
 }
 
