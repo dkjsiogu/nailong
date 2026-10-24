@@ -1,6 +1,7 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 use eframe::egui;
+use nailong_core::auth;
 use nailong_core::install::{catalog, fabric, forge, health, modpack, neoforge, vanilla};
 use nailong_core::installed;
 use nailong_core::launch::{self, LaunchOptions};
@@ -147,6 +148,8 @@ enum Msg {
         offset: usize,
         result: Result<mods::SearchPage, String>,
     },
+    LoginBrowser(String),
+    LoginDone(Result<auth::Account, String>),
     LaunchDone(i32),
     LaunchFailed(String),
 }
@@ -234,6 +237,11 @@ struct App {
     notice: Option<String>,
     log: Vec<String>,
     show_log: bool,
+    account: Option<auth::Account>,
+    login_url: Option<String>,
+    login_rx: Option<mpsc::Receiver<Msg>>,
+    login_busy: bool,
+    show_account: bool,
     rx: Option<mpsc::Receiver<Msg>>,
     catalog_rx: Option<mpsc::Receiver<Msg>>,
 }
@@ -241,6 +249,7 @@ struct App {
 impl App {
     fn new(root: Root) -> Self {
         let java_ok = java::find_all().iter().any(|j| j.major >= 21);
+        let account = auth::load(&root);
         let (icon_jobs, icon_job_rx) = mpsc::channel::<(String, String)>();
         let (icon_done, icon_rx) = mpsc::channel::<(String, Vec<u8>)>();
         std::thread::spawn(move || {
@@ -322,6 +331,11 @@ impl App {
             notice: None,
             log: vec!["启动器已就绪".into()],
             show_log: false,
+            account,
+            login_url: None,
+            login_rx: None,
+            login_busy: false,
+            show_account: false,
             rx: None,
             catalog_rx: None,
         };
@@ -645,6 +659,123 @@ impl App {
         });
     }
 
+    fn account_overlay(&mut self, ctx: &egui::Context) {
+        if let Some(url) = &self.login_url {
+            let url = url.clone();
+            let mut open = false;
+            let mut cancel = false;
+            egui::Window::new("Microsoft 登录")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(6.0);
+                        ui.label(
+                            egui::RichText::new("浏览器里完成微软登录")
+                                .size(16.0)
+                                .strong(),
+                        );
+                        ui.label(
+                            egui::RichText::new("登录成功后会自动回到启动器")
+                                .size(11.0)
+                                .color(MUTED),
+                        );
+                        ui.add_space(8.0);
+                        ui.horizontal(|ui| {
+                            if ui.button("重新打开浏览器").clicked() {
+                                open = true;
+                            }
+                            if ui.button("取消").clicked() {
+                                cancel = true;
+                            }
+                        });
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label(egui::RichText::new("等待授权…").color(MUTED));
+                        });
+                    });
+                });
+            if open {
+                open_url(&url);
+            }
+            if cancel {
+                cancel::cancel();
+                self.login_url = None;
+                self.login_rx = None;
+                self.login_busy = false;
+                self.notice = Some("已取消登录".into());
+            }
+        } else if self.show_account {
+            let mut logout = false;
+            let mut close = false;
+            if let Some(account) = &self.account {
+                let name = account.name.clone();
+                let uuid = account.uuid.clone();
+                egui::Window::new("账户")
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                    .show(ctx, |ui| {
+                        ui.label(egui::RichText::new(name).size(18.0).strong());
+                        ui.label(
+                            egui::RichText::new(format!("UUID {uuid}"))
+                                .size(10.5)
+                                .color(MUTED),
+                        );
+                        ui.add_space(10.0);
+                        ui.horizontal(|ui| {
+                            if ui.button("退出登录").clicked() {
+                                logout = true;
+                            }
+                            if ui.button("关闭").clicked() {
+                                close = true;
+                            }
+                        });
+                    });
+            }
+            if logout {
+                self.logout();
+            }
+            if close {
+                self.show_account = false;
+            }
+        }
+    }
+
+    fn start_login(&mut self) {
+        if self.login_busy {
+            return;
+        }
+        cancel::reset();
+        self.cancel_requested = false;
+        self.login_busy = true;
+        self.login_url = None;
+        self.error = None;
+        let (tx, rx) = mpsc::channel();
+        self.login_rx = Some(rx);
+        std::thread::spawn(move || {
+            let result = auth::start_auth_code().and_then(|flow| {
+                let url = flow.url.clone();
+                let _ = tx.send(Msg::LoginBrowser(url.clone()));
+                open_url(&url);
+                auth::wait_for_code(&flow, || false)
+                    .and_then(|tokens| auth::login_with_msa(&tokens))
+            });
+            let _ = tx.send(Msg::LoginDone(result.map_err(|e| e.to_string())));
+        });
+    }
+
+    fn logout(&mut self) {
+        if let Err(e) = auth::clear(&self.root) {
+            self.error = Some(e.to_string());
+        }
+        self.account = None;
+        self.show_account = false;
+        self.notice = Some("已退出登录".into());
+    }
+
     fn start_launch(&mut self) {
         if self.busy.is_some() {
             return;
@@ -663,15 +794,33 @@ impl App {
         let root = self.root.clone();
         let username = self.username.clone();
         let memory = self.memory;
+        let account = self.account.clone();
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         std::thread::spawn(move || {
-            let opts = LaunchOptions {
+            let mut opts = LaunchOptions {
                 username,
                 memory_mb: memory,
                 game_dir: row.game_dir.clone(),
                 ..Default::default()
             };
+            if let Some(account) = account {
+                match auth::ensure_fresh(&root, &account) {
+                    Ok(fresh) => {
+                        opts.username = fresh.name.clone();
+                        opts.uuid = Some(fresh.uuid.clone());
+                        opts.access_token = Some(fresh.access_token.clone());
+                        opts.xuid = fresh.xuid.clone();
+                        opts.client_id = Some(fresh.client_id.clone());
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Msg::LaunchFailed(format!(
+                            "账户令牌刷新失败：{e}；可在右上角退出登录改用离线账户"
+                        )));
+                        return;
+                    }
+                }
+            }
             let msg = match launch::launch(&root, &row.profile, &opts) {
                 Ok(0) => Msg::LaunchDone(0),
                 Ok(code) => Msg::LaunchDone(code),
@@ -1516,6 +1665,11 @@ impl App {
             }
         }
         let mut messages = Vec::new();
+        if let Some(rx) = &self.login_rx {
+            while let Ok(msg) = rx.try_recv() {
+                messages.push(msg);
+            }
+        }
         if let Some(rx) = &self.rx {
             while let Ok(msg) = rx.try_recv() {
                 messages.push(msg);
@@ -1794,6 +1948,28 @@ impl App {
                         Err(e) => self.mods_error = Some(e),
                     }
                 }
+                Msg::LoginBrowser(url) => {
+                    self.login_url = Some(url);
+                }
+                Msg::LoginDone(result) => {
+                    self.login_busy = false;
+                    self.login_rx = None;
+                    match result {
+                        Ok(account) => {
+                            if let Err(e) = auth::save(&self.root, &account) {
+                                self.error = Some(e.to_string());
+                            }
+                            self.username = account.name.clone();
+                            self.account = Some(account);
+                            self.login_url = None;
+                            self.notice = Some("已登录 Microsoft 账户".into());
+                        }
+                        Err(e) => {
+                            self.login_url = None;
+                            self.error = Some(e);
+                        }
+                    }
+                }
                 Msg::LaunchDone(code) => {
                     self.busy = None;
                     self.rx = None;
@@ -1843,6 +2019,19 @@ impl App {
                                 self.delete_confirm = None;
                             }
                         } else if self.busy.is_none() {
+                            ui.add_space(4.0);
+                            let label = self
+                                .account
+                                .as_ref()
+                                .map(|account| account.name.clone())
+                                .unwrap_or_else(|| "登录".to_string());
+                            if ghost_button(ui, &label).clicked() {
+                                if self.account.is_some() {
+                                    self.show_account = true;
+                                } else {
+                                    self.start_login();
+                                }
+                            }
                             ui.add_space(4.0);
                             if ghost_button(ui, "下载中心").clicked() {
                                 self.open_mods();
@@ -3320,6 +3509,7 @@ impl eframe::App for App {
             }
         }
         if self.busy.is_some()
+            || self.login_busy
             || self.mods_rx.is_some()
             || self.mods_browse_loading
             || !self.mods_icons_pending.is_empty()
@@ -3340,6 +3530,7 @@ impl eframe::App for App {
                 self.main_view(ui);
             }
         });
+        self.account_overlay(ui.ctx());
     }
 }
 
@@ -3700,6 +3891,17 @@ fn logo_mark(ui: &mut egui::Ui) {
         egui::FontId::proportional(17.0),
         egui::Color32::BLACK,
     );
+}
+
+fn open_url(url: &str) {
+    #[cfg(target_os = "windows")]
+    let _ = std::process::Command::new("cmd")
+        .args(["/C", "start", "", url])
+        .spawn();
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open").arg(url).spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let _ = std::process::Command::new("xdg-open").arg(url).spawn();
 }
 
 fn java_warning(ui: &mut egui::Ui) {

@@ -1,5 +1,8 @@
 # 07 · 账户与认证
 
+> **2026-10-24 更新**：Minecraft Services 的 AppID allowlist 已获批。设备码流程被当前 Entra 应用配置拒绝（`AADSTS70002: The client application must be marked as 'mobile'`，即未开启「允许公共客户端流」），而浏览器授权码 + PKCE 回环可直接使用，因此实现以 PKCE 为主路径；设备码代码保留作后续开关。
+
+
 > 目标：微软正版登录体验接近官方启动器；离线账户可用；令牌安全存储、静默刷新、失败可解释。
 > **当前决策（2026-10-20）**：微软登录不作为 v1.0 的阻塞项。v1.0 先交付离线账户 + 账户抽象；client id 与 Minecraft Services allowlist 就绪后，再把正版登录作为 v1.1 能力启用。设计保留，代码可用 feature/配置开关隐藏。
 > 安全总览见 [09](09-security-legal.md)。

@@ -12,6 +12,10 @@ use std::sync::{Arc, Mutex};
 pub struct LaunchOptions {
     pub username: String,
     pub uuid: Option<String>,
+    /// Microsoft account access token; None keeps the offline placeholder `0`.
+    pub access_token: Option<String>,
+    pub xuid: Option<String>,
+    pub client_id: Option<String>,
     pub memory_mb: u32,
     pub min_memory_mb: u32,
     pub width: u32,
@@ -27,6 +31,9 @@ impl Default for LaunchOptions {
         Self {
             username: "Player".into(),
             uuid: None,
+            access_token: None,
+            xuid: None,
+            client_id: None,
             memory_mb: 4096,
             min_memory_mb: 1024,
             width: 1280,
@@ -85,12 +92,26 @@ pub fn launch(root: &Root, profile: &str, opts: &LaunchOptions) -> Result<i32> {
     }
 
     let mut vars = BTreeMap::new();
+    let access_token = opts
+        .access_token
+        .clone()
+        .filter(|token| !token.is_empty())
+        .unwrap_or_else(|| "0".to_string());
     vars.insert("auth_player_name".to_string(), opts.username.clone());
     vars.insert("auth_uuid".to_string(), uuid.clone());
-    vars.insert("auth_access_token".to_string(), "0".to_string());
-    vars.insert("auth_session".to_string(), format!("token:0:{uuid}"));
-    vars.insert("clientid".to_string(), String::new());
-    vars.insert("auth_xuid".to_string(), String::new());
+    vars.insert("auth_access_token".to_string(), access_token.clone());
+    vars.insert(
+        "auth_session".to_string(),
+        format!("token:{access_token}:{uuid}"),
+    );
+    vars.insert(
+        "clientid".to_string(),
+        opts.client_id.clone().unwrap_or_default(),
+    );
+    vars.insert(
+        "auth_xuid".to_string(),
+        opts.xuid.clone().unwrap_or_default(),
+    );
     vars.insert("user_type".to_string(), "msa".to_string());
     vars.insert("user_properties".to_string(), "{}".to_string());
     vars.insert("version_name".to_string(), resolved.id.clone());
@@ -200,7 +221,7 @@ pub fn launch(root: &Root, profile: &str, opts: &LaunchOptions) -> Result<i32> {
     }
     if !game.iter().any(|a| a == "--accessToken") {
         game.push("--accessToken".into());
-        game.push("0".into());
+        game.push(access_token.clone());
     }
     if !game.iter().any(|a| a == "--version") {
         game.push("--version".into());

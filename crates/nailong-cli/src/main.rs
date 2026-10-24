@@ -186,6 +186,7 @@ fn main() -> anyhow::Result<()> {
                 game_dir,
                 dry_run,
                 print_plan,
+                ..Default::default()
             };
             let code = launch::launch(&root, &profile, &opts)?;
             if code != 0 {

@@ -8,7 +8,7 @@ A small, native Minecraft: Java Edition launcher written in Rust. Windows ships 
 
 [简体中文](README.md) | **English**
 
-> Current version: **0.12.0** (preview)
+> Current version: **0.13.0** (preview)
 >
 > Goals: small binaries, few dependencies, visible install progress, and a repair path after interruption. See [implementation status](docs/design/14-implementation-status.md) for exact boundaries.
 
@@ -72,7 +72,9 @@ Drag a `.mrpack` or `.zip` into the window to start an import. A single mod `.ja
 
 ### Everyday use
 
-- Offline-account launch (singleplayer / LAN).
+- Microsoft account login from the top-right button: browser authorization code + PKCE on a loopback port, automatic token refresh, and `--accessToken` / `--uuid` / `--xuid` at launch.
+- Tokens live in `account.json` under the data directory (mode 0600 on Unix) and never appear in logs; logging out deletes it.
+- Offline-account launch (singleplayer / LAN) still works when nobody is signed in.
 - Version management: base versions required by a loader are hidden from the main picker and protected from deletion.
 - Install progress: stage, percentage, downloaded / total bytes, and file count.
 - GUI and CLI share the same core; the CLI is useful for scripts and debugging.
@@ -82,7 +84,7 @@ Drag a `.mrpack` or `.zip` into the window to start an import. A single mod `.ja
 | Platform | File | Size | Requirements |
 |---|---|---:|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | ~8 MB | Windows 10/11, Java 21 |
-| Linux x64 (deb) | [nailong_0.12.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.12.0_amd64.deb) | ~3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
+| Linux x64 (deb) | [nailong_0.13.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.13.0_amd64.deb) | ~3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
 
 Checksums: [SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS).
 
@@ -199,7 +201,7 @@ Windows release builds use MSVC with the static CRT in GitHub Actions. `x86_64-p
 
 ## Not implemented yet
 
-- Microsoft account login (waiting for a client-id / Minecraft Services allowlist).
+- Microsoft tokens are stored in a 0600 file instead of the OS keychain (Credential Manager / Secret Service).
 - Launcher self-update, skins, and full modpack updates.
 - Stopping a running game / cancelling a launch.
 - Real Windows testing and macOS support.

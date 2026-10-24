@@ -217,3 +217,16 @@ fn browse_without_version_or_loader() {
         .collect();
     println!("sample categories: {loaders:?}");
 }
+
+#[test]
+#[ignore = "需要网络和微软账号，手动运行"]
+fn device_code_request_starts() {
+    let device = nailong_core::auth::start_device_code().expect("设备码请求失败");
+    println!(
+        "code={} uri={} expires_in={} interval={}",
+        device.user_code, device.verification_uri, device.expires_in, device.interval
+    );
+    assert!(!device.user_code.is_empty());
+    assert!(!device.device_code.is_empty());
+    assert!(device.expires_in >= 60);
+}

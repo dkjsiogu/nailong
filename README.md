@@ -8,7 +8,7 @@
 
 **简体中文** | [English](README.en.md)
 
-> 当前版本：**0.12.0**（预览版）
+> 当前版本：**0.13.0**（预览版）
 >
 > 目标：小体积、少依赖、安装过程可见、中断可补。功能边界见 [实现状态](docs/design/14-implementation-status.md)。
 
@@ -73,7 +73,9 @@ nailong 的思路很直：
 
 ### 日常使用
 
-- 离线账户启动（单人 / 局域网）。
+- 微软正版账户登录：右上角点「登录」，走浏览器授权码 + PKCE（本地回环端口），成功后自动刷新令牌；启动时带 `--accessToken` / `--uuid` / `--xuid`。
+- 令牌存在数据目录的 `account.json`（Unix 0600），不写日志；退出登录会删除。
+- 离线账户启动（单人 / 局域网），没登录时就是原来的离线模式。
 - 版本管理：加载器依赖的原版自动隐藏；被依赖的版本不能误删。
 - 安装进度：阶段、百分比、已下载 / 总大小、文件数。
 - GUI 和 CLI 共用同一套 core；CLI 适合脚本和排障。
@@ -83,7 +85,7 @@ nailong 的思路很直：
 | 平台 | 文件 | 大小 | 要求 |
 |---|---|---:|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | 约 8 MB | Windows 10/11，Java 21 |
-| Linux x64 (deb) | [nailong_0.12.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.11.0_amd64.deb) | 约 3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
+| Linux x64 (deb) | [nailong_0.13.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.13.0_amd64.deb) | 约 3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
 
 校验值：[SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS)。
 
@@ -100,7 +102,7 @@ nailong 的思路很直：
 ### Linux（Debian / Ubuntu）
 
 ```bash
-sudo apt install ./nailong_0.12.0_amd64.deb
+sudo apt install ./nailong_0.13.0_amd64.deb
 nailong
 ```
 
@@ -145,7 +147,7 @@ sudo apt remove nailong
 还没验证的：
 
 - Windows 由 CI 原生编译，但尚未在 Windows 实机启动。
-- 微软正版登录还没做，需要先拿到 Minecraft Services 的 client id allowlist。
+- 微软登录的令牌存储还是 0600 文件，没有接系统钥匙串（Windows Credential Manager / Secret Service）。
 - macOS 未支持，也没有验证。
 
 ## 命令行

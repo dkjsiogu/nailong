@@ -120,6 +120,83 @@ impl Http {
         serde_json::from_str(&text).map_err(|e| Error::Install(format!("JSON 解析失败: {e}")))
     }
 
+    /// POST JSON，返回 (status, body)。4xx 也把 body 交回去，方便读 OAuth 错误码。
+    pub fn post_json(
+        &self,
+        url: &str,
+        body: &serde_json::Value,
+        headers: &[(&str, &str)],
+    ) -> Result<(u16, serde_json::Value)> {
+        cancel::check()?;
+        let mut last = None;
+        for attempt in 0..3u32 {
+            cancel::check()?;
+            let mut request = self.client.post(url).json(body);
+            for (key, value) in headers {
+                request = request.header(*key, *value);
+            }
+            match request.send() {
+                Ok(response) => {
+                    let status = response.status().as_u16();
+                    let text = response.text().map_err(|e| Error::Net {
+                        url: url.to_string(),
+                        source: e,
+                    })?;
+                    let value = serde_json::from_str(&text).unwrap_or(serde_json::Value::Null);
+                    if status < 500 {
+                        return Ok((status, value));
+                    }
+                    last = Some(Error::Http {
+                        url: url.to_string(),
+                        status,
+                    });
+                }
+                Err(e) => {
+                    last = Some(Error::Net {
+                        url: url.to_string(),
+                        source: e,
+                    })
+                }
+            }
+            std::thread::sleep(Duration::from_millis(300 * (attempt + 1) as u64));
+        }
+        Err(last.unwrap_or_else(|| Error::Install(format!("请求失败: {url}"))))
+    }
+
+    /// POST 表单，返回 (status, body)。
+    pub fn post_form(&self, url: &str, form: &[(&str, &str)]) -> Result<(u16, serde_json::Value)> {
+        cancel::check()?;
+        let mut last = None;
+        for attempt in 0..3u32 {
+            cancel::check()?;
+            match self.client.post(url).form(form).send() {
+                Ok(response) => {
+                    let status = response.status().as_u16();
+                    let text = response.text().map_err(|e| Error::Net {
+                        url: url.to_string(),
+                        source: e,
+                    })?;
+                    let value = serde_json::from_str(&text).unwrap_or(serde_json::Value::Null);
+                    if status < 500 {
+                        return Ok((status, value));
+                    }
+                    last = Some(Error::Http {
+                        url: url.to_string(),
+                        status,
+                    });
+                }
+                Err(e) => {
+                    last = Some(Error::Net {
+                        url: url.to_string(),
+                        source: e,
+                    })
+                }
+            }
+            std::thread::sleep(Duration::from_millis(300 * (attempt + 1) as u64));
+        }
+        Err(last.unwrap_or_else(|| Error::Install(format!("请求失败: {url}"))))
+    }
+
     /// 取回二进制内容（图标之类的小文件），上限 4 MiB，避免误拉大文件。
     pub fn get_bytes(&self, url: &str) -> Result<Vec<u8>> {
         cancel::check()?;
