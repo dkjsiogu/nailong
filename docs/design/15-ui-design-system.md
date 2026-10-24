@@ -148,6 +148,8 @@ CARD 底、LINE 描边、圆角 12–14、内边距 16–20；悬停时描边变
 | 登录弹窗 | ![](../screenshots/14-login.png) |
 | 行操作菜单 | ![](../screenshots/15-menu.png) |
 | 删除确认 | ![](../screenshots/16-delete-confirm.png) |
+| 禁用内容 | ![](../screenshots/17-toggle.png) |
+| 900×620 最小窗口 | ![](../screenshots/18-narrow-900.png) |
 
 ## 9. 调试入口（仅 debug 构建）
 
