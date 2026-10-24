@@ -484,18 +484,11 @@ pub fn start_auth_code() -> Result<AuthCodeFlow> {
         .local_addr()
         .map_err(|e| Error::Install(format!("读取回调端口失败: {e}")))?
         .port();
-    let redirect_uri = format!("http://localhost:{port}/callback");
     let verifier = b64url(&random_bytes(32));
     let challenge = b64url(&Sha256::digest(verifier.as_bytes()));
     let state = b64url(&random_bytes(16));
-    let url = format!(
-        "{AUTH_BASE}/authorize?client_id={}&response_type=code&redirect_uri={}&response_mode=query&scope={}&prompt=select_account&state={}&code_challenge={}&code_challenge_method=S256",
-        urlencode(&client_id()),
-        urlencode(&redirect_uri),
-        urlencode(SCOPE),
-        state,
-        challenge
-    );
+    let redirect_uri = pick_redirect_uri(port, &challenge, &state)?;
+    let url = authorize_url(&redirect_uri, &state, &challenge, "select_account");
     Ok(AuthCodeFlow {
         url,
         port,
@@ -505,6 +498,53 @@ pub fn start_auth_code() -> Result<AuthCodeFlow> {
         listener,
         expires_at: now() + 300,
     })
+}
+
+fn authorize_url(redirect_uri: &str, state: &str, challenge: &str, prompt: &str) -> String {
+    format!(
+        "{AUTH_BASE}/authorize?client_id={}&response_type=code&redirect_uri={}&response_mode=query&scope={}&prompt={prompt}&state={state}&code_challenge={challenge}&code_challenge_method=S256",
+        urlencode(&client_id()),
+        urlencode(redirect_uri),
+        urlencode(SCOPE),
+    )
+}
+
+/// Azure 里注册的回环地址可能是 `http://localhost`、带端口、带 `/callback` 等几种。
+/// 用 `prompt=none` 探一下哪个能过 authorize 校验，省得用户盯着浏览器里的报错猜。
+fn pick_redirect_uri(port: u16, challenge: &str, state: &str) -> Result<String> {
+    let candidates = [
+        format!("http://localhost:{port}/"),
+        format!("http://localhost:{port}/callback"),
+        format!("http://localhost:{port}"),
+        format!("http://127.0.0.1:{port}/"),
+        format!("http://127.0.0.1:{port}/callback"),
+        format!("http://127.0.0.1:{port}"),
+    ];
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let client = reqwest::blocking::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(20))
+        .build()
+        .map_err(|e| Error::Install(format!("HTTP 客户端创建失败: {e}")))?;
+    for candidate in candidates {
+        let url = authorize_url(&candidate, state, challenge, "none");
+        let response = client.get(&url).send();
+        if let Ok(response) = response {
+            let status = response.status().as_u16();
+            let location = response
+                .headers()
+                .get("location")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_string();
+            if (300..400).contains(&status) && location.contains("login.live.com") {
+                return Ok(candidate);
+            }
+        }
+    }
+    Err(Error::Install(
+        "Azure 应用没有可用的回环重定向地址。请到「身份验证 → 添加平台 → 移动和桌面应用程序」添加 http://localhost（端口任意），再重新登录".into(),
+    ))
 }
 
 pub fn wait_for_code(flow: &AuthCodeFlow, cancelled: impl Fn() -> bool) -> Result<MsaTokens> {
@@ -594,9 +634,6 @@ fn parse_callback(request: &str) -> Callback {
     let Some(query) = target.split_once('?').map(|(_, query)| query) else {
         return Callback::Ignore;
     };
-    if !target.starts_with("/callback") {
-        return Callback::Ignore;
-    }
     let mut code = None;
     let mut state = None;
     let mut error = None;
@@ -802,6 +839,11 @@ mod tests {
             parse_callback("GET /favicon.ico HTTP/1.1"),
             Callback::Ignore
         ));
+        // Azure 注册的是 http://localhost（根路径），回调会打到 /?code=...
+        match parse_callback("GET /?code=root-code&state=s HTTP/1.1") {
+            Callback::Code { code, .. } => assert_eq!(code, "root-code"),
+            _ => panic!("根路径回调也要能解析"),
+        }
         match parse_callback("GET /callback?error=access_denied HTTP/1.1") {
             Callback::Error(message) => assert!(message.contains("取消")),
             _ => panic!("应当识别取消"),

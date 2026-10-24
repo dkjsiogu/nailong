@@ -1,5 +1,7 @@
 # 07 · 账户与认证
 
+> **2026-10-25 更新**：回环回调以 `http://localhost`（根路径）为准，登录前自动探测候选 redirect_uri。
+>
 > **2026-10-24 更新**：Minecraft Services 的 AppID allowlist 已获批。设备码流程被当前 Entra 应用配置拒绝（`AADSTS70002: The client application must be marked as 'mobile'`，即未开启「允许公共客户端流」），而浏览器授权码 + PKCE 回环可直接使用，因此实现以 PKCE 为主路径；设备码代码保留作后续开关。
 
 

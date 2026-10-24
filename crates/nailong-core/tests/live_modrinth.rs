@@ -230,3 +230,21 @@ fn device_code_request_starts() {
     assert!(!device.device_code.is_empty());
     assert!(device.expires_in >= 60);
 }
+
+#[test]
+#[ignore = "需要网络，手动运行"]
+fn auth_code_picks_redirect_uri() {
+    match nailong_core::auth::start_auth_code() {
+        Ok(flow) => {
+            let redirect = flow
+                .url
+                .split("redirect_uri=")
+                .nth(1)
+                .and_then(|rest| rest.split('&').next())
+                .unwrap_or_default();
+            println!("port={} redirect_uri={redirect}", flow.port);
+            assert!(flow.url.contains("code_challenge="));
+        }
+        Err(e) => panic!("start_auth_code 失败: {e}"),
+    }
+}
