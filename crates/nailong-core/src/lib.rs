@@ -13,6 +13,7 @@ pub mod mods;
 pub mod paths;
 pub mod progress;
 pub mod saves;
+pub mod snapshots;
 
 pub use error::{Error, Result};
 pub use paths::Root;

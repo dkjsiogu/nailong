@@ -8,7 +8,7 @@
 
 **简体中文** | [English](README.en.md)
 
-> 当前版本：**0.14.0**（预览版）
+> 当前版本：**0.15.0**（预览版）
 >
 > 目标：小体积、少依赖、安装过程可见、中断可补。功能边界见 [实现状态](docs/design/14-implementation-status.md)。
 
@@ -79,7 +79,8 @@ nailong 的思路很直：
 - 令牌存在数据目录的 `account.json`（Unix 0600），不写日志；退出登录会删除。
 - 离线账户启动（单人 / 局域网），没登录时就是原来的离线模式。
 - 版本管理：加载器依赖的原版自动隐藏；被依赖的版本不能误删；每个版本都有「内容」和「存档」入口。
-- 存档：列出世界、显示大小和最近修改时间，一键备份成 zip（放 `backups/`）、恢复、删除；「全部备份」一次打包所有世界。
+- 存档：列出世界、显示大小和最近修改时间；备份是 **git 式快照**——按内容分块（CDC）只存改动过的块，第二次备份通常只增加几 MB；可恢复、删除、按份数自动清理。
+- 自动备份：可设每 15/30/60/120 分钟一次、每个世界保留 5/10/20/50 份；配置存数据目录的 `backups.json`，启动器开着就会按点跑。
 - 资源包/光影：和 Mod 一样可以启用/停用、删除、看文件大小、一键打开所在目录。
 - 安装进度：阶段、百分比、已下载 / 总大小、文件数。
 - GUI 和 CLI 共用同一套 core；CLI 适合脚本和排障。
@@ -89,7 +90,7 @@ nailong 的思路很直：
 | 平台 | 文件 | 大小 | 要求 |
 |---|---|---:|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | 约 8 MB | Windows 10/11，Java 21 |
-| Linux x64 (deb) | [nailong_0.14.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.14.0_amd64.deb) | 约 3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
+| Linux x64 (deb) | [nailong_0.15.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.15.0_amd64.deb) | 约 3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
 
 校验值：[SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS)。
 
@@ -106,7 +107,7 @@ nailong 的思路很直：
 ### Linux（Debian / Ubuntu）
 
 ```bash
-sudo apt install ./nailong_0.14.0_amd64.deb
+sudo apt install ./nailong_0.15.0_amd64.deb
 nailong
 ```
 

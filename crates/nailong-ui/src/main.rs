@@ -8,6 +8,7 @@ use nailong_core::launch::{self, LaunchOptions};
 use nailong_core::mods;
 use nailong_core::progress::{Progress, Sink, from_fn};
 use nailong_core::saves;
+use nailong_core::snapshots;
 use nailong_core::{Error, Root, cancel, java};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
@@ -242,9 +243,11 @@ struct App {
     saves_row: Option<Row>,
     show_saves: bool,
     saves_worlds: Vec<saves::World>,
-    saves_backups: Vec<saves::Backup>,
     saves_confirm: Option<String>,
     saves_confirm_backup: Option<String>,
+    saves_snapshots: HashMap<String, Vec<snapshots::Snapshot>>,
+    backup_cfg: snapshots::Config,
+    auto_backup_running: bool,
     saves_rx: Option<mpsc::Receiver<Msg>>,
     saves_busy: bool,
     saves_notice: Option<String>,
@@ -262,6 +265,7 @@ impl App {
     fn new(root: Root) -> Self {
         let java_ok = java::find_all().iter().any(|j| j.major >= 21);
         let account = auth::load(&root);
+        let backup_cfg = snapshots::load_config(&root);
         let (icon_jobs, icon_job_rx) = mpsc::channel::<(String, String)>();
         let (icon_done, icon_rx) = mpsc::channel::<(String, Vec<u8>)>();
         std::thread::spawn(move || {
@@ -346,9 +350,11 @@ impl App {
             saves_row: None,
             show_saves: false,
             saves_worlds: Vec::new(),
-            saves_backups: Vec::new(),
             saves_confirm: None,
             saves_confirm_backup: None,
+            saves_snapshots: HashMap::new(),
+            backup_cfg,
+            auto_backup_running: false,
             saves_rx: None,
             saves_busy: false,
             saves_notice: None,
@@ -1991,6 +1997,14 @@ impl App {
                 Msg::SavesDone(result) => {
                     self.saves_busy = false;
                     self.saves_rx = None;
+                    if self.auto_backup_running {
+                        self.auto_backup_running = false;
+                        self.backup_cfg.last_run = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs())
+                            .unwrap_or_default();
+                        let _ = snapshots::save_config(&self.root, &self.backup_cfg);
+                    }
                     match result {
                         Ok(note) => {
                             self.saves_notice = Some(note);
@@ -3076,16 +3090,47 @@ impl App {
             return;
         };
         match saves::worlds(&dir) {
-            Ok(items) => self.saves_worlds = items,
-            Err(e) => self.saves_error = Some(e.to_string()),
-        }
-        match saves::backups(&dir) {
-            Ok(items) => self.saves_backups = items,
+            Ok(items) => {
+                self.saves_snapshots.clear();
+                for world in &items {
+                    let items = snapshots::list(&dir, &world.name).unwrap_or_default();
+                    self.saves_snapshots.insert(world.name.clone(), items);
+                }
+                self.saves_worlds = items;
+            }
             Err(e) => self.saves_error = Some(e.to_string()),
         }
     }
 
-    fn start_backup(&mut self, name: String) {
+    fn start_snapshot(&mut self, world: String) {
+        if self.saves_busy {
+            return;
+        }
+        let Some(dir) = self.saves_game_dir() else {
+            return;
+        };
+        let keep = self.backup_cfg.keep;
+        self.saves_busy = true;
+        self.auto_backup_running = false;
+        self.saves_error = None;
+        let (tx, rx) = mpsc::channel();
+        self.saves_rx = Some(rx);
+        std::thread::spawn(move || {
+            let result = snapshots::backup(&dir, &world)
+                .map(|snapshot| {
+                    let _ = snapshots::prune(&dir, keep);
+                    format!(
+                        "已创建快照 {}（{}）",
+                        snapshot.id,
+                        human_size(snapshot.bytes)
+                    )
+                })
+                .map_err(|e| e.to_string());
+            let _ = tx.send(Msg::SavesDone(result));
+        });
+    }
+
+    fn start_restore(&mut self, world: String, id: String) {
         if self.saves_busy {
             return;
         }
@@ -3093,15 +3138,15 @@ impl App {
             return;
         };
         self.saves_busy = true;
+        self.auto_backup_running = false;
         self.saves_error = None;
         let (tx, rx) = mpsc::channel();
         self.saves_rx = Some(rx);
         std::thread::spawn(move || {
-            let result = saves::backup_world(&dir, &name)
+            let result = snapshots::restore(&dir, &world, &id)
                 .map(|path| {
                     format!(
-                        "已备份 {} → {}",
-                        name,
+                        "已恢复到 {}",
                         path.file_name().unwrap_or_default().to_string_lossy()
                     )
                 })
@@ -3110,27 +3155,70 @@ impl App {
         });
     }
 
-    fn start_restore(&mut self, name: String) {
-        if self.saves_busy {
+    fn auto_dirs(&self) -> Vec<PathBuf> {
+        let mut dirs = Vec::new();
+        for row in &self.rows {
+            let dir = row
+                .game_dir
+                .clone()
+                .unwrap_or_else(|| self.root.dir().to_path_buf());
+            if !dirs.contains(&dir) {
+                dirs.push(dir);
+            }
+        }
+        if dirs.is_empty() {
+            dirs.push(self.root.dir().to_path_buf());
+        }
+        dirs
+    }
+
+    fn maybe_auto_backup(&mut self) {
+        if !self.backup_cfg.enabled || self.saves_busy || self.busy.is_some() {
             return;
         }
-        let Some(dir) = self.saves_game_dir() else {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or_default();
+        let due = self.backup_cfg.interval_minutes.max(1) * 60;
+        if now.saturating_sub(self.backup_cfg.last_run) < due {
             return;
-        };
+        }
+        self.start_auto_backup();
+    }
+
+    fn start_auto_backup(&mut self) {
+        let dirs = self.auto_dirs();
+        let keep = self.backup_cfg.keep;
         self.saves_busy = true;
+        self.auto_backup_running = true;
         self.saves_error = None;
         let (tx, rx) = mpsc::channel();
         self.saves_rx = Some(rx);
         std::thread::spawn(move || {
-            let result = saves::restore_backup(&dir, &name)
-                .map(|world| format!("已恢复存档 {world}"))
-                .map_err(|e| e.to_string());
+            let mut count = 0usize;
+            for dir in dirs {
+                let Ok(worlds) = saves::worlds(&dir) else {
+                    continue;
+                };
+                for world in worlds {
+                    if snapshots::backup(&dir, &world.name).is_ok() {
+                        count += 1;
+                    }
+                }
+                let _ = snapshots::prune(&dir, keep);
+            }
+            let result = if count == 0 {
+                Err("没有可备份的世界".to_string())
+            } else {
+                Ok(format!("自动备份完成：{count} 个世界"))
+            };
             let _ = tx.send(Msg::SavesDone(result));
         });
     }
 
     fn saves_view(&mut self, ui: &mut egui::Ui) {
-        let width = ui.available_width().min(760.0);
+        let width = ui.available_width().min(780.0);
         let pad = ((ui.available_width() - width) / 2.0).max(24.0);
         let Some(row) = self.saves_row.clone() else {
             return;
@@ -3158,17 +3246,87 @@ impl App {
                                     .strong(),
                             );
                         });
-                        ui.add_space(6.0);
+                        ui.add_space(4.0);
                         ui.label(
                             egui::RichText::new(if shared {
-                                "该版本还没隔离，存档在共享目录里；下载任意内容后会自动切到版本独立目录"
+                                "该版本还没隔离，存档在共享目录；下载任意内容后会自动切到版本独立目录"
                             } else {
-                                "存档在版本独立目录；备份会写成 zip，放在 backups/ 下"
+                                "快照按内容分块去重：第二次备份只存改动过的块"
                             })
                             .size(11.0)
                             .color(MUTED),
                         );
-                        ui.add_space(4.0);
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            let mut enabled = self.backup_cfg.enabled;
+                            if ui.checkbox(&mut enabled, "自动备份").changed() {
+                                self.backup_cfg.enabled = enabled;
+                                let _ = snapshots::save_config(&self.root, &self.backup_cfg);
+                            }
+                            let mut interval = self.backup_cfg.interval_minutes;
+                            egui::ComboBox::from_id_salt("backup_interval")
+                                .selected_text(format!("每 {interval} 分钟"))
+                                .width(110.0)
+                                .show_ui(ui, |ui| {
+                                    for minutes in [15u64, 30, 60, 120] {
+                                        if ui
+                                            .selectable_label(interval == minutes, format!("每 {minutes} 分钟"))
+                                            .clicked()
+                                        {
+                                            interval = minutes;
+                                        }
+                                    }
+                                });
+                            if interval != self.backup_cfg.interval_minutes {
+                                self.backup_cfg.interval_minutes = interval;
+                                let _ = snapshots::save_config(&self.root, &self.backup_cfg);
+                            }
+                            let mut keep = self.backup_cfg.keep;
+                            egui::ComboBox::from_id_salt("backup_keep")
+                                .selected_text(format!("保留 {keep} 份"))
+                                .width(100.0)
+                                .show_ui(ui, |ui| {
+                                    for value in [5usize, 10, 20, 50] {
+                                        if ui
+                                            .selectable_label(keep == value, format!("保留 {value} 份"))
+                                            .clicked()
+                                        {
+                                            keep = value;
+                                        }
+                                    }
+                                });
+                            if keep != self.backup_cfg.keep {
+                                self.backup_cfg.keep = keep;
+                                let _ = snapshots::save_config(&self.root, &self.backup_cfg);
+                            }
+                            if ui.button("立即备份全部").clicked() {
+                                self.start_auto_backup();
+                            }
+                            if ui.button("清理旧快照").clicked() {
+                                match snapshots::prune(&game_dir, self.backup_cfg.keep) {
+                                    Ok((removed, deleted)) => {
+                                        self.saves_notice = Some(format!(
+                                            "清理了 {removed} 份旧快照、{deleted} 个无用块"
+                                        ));
+                                        self.reload_saves();
+                                    }
+                                    Err(e) => self.saves_error = Some(e.to_string()),
+                                }
+                            }
+                        });
+                        if self.backup_cfg.enabled {
+                            let last = if self.backup_cfg.last_run == 0 {
+                                "还没跑过".to_string()
+                            } else {
+                                human_age(self.backup_cfg.last_run)
+                            };
+                            ui.label(
+                                egui::RichText::new(format!("上次自动备份：{last}"))
+                                    .size(10.0)
+                                    .color(MUTED),
+                            );
+                        }
+                        ui.add_space(6.0);
                         ui.horizontal(|ui| {
                             ui.label(
                                 egui::RichText::new(game_dir.display().to_string())
@@ -3181,24 +3339,12 @@ impl App {
                             if ui.button("刷新").clicked() {
                                 self.reload_saves();
                             }
-                            if ui.button("全部备份").clicked() {
-                                let names: Vec<String> = self
-                                    .saves_worlds
-                                    .iter()
-                                    .map(|world| world.name.clone())
-                                    .collect();
-                                for name in names {
-                                    let _ = saves::backup_world(&game_dir, &name);
-                                }
-                                self.reload_saves();
-                                self.saves_notice = Some("已备份全部存档".into());
-                            }
                         });
                         ui.add_space(10.0);
                         if self.saves_busy {
                             ui.horizontal(|ui| {
                                 ui.spinner();
-                                ui.label(egui::RichText::new("正在写入备份…").color(MUTED));
+                                ui.label(egui::RichText::new("正在备份/恢复…").color(MUTED));
                             });
                         }
                         if let Some(note) = &self.saves_notice {
@@ -3219,6 +3365,11 @@ impl App {
                         }
                         let worlds = self.saves_worlds.clone();
                         for world in &worlds {
+                            let snapshots_here = self
+                                .saves_snapshots
+                                .get(&world.name)
+                                .cloned()
+                                .unwrap_or_default();
                             card().show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     ui.vertical(|ui| {
@@ -3229,9 +3380,10 @@ impl App {
                                         );
                                         ui.label(
                                             egui::RichText::new(format!(
-                                                "{} · {}",
+                                                "{} · {} · {} 份快照",
                                                 human_size(world.size),
-                                                human_age(world.modified)
+                                                human_age(world.modified),
+                                                snapshots_here.len()
                                             ))
                                             .size(10.5)
                                             .color(MUTED),
@@ -3274,78 +3426,76 @@ impl App {
                                             } else if ui.button("删除").clicked() {
                                                 self.saves_confirm = Some(world.name.clone());
                                             }
-                                            if ui.button("备份").clicked() {
-                                                self.start_backup(world.name.clone());
+                                            if ui.button("立即快照").clicked() {
+                                                self.start_snapshot(world.name.clone());
                                             }
                                         },
                                     );
                                 });
+                                if !snapshots_here.is_empty() {
+                                    egui::CollapsingHeader::new(format!(
+                                        "快照（{}）",
+                                        snapshots_here.len()
+                                    ))
+                                    .id_salt(format!("snaps-{}", world.name))
+                                    .show(ui, |ui| {
+                                        for snapshot in &snapshots_here {
+                                            ui.horizontal(|ui| {
+                                                ui.label(
+                                                    egui::RichText::new(format!(
+                                                        "{} · {}",
+                                                        human_age(snapshot.created_at),
+                                                        human_size(snapshot.bytes)
+                                                    ))
+                                                    .size(11.0)
+                                                    .color(MUTED),
+                                                );
+                                                ui.with_layout(
+                                                    egui::Layout::right_to_left(
+                                                        egui::Align::Center,
+                                                    ),
+                                                    |ui| {
+                                                        if self.saves_confirm_backup.as_deref()
+                                                            == Some(snapshot.id.as_str())
+                                                        {
+                                                            if ui.button("取消").clicked() {
+                                                                self.saves_confirm_backup = None;
+                                                            }
+                                                            if ui.button("确认删除").clicked() {
+                                                                match snapshots::delete(
+                                                                    &game_dir,
+                                                                    &world.name,
+                                                                    &snapshot.id,
+                                                                ) {
+                                                                    Ok(()) => {
+                                                                        self.saves_confirm_backup =
+                                                                            None;
+                                                                        self.reload_saves();
+                                                                    }
+                                                                    Err(e) => {
+                                                                        self.saves_error =
+                                                                            Some(e.to_string())
+                                                                    }
+                                                                }
+                                                            }
+                                                        } else if ui.button("删除").clicked() {
+                                                            self.saves_confirm_backup =
+                                                                Some(snapshot.id.clone());
+                                                        }
+                                                        if ui.button("恢复").clicked() {
+                                                            self.start_restore(
+                                                                world.name.clone(),
+                                                                snapshot.id.clone(),
+                                                            );
+                                                        }
+                                                    },
+                                                );
+                                            });
+                                        }
+                                    });
+                                }
                             });
                             ui.add_space(8.0);
-                        }
-                        ui.add_space(14.0);
-                        ui.label(egui::RichText::new("备份").size(15.0).strong());
-                        ui.add_space(6.0);
-                        if self.saves_backups.is_empty() {
-                            ui.label(
-                                egui::RichText::new("还没有备份。点上面的「备份」生成 zip。")
-                                    .size(12.0)
-                                    .color(MUTED),
-                            );
-                        }
-                        let backups = self.saves_backups.clone();
-                        for backup in &backups {
-                            ui.horizontal(|ui| {
-                                ui.vertical(|ui| {
-                                    ui.label(
-                                        egui::RichText::new(&backup.name).size(12.5).strong(),
-                                    );
-                                    ui.label(
-                                        egui::RichText::new(format!(
-                                            "{} · {}",
-                                            human_size(backup.size),
-                                            human_age(backup.modified)
-                                        ))
-                                        .size(10.0)
-                                        .color(MUTED),
-                                    );
-                                });
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        if self.saves_confirm_backup.as_deref()
-                                            == Some(backup.name.as_str())
-                                        {
-                                            if ui.button("取消").clicked() {
-                                                self.saves_confirm_backup = None;
-                                            }
-                                            if ui.button("确认删除").clicked() {
-                                                match saves::delete_backup(
-                                                    &game_dir,
-                                                    &backup.name,
-                                                ) {
-                                                    Ok(()) => {
-                                                        self.saves_confirm_backup = None;
-                                                        self.reload_saves();
-                                                    }
-                                                    Err(e) => {
-                                                        self.saves_error = Some(e.to_string())
-                                                    }
-                                                }
-                                            }
-                                        } else if ui.button("删除").clicked() {
-                                            self.saves_confirm_backup =
-                                                Some(backup.name.clone());
-                                        }
-                                        if ui.button("恢复").clicked() {
-                                            self.start_restore(backup.name.clone());
-                                        }
-                                    },
-                                );
-                            });
-                            ui.add_space(6.0);
-                            ui.separator();
-                            ui.add_space(6.0);
                         }
                     });
                 });
@@ -3964,6 +4114,10 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll();
         self.drain_icons(ui.ctx());
+        if self.backup_cfg.enabled {
+            ui.ctx().request_repaint_after(Duration::from_secs(5));
+            self.maybe_auto_backup();
+        }
         let dropped = ui
             .ctx()
             .input_mut(|i| std::mem::take(&mut i.raw.dropped_files));

@@ -1,7 +1,7 @@
-# 14 · 原型实现状态（0.1 → 0.14.0）
+# 14 · 原型实现状态（0.1 → 0.15.0）
 
 > 日期：2026-10-23
-> 对应发布：GitHub Release `v0.14.0` 的 `nailong.exe`、`nailong_0.14.0_amd64.deb`
+> 对应发布：GitHub Release `v0.15.0` 的 `nailong.exe`、`nailong_0.15.0_amd64.deb`
 > 目的：把「设计稿」和「已经跑起来的代码」分开记账，避免把计划当成已完成。
 
 ## 1. 一句话结论
@@ -42,6 +42,8 @@
 
 0.11.0 把品类换成 CurseForge 的真实目录：运行时拉 `/v1/categories`（每种内容一次），用归一化匹配翻成中文标签并映射到 Modrinth 分类 slug，未收录的保留 CurseForge 原名；新增来源切换（全部 / Modrinth / CurseForge），浏览时把 `categoryId` 直接传给 CurseForge 搜索接口。下载路径不变，仍是启动器解析文件地址、校验后落盘。0.11.2 起品类默认只铺 12 个，其余收进「更多品类 +N」，避免 CurseForge 三四十个分类把浏览页顶满。
 
+0.15.0 把存档备份换成 git 式快照：`core::snapshots` 用内容定义分块（32 字节滚动哈希、64 KB–4 MB 块）把每个文件切成块，按 SHA-1 存进 `backups/repo/objects/`，快照只记路径和块哈希；第二次备份只写改动过的块。支持恢复（目标已存在时改名，不覆盖）、删除、按份数 prune（顺带 GC 无引用对象）。自动备份按 `backups.json` 的间隔（15/30/60/120 分钟）和保留份数在后台线程跑，实测启动后自动生成第 3 份快照并写回 `last_run`。
+
 0.14.0 把下载中心和版本管理按“先选目标版本”重做：右上角「安装到：<已装版本>」决定浏览/搜索的 MC 版本与加载器，`+` 直接写进该版本的 `mods/`；另有「只浏览」模式不要求安装目标。版本管理里每个版本新增「内容」和「存档」：存档页列出世界（大小/最近修改）、单个或全部备份成 zip、恢复、删除，备份落在 `<gameDir>/backups/`；资源包/光影与 Mod 一样可启停、删除、查看大小、打开目录。库层新增 `core::saves`（列表、备份、恢复、删除，带路径穿越防护与 zip 根目录约定）。
 
 0.13.0 接上微软正版登录：Mojang 的 AppID allowlist 已批，采用浏览器授权码 + PKCE（回环 `http://localhost:39123/callback`，端口占用时退动态端口），走 MSA → Xbox Live → XSTS → `login_with_xbox` → 所有权校验 → profile，令牌写 `account.json`（0600）并在启动前自动刷新；启动参数注入 `--accessToken` / `--uuid` / `--xuid`。设备码被该 Entra 应用配置拒绝（AADSTS70002 要求 public client），所以主路径用 PKCE；设备码代码保留但未启用。0.13.1 修正回环地址：Azure 里注册的是 `http://localhost`（根路径），登录前会先用 `prompt=none` 探测 `http://localhost:<port>/`、`/callback`、`127.0.0.1` 等候选，选微软接受的那个，回调解析也接受根路径 `/?code=...`。0.13.2 把探测改成跟完整跳转链（login.live.com 这一跳才会真正校验 redirect_uri），并在 Azure 未注册 `http://localhost` 时直接给出可操作提示。
@@ -79,7 +81,7 @@
 | 浏览式发现 + 一键安装 | `core::mods::browse` / `install_project` + `nailong-ui` | 完成 | 品类胶囊 + 热门/最新两排卡片；图标异步加载；卡片 `+` 一键装最新兼容版 + 必需前置；Xvfb 下点击真实安装 fabric-api 并写索引 |
 | CurseForge 真实品类 + 来源切换 | `core::mods::curseforge_categories` / `CategoryFilter` + `nailong-ui` | 完成 | 运行时拉 `/v1/categories`；品类翻中文并映射 Modrinth slug；`categoryId` 传给 CF 搜索；全部/Modrinth/CurseForge 切换 |
 | 无版本/无加载器浏览 | `core::mods::search` / `browse` + `nailong-ui` | 完成 | 版本、加载器都可为空；纯浏览不要求已安装版本；卡片带简介；联网测试覆盖“无过滤浏览” |
-| 版本目标 + 存档管理 | `core::saves` + `nailong-ui` | 完成 | 「安装到」锁定目标版本并直写其目录；存档列表/单个与全部备份/恢复/删除；备份写入 `<gameDir>/backups`；Xvfb 下点击备份生成 zip |
+| 版本目标 + 存档管理 | `core::saves` / `core::snapshots` + `nailong-ui` | 完成 | 「安装到」锁定目标版本并直写其目录；存档列表；git 式快照（CDC 分块去重）、恢复、删除、prune；自动备份可配间隔/保留份数 |
 | Windows 便携目录 | `core::paths` | 完成 | 默认使用 exe 同目录 `.minecraft` |
 | CLI（list/java/info/install/launch） | `nailong-cli` | 完成 | 打包产物冒烟 |
 | GUI（版本下拉、安装进度、取消、缺文件补全、启动、下载中心） | `nailong-ui` | 可用 | Xvfb 下走完安装 / 补全 / 启动；安装中取消；下载中心检索/版本/依赖/已安装页实测；浏览页点卡片 `+` 实际下载并落索引；实际 NeoForge 到主菜单 |
@@ -88,7 +90,7 @@
 | 大文件分段下载 | `core::http` | 完成 | client jar 4 段并行、段续传、源回退 |
 | 重复安装快速路径 | `core::install::forge` / `neoforge` | 完成 | health 通过则 0 下载、0 processor |
 | Windows 交叉编译 | `x86_64-pc-windows-gnu` | 通过 | 无 MinGW DLL 依赖，仅系统 DLL |
-| 发布包 | GitHub Release `v0.14.0` | 完成（CI 构建） | 单 exe 约 8 MB / deb 约 3.3 MB |
+| 发布包 | GitHub Release `v0.15.0` | 完成（CI 构建） | 单 exe 约 8 MB / deb 约 3.3 MB |
 
 ### 2.1 实测记录
 
@@ -129,7 +131,7 @@
 | 正版登录 / 自动更新 | 未实现 | 下一步做账户与更新 |
 | 微软正版登录 | **已实现（浏览器 PKCE）**，待真实账号走一遍 | 令牌存 0600 文件，未接系统钥匙串 |
 | 自动更新 / 签名 / 崩溃报告 | 未实现 | 发布前补齐 |
-| 单元/集成测试体系 | **57 个测试**（55 core + 2 UI），另有 7 个真实网络冒烟测试默认忽略（搜索、下载、浏览、一键安装、无过滤浏览、设备码、回环探测） | 缺夹具、mock HTTP、启动 argv 快照、Windows CI |
+| 单元/集成测试体系 | **60 个测试**（58 core + 2 UI），另有 7 个真实网络冒烟测试默认忽略（搜索、下载、浏览、一键安装、无过滤浏览、设备码、回环探测） | 缺夹具、mock HTTP、启动 argv 快照、Windows CI |
 
 ## 4. 已知问题与风险
 
