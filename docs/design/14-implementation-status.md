@@ -1,7 +1,7 @@
-# 14 · 原型实现状态（0.1 → 0.13.1）
+# 14 · 原型实现状态（0.1 → 0.13.2）
 
 > 日期：2026-10-23
-> 对应发布：GitHub Release `v0.13.1` 的 `nailong.exe`、`nailong_0.13.1_amd64.deb`
+> 对应发布：GitHub Release `v0.13.2` 的 `nailong.exe`、`nailong_0.13.2_amd64.deb`
 > 目的：把「设计稿」和「已经跑起来的代码」分开记账，避免把计划当成已完成。
 
 ## 1. 一句话结论
@@ -42,7 +42,7 @@
 
 0.11.0 把品类换成 CurseForge 的真实目录：运行时拉 `/v1/categories`（每种内容一次），用归一化匹配翻成中文标签并映射到 Modrinth 分类 slug，未收录的保留 CurseForge 原名；新增来源切换（全部 / Modrinth / CurseForge），浏览时把 `categoryId` 直接传给 CurseForge 搜索接口。下载路径不变，仍是启动器解析文件地址、校验后落盘。0.11.2 起品类默认只铺 12 个，其余收进「更多品类 +N」，避免 CurseForge 三四十个分类把浏览页顶满。
 
-0.13.0 接上微软正版登录：Mojang 的 AppID allowlist 已批，采用浏览器授权码 + PKCE（回环 `http://localhost:39123/callback`，端口占用时退动态端口），走 MSA → Xbox Live → XSTS → `login_with_xbox` → 所有权校验 → profile，令牌写 `account.json`（0600）并在启动前自动刷新；启动参数注入 `--accessToken` / `--uuid` / `--xuid`。设备码被该 Entra 应用配置拒绝（AADSTS70002 要求 public client），所以主路径用 PKCE；设备码代码保留但未启用。0.13.1 修正回环地址：Azure 里注册的是 `http://localhost`（根路径），登录前会先用 `prompt=none` 探测 `http://localhost:<port>/`、`/callback`、`127.0.0.1` 等候选，选微软接受的那个，回调解析也接受根路径 `/?code=...`。
+0.13.0 接上微软正版登录：Mojang 的 AppID allowlist 已批，采用浏览器授权码 + PKCE（回环 `http://localhost:39123/callback`，端口占用时退动态端口），走 MSA → Xbox Live → XSTS → `login_with_xbox` → 所有权校验 → profile，令牌写 `account.json`（0600）并在启动前自动刷新；启动参数注入 `--accessToken` / `--uuid` / `--xuid`。设备码被该 Entra 应用配置拒绝（AADSTS70002 要求 public client），所以主路径用 PKCE；设备码代码保留但未启用。0.13.1 修正回环地址：Azure 里注册的是 `http://localhost`（根路径），登录前会先用 `prompt=none` 探测 `http://localhost:<port>/`、`/callback`、`127.0.0.1` 等候选，选微软接受的那个，回调解析也接受根路径 `/?code=...`。0.13.2 把探测改成跟完整跳转链（login.live.com 这一跳才会真正校验 redirect_uri），并在 Azure 未注册 `http://localhost` 时直接给出可操作提示。
 
 0.12.0 让浏览不再绑定已装版本：版本和加载器都可选「全部」，核心把 `mc`/`loader` 改成可选，Modrinth 的 `versions`/加载器 facet 与 CurseForge 的 `gameVersion`/`modLoaderType` 都按需追加；没有已装版本时也能从安装页进下载中心纯逛（此时 `+` 会提示先装版本）。卡片加了简介（名称 + 两行摘要 + 下载量），详情页补作者和完整摘要。
 
@@ -85,7 +85,7 @@
 | 大文件分段下载 | `core::http` | 完成 | client jar 4 段并行、段续传、源回退 |
 | 重复安装快速路径 | `core::install::forge` / `neoforge` | 完成 | health 通过则 0 下载、0 processor |
 | Windows 交叉编译 | `x86_64-pc-windows-gnu` | 通过 | 无 MinGW DLL 依赖，仅系统 DLL |
-| 发布包 | GitHub Release `v0.13.1` | 完成（CI 构建） | 单 exe 约 8 MB / deb 约 3.3 MB |
+| 发布包 | GitHub Release `v0.13.2` | 完成（CI 构建） | 单 exe 约 8 MB / deb 约 3.3 MB |
 
 ### 2.1 实测记录
 

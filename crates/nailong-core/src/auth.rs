@@ -510,7 +510,8 @@ fn authorize_url(redirect_uri: &str, state: &str, challenge: &str, prompt: &str)
 }
 
 /// Azure 里注册的回环地址可能是 `http://localhost`、带端口、带 `/callback` 等几种。
-/// 用 `prompt=none` 探一下哪个能过 authorize 校验，省得用户盯着浏览器里的报错猜。
+/// 用 `prompt=none` 走完整跳转（包括 login.live.com 那一跳）确认哪个真能过，
+/// 只探测第一跳会被中间重定向骗过去。
 fn pick_redirect_uri(port: u16, challenge: &str, state: &str) -> Result<String> {
     let candidates = [
         format!("http://localhost:{port}/"),
@@ -522,28 +523,27 @@ fn pick_redirect_uri(port: u16, challenge: &str, state: &str) -> Result<String> 
     ];
     let _ = rustls::crypto::ring::default_provider().install_default();
     let client = reqwest::blocking::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(20))
+        .redirect(reqwest::redirect::Policy::limited(6))
+        .timeout(Duration::from_secs(25))
         .build()
         .map_err(|e| Error::Install(format!("HTTP 客户端创建失败: {e}")))?;
     for candidate in candidates {
         let url = authorize_url(&candidate, state, challenge, "none");
-        let response = client.get(&url).send();
-        if let Ok(response) = response {
-            let status = response.status().as_u16();
-            let location = response
-                .headers()
-                .get("location")
-                .and_then(|value| value.to_str().ok())
-                .unwrap_or_default()
-                .to_string();
-            if (300..400).contains(&status) && location.contains("login.live.com") {
-                return Ok(candidate);
-            }
+        let Ok(response) = client.get(&url).send() else {
+            continue;
+        };
+        let status = response.status().as_u16();
+        let body = response.text().unwrap_or_default();
+        let rejected = body.contains("invalid_request")
+            || body.contains("AADSTS")
+            || body.contains("redirect_uri")
+            || status >= 400;
+        if !rejected {
+            return Ok(candidate);
         }
     }
     Err(Error::Install(
-        "Azure 应用没有可用的回环重定向地址。请到「身份验证 → 添加平台 → 移动和桌面应用程序」添加 http://localhost（端口任意），再重新登录".into(),
+        "微软拒绝了所有回环重定向地址：Azure 应用还没有注册 http://localhost。请到「身份验证 → 添加平台 → 移动和桌面应用程序」勾选 http://localhost，并在「高级设置」把「允许公共客户端流」设为「是」，保存后重试。".into(),
     ))
 }
 
