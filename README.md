@@ -8,7 +8,7 @@
 
 **简体中文** | [English](README.en.md)
 
-> 当前版本：**0.13.3**（预览版）
+> 当前版本：**0.14.0**（预览版）
 >
 > 目标：小体积、少依赖、安装过程可见、中断可补。功能边界见 [实现状态](docs/design/14-implementation-status.md)。
 
@@ -56,6 +56,8 @@ nailong 的思路很直：
 
 ### 下载中心：Mod / 资源包 / 光影
 
+- 下载中心右上角先选「安装到：<已装版本>」：选定后浏览、搜索都锁定这个版本的 Minecraft 版本和加载器，`+` 直接下进该版本的 `mods/` / `resourcepacks/` / `shaderpacks/`，不会再下错地方。
+- 不想装也能纯逛：选「只浏览」，版本和加载器自己挑，点 `+` 会提示先选安装目标。
 - 打开下载中心就是浏览页：顶上是 Mod / 资源包 / 光影，下面一排品类胶囊（优化、科技、冒险、写实、奇幻…），再往下是「热门」「最新」两排内容卡片。不用先搜索，也不用先想关键词。
 - 每张卡片是一个项目：图标、名字、下载量，右边一个 `+` 直接装。点 `+` 会取当前 Minecraft/加载器下最新的兼容版本，自动带上必需的 Modrinth 前置，装完卡片变成「已装」。
 - 点卡片其它位置进详情：挑具体版本，看 `required` / `optional` / `incompatible` 前置；`required` 自动加入，`optional` 是勾选项（默认不勾），`incompatible` 会阻止下载。
@@ -76,7 +78,9 @@ nailong 的思路很直：
 - 微软正版账户登录：右上角点「登录」，走浏览器授权码 + PKCE（本地回环端口），成功后自动刷新令牌；启动时带 `--accessToken` / `--uuid` / `--xuid`。
 - 令牌存在数据目录的 `account.json`（Unix 0600），不写日志；退出登录会删除。
 - 离线账户启动（单人 / 局域网），没登录时就是原来的离线模式。
-- 版本管理：加载器依赖的原版自动隐藏；被依赖的版本不能误删。
+- 版本管理：加载器依赖的原版自动隐藏；被依赖的版本不能误删；每个版本都有「内容」和「存档」入口。
+- 存档：列出世界、显示大小和最近修改时间，一键备份成 zip（放 `backups/`）、恢复、删除；「全部备份」一次打包所有世界。
+- 资源包/光影：和 Mod 一样可以启用/停用、删除、看文件大小、一键打开所在目录。
 - 安装进度：阶段、百分比、已下载 / 总大小、文件数。
 - GUI 和 CLI 共用同一套 core；CLI 适合脚本和排障。
 
@@ -85,7 +89,7 @@ nailong 的思路很直：
 | 平台 | 文件 | 大小 | 要求 |
 |---|---|---:|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | 约 8 MB | Windows 10/11，Java 21 |
-| Linux x64 (deb) | [nailong_0.13.3_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.13.3_amd64.deb) | 约 3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
+| Linux x64 (deb) | [nailong_0.14.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.14.0_amd64.deb) | 约 3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
 
 校验值：[SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS)。
 
@@ -102,7 +106,7 @@ nailong 的思路很直：
 ### Linux（Debian / Ubuntu）
 
 ```bash
-sudo apt install ./nailong_0.13.3_amd64.deb
+sudo apt install ./nailong_0.14.0_amd64.deb
 nailong
 ```
 

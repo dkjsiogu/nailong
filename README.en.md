@@ -8,7 +8,7 @@ A small, native Minecraft: Java Edition launcher written in Rust. Windows ships 
 
 [简体中文](README.md) | **English**
 
-> Current version: **0.13.3** (preview)
+> Current version: **0.14.0** (preview)
 >
 > Goals: small binaries, few dependencies, visible install progress, and a repair path after interruption. See [implementation status](docs/design/14-implementation-status.md) for exact boundaries.
 
@@ -56,6 +56,8 @@ Drag a `.mrpack` or `.zip` into the window to start an import. A single mod `.ja
 
 ### Download center: mods, resource packs and shaders
 
+- Pick “install to: <installed version>” in the download center first. Browsing and search then lock to that version's Minecraft version and loader, and `+` writes straight into its `mods/`, `resourcepacks/` or `shaderpacks/`.
+- Prefer window-shopping? Choose “browse only”, pick any version/loader, and `+` will ask for an install target first.
 - The download center opens on a browse page: Mod / Resource pack / Shader tabs, a row of category chips (optimization, technology, adventure, realistic, fantasy, …), then “Popular” and “Newest” shelves of cards. No keyword required.
 - Each card shows the project icon, name and download count, with a `+` button that installs the latest build compatible with the selected version and loader, plus required dependencies. The card turns into “installed” when done.
 - Clicking the rest of a card opens details: pick a specific file version and review `required` / `optional` / `incompatible` dependencies. `required` is added automatically, `optional` is a checkbox (off by default), `incompatible` blocks the download.
@@ -75,7 +77,9 @@ Drag a `.mrpack` or `.zip` into the window to start an import. A single mod `.ja
 - Microsoft account login from the top-right button: browser authorization code + PKCE on a loopback port, automatic token refresh, and `--accessToken` / `--uuid` / `--xuid` at launch.
 - Tokens live in `account.json` under the data directory (mode 0600 on Unix) and never appear in logs; logging out deletes it.
 - Offline-account launch (singleplayer / LAN) still works when nobody is signed in.
-- Version management: base versions required by a loader are hidden from the main picker and protected from deletion.
+- Version management: base versions required by a loader are hidden from the main picker and protected from deletion; every version has “content” and “saves” entries.
+- Saves: list worlds with size and modified time, back one up as a zip under `backups/`, restore or delete; “back up all” packs every world at once.
+- Resource packs and shaders get the same enable/disable, delete, file-size and open-folder affordances as mods.
 - Install progress: stage, percentage, downloaded / total bytes, and file count.
 - GUI and CLI share the same core; the CLI is useful for scripts and debugging.
 
@@ -84,7 +88,7 @@ Drag a `.mrpack` or `.zip` into the window to start an import. A single mod `.ja
 | Platform | File | Size | Requirements |
 |---|---|---:|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | ~8 MB | Windows 10/11, Java 21 |
-| Linux x64 (deb) | [nailong_0.13.3_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.13.3_amd64.deb) | ~3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
+| Linux x64 (deb) | [nailong_0.14.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.14.0_amd64.deb) | ~3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
 
 Checksums: [SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS).
 

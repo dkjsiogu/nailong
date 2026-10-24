@@ -7,6 +7,7 @@ use nailong_core::installed;
 use nailong_core::launch::{self, LaunchOptions};
 use nailong_core::mods;
 use nailong_core::progress::{Progress, Sink, from_fn};
+use nailong_core::saves;
 use nailong_core::{Error, Root, cancel, java};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
@@ -148,6 +149,7 @@ enum Msg {
         offset: usize,
         result: Result<mods::SearchPage, String>,
     },
+    SavesDone(Result<String, String>),
     LoginBrowser(String),
     LoginDone(Result<auth::Account, String>),
     LaunchDone(i32),
@@ -237,6 +239,16 @@ struct App {
     notice: Option<String>,
     log: Vec<String>,
     show_log: bool,
+    saves_row: Option<Row>,
+    show_saves: bool,
+    saves_worlds: Vec<saves::World>,
+    saves_backups: Vec<saves::Backup>,
+    saves_confirm: Option<String>,
+    saves_confirm_backup: Option<String>,
+    saves_rx: Option<mpsc::Receiver<Msg>>,
+    saves_busy: bool,
+    saves_notice: Option<String>,
+    saves_error: Option<String>,
     account: Option<auth::Account>,
     login_url: Option<String>,
     login_rx: Option<mpsc::Receiver<Msg>>,
@@ -331,6 +343,16 @@ impl App {
             notice: None,
             log: vec!["启动器已就绪".into()],
             show_log: false,
+            saves_row: None,
+            show_saves: false,
+            saves_worlds: Vec::new(),
+            saves_backups: Vec::new(),
+            saves_confirm: None,
+            saves_confirm_backup: None,
+            saves_rx: None,
+            saves_busy: false,
+            saves_notice: None,
+            saves_error: None,
             account,
             login_url: None,
             login_rx: None,
@@ -342,8 +364,17 @@ impl App {
         app.refresh();
         // 调试钩子：跳过点击直接进下载中心，方便无头冒烟测试（仅 debug 构建）。
         #[cfg(debug_assertions)]
-        if std::env::var_os("NAILONG_DEBUG_OPEN_MODS").is_some() && app.selected_row().is_some() {
+        if std::env::var_os("NAILONG_DEBUG_OPEN_MODS").is_some()
+            && let Some(row) = app.selected_row().or_else(|| app.rows.first().cloned())
+        {
+            app.mods_row = Some(row);
             app.open_mods();
+        }
+        #[cfg(debug_assertions)]
+        if std::env::var_os("NAILONG_DEBUG_OPEN_SAVES").is_some()
+            && let Some(row) = app.selected_row().or_else(|| app.rows.first().cloned())
+        {
+            app.open_saves(row);
         }
         if app.visible_count() == 0 {
             if app.rows.is_empty() {
@@ -831,10 +862,14 @@ impl App {
     }
 
     fn open_mods(&mut self) {
+        let row = self.selected_row();
+        self.enter_mods(row);
+    }
+
+    fn enter_mods(&mut self, row: Option<Row>) {
         if self.busy.is_some() {
             return;
         }
-        let row = self.selected_row();
         let game_dir = row.as_ref().map(|row| {
             row.game_dir
                 .clone()
@@ -1665,6 +1700,11 @@ impl App {
             }
         }
         let mut messages = Vec::new();
+        if let Some(rx) = &self.saves_rx {
+            while let Ok(msg) = rx.try_recv() {
+                messages.push(msg);
+            }
+        }
         if let Some(rx) = &self.login_rx {
             while let Ok(msg) = rx.try_recv() {
                 messages.push(msg);
@@ -1948,6 +1988,18 @@ impl App {
                         Err(e) => self.mods_error = Some(e),
                     }
                 }
+                Msg::SavesDone(result) => {
+                    self.saves_busy = false;
+                    self.saves_rx = None;
+                    match result {
+                        Ok(note) => {
+                            self.saves_notice = Some(note);
+                            self.saves_error = None;
+                            self.reload_saves();
+                        }
+                        Err(e) => self.saves_error = Some(e),
+                    }
+                }
                 Msg::LoginBrowser(url) => {
                     self.login_url = Some(url);
                 }
@@ -2017,6 +2069,11 @@ impl App {
                             if ghost_button(ui, "返回").clicked() {
                                 self.show_manage = false;
                                 self.delete_confirm = None;
+                            }
+                        } else if self.show_saves {
+                            if ghost_button(ui, "返回").clicked() {
+                                self.show_saves = false;
+                                self.show_manage = true;
                             }
                         } else if self.busy.is_none() {
                             ui.add_space(4.0);
@@ -2272,6 +2329,7 @@ impl App {
             });
         });
         ui.add_space(12.0);
+        let mut wanted_target: Option<Option<Row>> = None;
         ui.horizontal(|ui| {
             for candidate in [
                 mods::ContentKind::Mod,
@@ -2303,106 +2361,191 @@ impl App {
                     }
                 }
             }
-            ui.add_space(8.0);
+            ui.add_space(6.0);
             let label = if self.mods_installed.is_empty() {
                 "已安装".to_string()
             } else {
                 format!("已安装 {}", self.mods_installed.len())
             };
             if chip(ui, &label, self.mods_show_installed).clicked() && !self.mods_show_installed {
-                self.mods_show_installed = true;
-                self.start_mods_scan();
+                if self.mods_game_dir.is_none() {
+                    self.mods_error = Some("先在右边选一个安装目标，或去版本管理点「内容」".into());
+                } else {
+                    self.mods_show_installed = true;
+                    self.start_mods_scan();
+                }
             }
-        });
-        ui.add_space(8.0);
-        let mut wanted_mc: Option<Option<String>> = None;
-        let mut wanted_loader: Option<Option<mods::Loader>> = None;
-        ui.horizontal(|ui| {
-            let mc_label = self
-                .mods_mc
-                .clone()
-                .unwrap_or_else(|| "全部版本".to_string());
-            egui::ComboBox::from_id_salt("browse_mc")
-                .selected_text(mc_label)
-                .width(110.0)
-                .show_ui(ui, |ui| {
-                    if ui
-                        .selectable_label(self.mods_mc.is_none(), "全部版本")
-                        .clicked()
-                    {
-                        wanted_mc = Some(None);
-                    }
-                    let versions = self
-                        .catalog
-                        .as_ref()
-                        .map(|catalog| catalog.minecraft.clone())
-                        .unwrap_or_else(|| vec!["1.21.1".to_string()]);
-                    for version in versions.iter().take(80) {
-                        if ui
-                            .selectable_label(
-                                self.mods_mc.as_deref() == Some(version.as_str()),
-                                version,
-                            )
-                            .clicked()
-                        {
-                            wanted_mc = Some(Some(version.clone()));
-                        }
-                    }
-                });
-            if self.mods_kind == mods::ContentKind::Mod {
-                let loader_label = self
-                    .mods_loader
-                    .map(|loader| loader.label().to_string())
-                    .unwrap_or_else(|| "全部加载器".to_string());
-                egui::ComboBox::from_id_salt("browse_loader")
-                    .selected_text(loader_label)
-                    .width(110.0)
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let rows = self.rows.clone();
+                let label = self
+                    .mods_row
+                    .as_ref()
+                    .map(|row| row.label.clone())
+                    .unwrap_or_else(|| "只浏览".to_string());
+                egui::ComboBox::from_id_salt("mods_target")
+                    .selected_text(format!("安装到：{label}"))
+                    .width(230.0)
                     .show_ui(ui, |ui| {
                         if ui
-                            .selectable_label(self.mods_loader.is_none(), "全部加载器")
+                            .selectable_label(self.mods_row.is_none(), "只浏览（不安装）")
                             .clicked()
                         {
-                            wanted_loader = Some(None);
+                            wanted_target = Some(None);
                         }
-                        for loader in [
-                            mods::Loader::Fabric,
-                            mods::Loader::NeoForge,
-                            mods::Loader::Forge,
-                            mods::Loader::Quilt,
-                        ] {
+                        for row in &rows {
                             if ui
-                                .selectable_label(self.mods_loader == Some(loader), loader.label())
+                                .selectable_label(
+                                    self.mods_row
+                                        .as_ref()
+                                        .is_some_and(|current| current.id == row.id),
+                                    &row.label,
+                                )
                                 .clicked()
                             {
-                                wanted_loader = Some(Some(loader));
+                                wanted_target = Some(Some(row.clone()));
                             }
                         }
                     });
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let target = self
-                    .mods_row
-                    .as_ref()
-                    .map(|row| format!("装到 {} · {}", row.mc, row.loader.name()))
-                    .unwrap_or_else(|| "未选择安装目标".to_string());
-                ui.label(egui::RichText::new(target).size(10.5).color(MUTED));
             });
         });
-        if let Some(mc) = wanted_mc {
-            self.mods_mc = mc;
-            if self.mods_mc.is_none() {
+        if let Some(target) = wanted_target {
+            self.set_mods_target(target);
+        }
+        ui.add_space(8.0);
+        if let Some(row) = self.mods_row.clone() {
+            let text = format!(
+                "锁定 {} · {}，浏览、搜索和下载都只针对这个版本",
+                row.mc,
+                row.loader.name()
+            );
+            ui.label(egui::RichText::new(text).size(10.5).color(MUTED));
+        } else {
+            let mut wanted_mc: Option<Option<String>> = None;
+            let mut wanted_loader: Option<Option<mods::Loader>> = None;
+            ui.horizontal(|ui| {
+                let mc_label = self
+                    .mods_mc
+                    .clone()
+                    .unwrap_or_else(|| "全部版本".to_string());
+                egui::ComboBox::from_id_salt("browse_mc")
+                    .selected_text(mc_label)
+                    .width(110.0)
+                    .show_ui(ui, |ui| {
+                        if ui
+                            .selectable_label(self.mods_mc.is_none(), "全部版本")
+                            .clicked()
+                        {
+                            wanted_mc = Some(None);
+                        }
+                        let versions = self
+                            .catalog
+                            .as_ref()
+                            .map(|catalog| catalog.minecraft.clone())
+                            .unwrap_or_else(|| vec!["1.21.1".to_string()]);
+                        for version in versions.iter().take(80) {
+                            if ui
+                                .selectable_label(
+                                    self.mods_mc.as_deref() == Some(version.as_str()),
+                                    version,
+                                )
+                                .clicked()
+                            {
+                                wanted_mc = Some(Some(version.clone()));
+                            }
+                        }
+                    });
+                if self.mods_kind == mods::ContentKind::Mod {
+                    let loader_label = self
+                        .mods_loader
+                        .map(|loader| loader.label().to_string())
+                        .unwrap_or_else(|| "全部加载器".to_string());
+                    egui::ComboBox::from_id_salt("browse_loader")
+                        .selected_text(loader_label)
+                        .width(110.0)
+                        .show_ui(ui, |ui| {
+                            if ui
+                                .selectable_label(self.mods_loader.is_none(), "全部加载器")
+                                .clicked()
+                            {
+                                wanted_loader = Some(None);
+                            }
+                            for loader in [
+                                mods::Loader::Fabric,
+                                mods::Loader::NeoForge,
+                                mods::Loader::Forge,
+                                mods::Loader::Quilt,
+                            ] {
+                                if ui
+                                    .selectable_label(
+                                        self.mods_loader == Some(loader),
+                                        loader.label(),
+                                    )
+                                    .clicked()
+                                {
+                                    wanted_loader = Some(Some(loader));
+                                }
+                            }
+                        });
+                }
+                ui.label(
+                    egui::RichText::new("只浏览模式：不会安装，点卡片 + 会提示先选版本")
+                        .size(10.5)
+                        .color(MUTED),
+                );
+            });
+            if let Some(mc) = wanted_mc {
+                self.mods_mc = mc;
+                if self.mods_mc.is_none() {
+                    self.mods_loader = None;
+                }
+                self.reset_browse_selection();
+                self.start_browse();
+            }
+            if let Some(loader) = wanted_loader
+                && self.mods_loader != loader
+            {
+                self.mods_loader = loader;
+                self.reset_browse_selection();
+                self.start_browse();
+            }
+        }
+    }
+
+    /// 切换下载中心的安装目标；None = 只浏览。
+    fn set_mods_target(&mut self, row: Option<Row>) {
+        self.mods_row = row.clone();
+        self.mods_game_dir = row.as_ref().map(|row| {
+            row.game_dir
+                .clone()
+                .unwrap_or_else(|| self.root.version_dir(&row.profile))
+        });
+        match &row {
+            Some(row) => {
+                self.mods_mc = Some(row.mc.clone());
+                self.mods_loader = mod_loader(row.loader);
+            }
+            None => {
+                self.mods_mc = None;
                 self.mods_loader = None;
             }
-            self.reset_browse_selection();
-            self.start_browse();
         }
-        if let Some(loader) = wanted_loader
-            && self.mods_loader != loader
-        {
-            self.mods_loader = loader;
-            self.reset_browse_selection();
-            self.start_browse();
+        self.mods_selected = None;
+        self.mods_versions.clear();
+        self.mods_version = None;
+        self.mods_choices.clear();
+        self.mods_optional.clear();
+        self.mods_results.clear();
+        self.mods_total = 0;
+        self.mods_offset = 0;
+        self.mods_searching = false;
+        self.mods_error = None;
+        self.mods_notice = None;
+        self.refresh_installed_keys();
+        self.mods_installed.clear();
+        if self.mods_show_installed && self.mods_game_dir.is_some() {
+            self.start_mods_scan();
         }
+        self.start_browse();
     }
 
     fn browse_view(&mut self, ui: &mut egui::Ui) {
@@ -2902,6 +3045,313 @@ impl App {
         });
     }
 
+    fn saves_game_dir(&self) -> Option<PathBuf> {
+        let row = self.saves_row.as_ref()?;
+        Some(
+            row.game_dir
+                .clone()
+                .unwrap_or_else(|| self.root.dir().to_path_buf()),
+        )
+    }
+
+    fn open_saves(&mut self, row: Row) {
+        if self.busy.is_some() {
+            return;
+        }
+        self.saves_row = Some(row);
+        self.show_saves = true;
+        self.show_manage = false;
+        self.show_mods = false;
+        self.saves_confirm = None;
+        self.saves_confirm_backup = None;
+        self.saves_notice = None;
+        self.saves_error = None;
+        self.saves_busy = false;
+        self.saves_rx = None;
+        self.reload_saves();
+    }
+
+    fn reload_saves(&mut self) {
+        let Some(dir) = self.saves_game_dir() else {
+            return;
+        };
+        match saves::worlds(&dir) {
+            Ok(items) => self.saves_worlds = items,
+            Err(e) => self.saves_error = Some(e.to_string()),
+        }
+        match saves::backups(&dir) {
+            Ok(items) => self.saves_backups = items,
+            Err(e) => self.saves_error = Some(e.to_string()),
+        }
+    }
+
+    fn start_backup(&mut self, name: String) {
+        if self.saves_busy {
+            return;
+        }
+        let Some(dir) = self.saves_game_dir() else {
+            return;
+        };
+        self.saves_busy = true;
+        self.saves_error = None;
+        let (tx, rx) = mpsc::channel();
+        self.saves_rx = Some(rx);
+        std::thread::spawn(move || {
+            let result = saves::backup_world(&dir, &name)
+                .map(|path| {
+                    format!(
+                        "已备份 {} → {}",
+                        name,
+                        path.file_name().unwrap_or_default().to_string_lossy()
+                    )
+                })
+                .map_err(|e| e.to_string());
+            let _ = tx.send(Msg::SavesDone(result));
+        });
+    }
+
+    fn start_restore(&mut self, name: String) {
+        if self.saves_busy {
+            return;
+        }
+        let Some(dir) = self.saves_game_dir() else {
+            return;
+        };
+        self.saves_busy = true;
+        self.saves_error = None;
+        let (tx, rx) = mpsc::channel();
+        self.saves_rx = Some(rx);
+        std::thread::spawn(move || {
+            let result = saves::restore_backup(&dir, &name)
+                .map(|world| format!("已恢复存档 {world}"))
+                .map_err(|e| e.to_string());
+            let _ = tx.send(Msg::SavesDone(result));
+        });
+    }
+
+    fn saves_view(&mut self, ui: &mut egui::Ui) {
+        let width = ui.available_width().min(760.0);
+        let pad = ((ui.available_width() - width) / 2.0).max(24.0);
+        let Some(row) = self.saves_row.clone() else {
+            return;
+        };
+        let game_dir = self
+            .saves_game_dir()
+            .unwrap_or_else(|| self.root.dir().to_path_buf());
+        let shared = row.game_dir.is_none();
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.add_space(22.0);
+                ui.horizontal(|ui| {
+                    ui.add_space(pad);
+                    ui.vertical(|ui| {
+                        ui.set_width(width);
+                        ui.horizontal(|ui| {
+                            if ghost_button(ui, "‹ 版本管理").clicked() {
+                                self.show_saves = false;
+                                self.show_manage = true;
+                            }
+                            ui.label(
+                                egui::RichText::new(format!("存档 · {}", row.label))
+                                    .size(24.0)
+                                    .strong(),
+                            );
+                        });
+                        ui.add_space(6.0);
+                        ui.label(
+                            egui::RichText::new(if shared {
+                                "该版本还没隔离，存档在共享目录里；下载任意内容后会自动切到版本独立目录"
+                            } else {
+                                "存档在版本独立目录；备份会写成 zip，放在 backups/ 下"
+                            })
+                            .size(11.0)
+                            .color(MUTED),
+                        );
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(game_dir.display().to_string())
+                                    .size(10.0)
+                                    .color(MUTED),
+                            );
+                            if ui.button("打开目录").clicked() {
+                                open_folder(&game_dir);
+                            }
+                            if ui.button("刷新").clicked() {
+                                self.reload_saves();
+                            }
+                            if ui.button("全部备份").clicked() {
+                                let names: Vec<String> = self
+                                    .saves_worlds
+                                    .iter()
+                                    .map(|world| world.name.clone())
+                                    .collect();
+                                for name in names {
+                                    let _ = saves::backup_world(&game_dir, &name);
+                                }
+                                self.reload_saves();
+                                self.saves_notice = Some("已备份全部存档".into());
+                            }
+                        });
+                        ui.add_space(10.0);
+                        if self.saves_busy {
+                            ui.horizontal(|ui| {
+                                ui.spinner();
+                                ui.label(egui::RichText::new("正在写入备份…").color(MUTED));
+                            });
+                        }
+                        if let Some(note) = &self.saves_notice {
+                            ui.label(egui::RichText::new(note).size(12.0).color(OK));
+                        }
+                        if let Some(err) = &self.saves_error {
+                            ui.label(egui::RichText::new(err).size(12.0).color(WARN));
+                        }
+                        ui.add_space(8.0);
+                        ui.label(egui::RichText::new("世界").size(15.0).strong());
+                        ui.add_space(6.0);
+                        if self.saves_worlds.is_empty() {
+                            ui.label(
+                                egui::RichText::new("还没有存档。进游戏创建世界后会出现在这里。")
+                                    .size(12.0)
+                                    .color(MUTED),
+                            );
+                        }
+                        let worlds = self.saves_worlds.clone();
+                        for world in &worlds {
+                            card().show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.vertical(|ui| {
+                                        ui.label(
+                                            egui::RichText::new(&world.name)
+                                                .size(14.0)
+                                                .strong(),
+                                        );
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "{} · {}",
+                                                human_size(world.size),
+                                                human_age(world.modified)
+                                            ))
+                                            .size(10.5)
+                                            .color(MUTED),
+                                        );
+                                    });
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            if self.saves_confirm.as_deref()
+                                                == Some(world.name.as_str())
+                                            {
+                                                if ui.button("取消").clicked() {
+                                                    self.saves_confirm = None;
+                                                }
+                                                if ui
+                                                    .add(
+                                                        egui::Button::new("确认删除").fill(
+                                                            egui::Color32::from_rgb(120, 48, 48),
+                                                        ),
+                                                    )
+                                                    .clicked()
+                                                {
+                                                    match saves::delete_world(
+                                                        &game_dir,
+                                                        &world.name,
+                                                    ) {
+                                                        Ok(()) => {
+                                                            self.saves_notice = Some(format!(
+                                                                "已删除存档 {}",
+                                                                world.name
+                                                            ));
+                                                            self.saves_confirm = None;
+                                                            self.reload_saves();
+                                                        }
+                                                        Err(e) => {
+                                                            self.saves_error = Some(e.to_string())
+                                                        }
+                                                    }
+                                                }
+                                            } else if ui.button("删除").clicked() {
+                                                self.saves_confirm = Some(world.name.clone());
+                                            }
+                                            if ui.button("备份").clicked() {
+                                                self.start_backup(world.name.clone());
+                                            }
+                                        },
+                                    );
+                                });
+                            });
+                            ui.add_space(8.0);
+                        }
+                        ui.add_space(14.0);
+                        ui.label(egui::RichText::new("备份").size(15.0).strong());
+                        ui.add_space(6.0);
+                        if self.saves_backups.is_empty() {
+                            ui.label(
+                                egui::RichText::new("还没有备份。点上面的「备份」生成 zip。")
+                                    .size(12.0)
+                                    .color(MUTED),
+                            );
+                        }
+                        let backups = self.saves_backups.clone();
+                        for backup in &backups {
+                            ui.horizontal(|ui| {
+                                ui.vertical(|ui| {
+                                    ui.label(
+                                        egui::RichText::new(&backup.name).size(12.5).strong(),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "{} · {}",
+                                            human_size(backup.size),
+                                            human_age(backup.modified)
+                                        ))
+                                        .size(10.0)
+                                        .color(MUTED),
+                                    );
+                                });
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        if self.saves_confirm_backup.as_deref()
+                                            == Some(backup.name.as_str())
+                                        {
+                                            if ui.button("取消").clicked() {
+                                                self.saves_confirm_backup = None;
+                                            }
+                                            if ui.button("确认删除").clicked() {
+                                                match saves::delete_backup(
+                                                    &game_dir,
+                                                    &backup.name,
+                                                ) {
+                                                    Ok(()) => {
+                                                        self.saves_confirm_backup = None;
+                                                        self.reload_saves();
+                                                    }
+                                                    Err(e) => {
+                                                        self.saves_error = Some(e.to_string())
+                                                    }
+                                                }
+                                            }
+                                        } else if ui.button("删除").clicked() {
+                                            self.saves_confirm_backup =
+                                                Some(backup.name.clone());
+                                        }
+                                        if ui.button("恢复").clicked() {
+                                            self.start_restore(backup.name.clone());
+                                        }
+                                    },
+                                );
+                            });
+                            ui.add_space(6.0);
+                            ui.separator();
+                            ui.add_space(6.0);
+                        }
+                    });
+                });
+            });
+    }
+
     fn installed_view(&mut self, ui: &mut egui::Ui) {
         ui.add_space(14.0);
         let Some(game_dir) = self.mods_game_dir.clone() else {
@@ -3022,7 +3472,7 @@ impl App {
             card().show(ui, |ui| {
                 ui.horizontal(|ui| {
                     let mut enabled = entry.enabled;
-                    if ui.checkbox(&mut enabled, "").changed() {
+                    if ui.checkbox(&mut enabled, "启用").changed() {
                         let mut copy = entry.clone();
                         match installed::set_enabled(&game_dir, &mut copy, enabled) {
                             Ok(()) => {
@@ -3042,6 +3492,9 @@ impl App {
                     if !entry.enabled {
                         ui.label(egui::RichText::new("已禁用").size(10.5).color(WARN));
                     }
+                    if ui.button("打开目录").clicked() {
+                        open_folder(&game_dir.join(kind.folder()));
+                    }
                     if ui.button("删除").clicked() {
                         match installed::remove(&game_dir, &entry) {
                             Ok(()) => {
@@ -3054,6 +3507,16 @@ impl App {
                     }
                 });
                 let mut meta = Vec::new();
+                let file_name = if entry.enabled {
+                    entry.file.clone()
+                } else {
+                    format!("{}.disabled", entry.file)
+                };
+                if let Ok(metadata) =
+                    std::fs::metadata(game_dir.join(kind.folder()).join(file_name))
+                {
+                    meta.push(human_size(metadata.len()));
+                }
                 if let Some(source) = entry.source {
                     meta.push(source.label().to_string());
                 }
@@ -3174,6 +3637,26 @@ impl App {
                                             .clicked()
                                         {
                                             self.delete_confirm = Some(row.id.clone());
+                                        }
+                                        ui.add_space(6.0);
+                                        if ui
+                                            .add_enabled(
+                                                self.busy.is_none(),
+                                                egui::Button::new("存档"),
+                                            )
+                                            .clicked()
+                                        {
+                                            self.open_saves(row.clone());
+                                        }
+                                        ui.add_space(4.0);
+                                        if ui
+                                            .add_enabled(
+                                                self.busy.is_none(),
+                                                egui::Button::new("内容"),
+                                            )
+                                            .clicked()
+                                        {
+                                            self.enter_mods(Some(row.clone()));
                                         }
                                     },
                                 );
@@ -3510,6 +3993,7 @@ impl eframe::App for App {
         }
         if self.busy.is_some()
             || self.login_busy
+            || self.saves_rx.is_some()
             || self.mods_rx.is_some()
             || self.mods_browse_loading
             || !self.mods_icons_pending.is_empty()
@@ -3522,6 +4006,8 @@ impl eframe::App for App {
                 self.progress_view(ui);
             } else if self.show_mods {
                 self.mods_view(ui);
+            } else if self.show_saves {
+                self.saves_view(ui);
             } else if self.show_manage {
                 self.manage_view(ui);
             } else if self.show_install {
@@ -3891,6 +4377,43 @@ fn logo_mark(ui: &mut egui::Ui) {
         egui::FontId::proportional(17.0),
         egui::Color32::BLACK,
     );
+}
+
+fn open_folder(path: &std::path::Path) {
+    #[cfg(target_os = "windows")]
+    let _ = std::process::Command::new("explorer").arg(path).spawn();
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open").arg(path).spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let _ = std::process::Command::new("xdg-open").arg(path).spawn();
+}
+
+fn human_size(bytes: u64) -> String {
+    const KIB: f64 = 1024.0;
+    let size = bytes as f64;
+    if size >= KIB * KIB * KIB {
+        format!("{:.2} GB", size / (KIB * KIB * KIB))
+    } else if size >= KIB * KIB {
+        format!("{:.1} MB", size / (KIB * KIB))
+    } else if size >= KIB {
+        format!("{:.0} KB", size / KIB)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+fn human_age(modified: u64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or_default();
+    let diff = now.saturating_sub(modified);
+    match diff {
+        0..=59 => "刚刚".into(),
+        60..=3599 => format!("{} 分钟前", diff / 60),
+        3600..=86399 => format!("{} 小时前", diff / 3600),
+        _ => format!("{} 天前", diff / 86400),
+    }
 }
 
 fn open_url(url: &str) {

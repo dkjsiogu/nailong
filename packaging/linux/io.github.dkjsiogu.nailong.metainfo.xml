@@ -25,6 +25,11 @@
   <url type="bugtracker">https://github.com/dkjsiogu/nailong/issues</url>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.14.0" date="2026-10-25">
+      <description>
+        <p>Download center targets an installed version explicitly and writes into that version's folder, with a browse-only mode. Version management gains per-version content and saves pages: list worlds, back them up to zip, restore and delete, plus enable/disable and open-folder actions for mods and resource packs.</p>
+      </description>
+    </release>
     <release version="0.13.3" date="2026-10-25">
       <description>
         <p>The loopback probe now recognises the login_required redirect as success instead of treating every AADSTS response as a rejection.</p>

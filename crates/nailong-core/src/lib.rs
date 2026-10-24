@@ -12,6 +12,7 @@ pub mod manifest;
 pub mod mods;
 pub mod paths;
 pub mod progress;
+pub mod saves;
 
 pub use error::{Error, Result};
 pub use paths::Root;
