@@ -152,7 +152,9 @@ pub fn list(game_dir: &Path, world: &str) -> Result<Vec<Snapshot>> {
             out.push(snapshot);
         }
     }
-    out.sort_by_key(|snapshot| std::cmp::Reverse(snapshot.created_at));
+    // created_at 只到秒；同一秒内的多次备份用 id（毫秒-序号）兜底，
+    // 否则 read_dir 的顺序会让“最新快照”不稳定，prune 可能删错。
+    out.sort_by(|a, b| (b.created_at, &b.id).cmp(&(a.created_at, &a.id)));
     Ok(out)
 }
 
