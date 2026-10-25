@@ -17,18 +17,22 @@ use std::time::Duration;
 
 mod motion;
 
-const BG: egui::Color32 = egui::Color32::from_rgb(11, 15, 22);
-const ACCENT: egui::Color32 = egui::Color32::from_rgb(245, 196, 81);
-const CARD: egui::Color32 = egui::Color32::from_rgb(28, 35, 47);
-const PANEL: egui::Color32 = egui::Color32::from_rgb(17, 22, 32);
-const SURFACE: egui::Color32 = egui::Color32::from_rgb(28, 35, 47);
-const SURFACE2: egui::Color32 = egui::Color32::from_rgb(40, 49, 63);
-const LINE: egui::Color32 = egui::Color32::from_rgb(52, 64, 82);
-const MUTED: egui::Color32 = egui::Color32::from_rgb(150, 160, 177);
-const WARN: egui::Color32 = egui::Color32::from_rgb(232, 161, 92);
-const OK: egui::Color32 = egui::Color32::from_rgb(126, 198, 153);
-const SUCCESS: egui::Color32 = egui::Color32::from_rgb(126, 198, 153);
-const DANGER: egui::Color32 = egui::Color32::from_rgb(226, 122, 112);
+const BG: egui::Color32 = egui::Color32::from_rgb(255, 249, 240);
+const ACCENT: egui::Color32 = egui::Color32::from_rgb(245, 158, 11);
+const ACCENT_HI: egui::Color32 = egui::Color32::from_rgb(255, 199, 90);
+const ACCENT_LO: egui::Color32 = egui::Color32::from_rgb(240, 138, 28);
+const ACCENT_TEXT: egui::Color32 = egui::Color32::from_rgb(166, 94, 10);
+const INK: egui::Color32 = egui::Color32::from_rgb(46, 36, 24);
+const CARD: egui::Color32 = egui::Color32::from_rgb(255, 255, 255);
+const PANEL: egui::Color32 = egui::Color32::from_rgb(255, 252, 246);
+const SURFACE: egui::Color32 = egui::Color32::from_rgb(255, 255, 255);
+const SURFACE2: egui::Color32 = egui::Color32::from_rgb(255, 242, 224);
+const LINE: egui::Color32 = egui::Color32::from_rgb(240, 224, 203);
+const MUTED: egui::Color32 = egui::Color32::from_rgb(139, 122, 102);
+const WARN: egui::Color32 = egui::Color32::from_rgb(190, 110, 15);
+const OK: egui::Color32 = egui::Color32::from_rgb(47, 143, 91);
+const SUCCESS: egui::Color32 = egui::Color32::from_rgb(47, 143, 91);
+const DANGER: egui::Color32 = egui::Color32::from_rgb(192, 57, 43);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum LoaderKind {
@@ -120,6 +124,37 @@ enum Task {
     Install,
     Mods,
     Launch,
+}
+
+/// 侧边栏的四个一级入口。玩家只需要记住这四个地方。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Nav {
+    Home,
+    Versions,
+    Content,
+    Saves,
+}
+
+impl Nav {
+    const ALL: [Nav; 4] = [Nav::Home, Nav::Versions, Nav::Content, Nav::Saves];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Home => "启动台",
+            Self::Versions => "版本",
+            Self::Content => "内容",
+            Self::Saves => "存档",
+        }
+    }
+
+    fn hint(self) -> &'static str {
+        match self {
+            Self::Home => "启动、账户与最近动态",
+            Self::Versions => "安装、修复与删除版本",
+            Self::Content => "Mod、资源包、光影",
+            Self::Saves => "世界与快照备份",
+        }
+    }
 }
 
 enum Msg {
@@ -233,6 +268,8 @@ struct App {
     mods_notice: Option<String>,
     mods_error: Option<String>,
     mods_rx: Option<mpsc::Receiver<Msg>>,
+    /// 已安装扫描与更新检查单独走一条通道，避免覆盖浏览请求。
+    mods_scan_rx: Option<mpsc::Receiver<Msg>>,
     catalog: Option<catalog::Catalog>,
     catalog_loading: bool,
     catalog_error: Option<String>,
@@ -348,6 +385,7 @@ impl App {
             mods_notice: None,
             mods_error: None,
             mods_rx: None,
+            mods_scan_rx: None,
             catalog: None,
             catalog_loading: false,
             catalog_error: None,
@@ -505,6 +543,13 @@ impl App {
                 app.show_manage = true;
             }
         }
+        #[cfg(debug_assertions)]
+        if std::env::var("NAILONG_DEBUG_SCREEN").as_deref() == Ok("welcome") {
+            app.show_install = false;
+            app.show_manage = false;
+            app.show_mods = false;
+            app.show_saves = false;
+        }
         app
     }
 
@@ -644,11 +689,21 @@ impl App {
             .and_then(|id| self.rows.iter().find(|r| &r.id == id))
             .is_some_and(|r| self.is_visible(r));
         if !valid {
+            // 首屏优先选“看起来像常用版本”的那个：有整合包实例、有内容、
+            // 安装完整。没有任何线索时退回列表最后一个，避免总选到空版本。
             self.selected = self
                 .rows
                 .iter()
-                .find(|r| self.is_visible(r))
-                .map(|r| r.id.clone());
+                .filter(|row| self.is_visible(row))
+                .max_by_key(|row| {
+                    let dir = row
+                        .game_dir
+                        .clone()
+                        .unwrap_or_else(|| self.root.version_dir(&row.profile));
+                    let content = installed::load(&dir).entries.len();
+                    (row.instance.is_some(), content, row.health.missing == 0)
+                })
+                .map(|row| row.id.clone());
         }
     }
 
@@ -656,6 +711,7 @@ impl App {
         self.show_install = true;
         self.show_manage = false;
         self.show_mods = false;
+        self.show_saves = false;
         self.error = None;
         self.notice = None;
         self.repair_target = None;
@@ -855,7 +911,8 @@ impl App {
         if kind != 0 && raw < 1.0 {
             ctx.request_repaint_after(Duration::from_millis(16));
         }
-        let backdrop = (100.0 * open_e) as u8;
+        let backdrop = (72.0 * open_e) as u8;
+        let veil = egui::Color32::from_rgba_unmultiplied(46, 36, 24, backdrop);
         let frame_fill = egui::Color32::from_rgba_unmultiplied(
             CARD.r(),
             CARD.g(),
@@ -872,7 +929,7 @@ impl App {
             let mut open = false;
             let mut cancel_login = false;
             let modal = egui::Modal::new(egui::Id::unique("login_modal"))
-                .backdrop_color(egui::Color32::from_black_alpha(backdrop))
+                .backdrop_color(veil)
                 .frame(
                     egui::Frame::new()
                         .fill(frame_fill)
@@ -938,7 +995,7 @@ impl App {
                         ui.label(
                             egui::RichText::new("浏览器没有自动打开？点上面的按钮再试一次")
                                 .size(9.5)
-                                .color(egui::Color32::from_rgb(116, 123, 136)),
+                                .color(MUTED),
                         );
                     });
                 });
@@ -963,7 +1020,7 @@ impl App {
             let mut logout = false;
             let mut close = false;
             let modal = egui::Modal::new(egui::Id::unique("account_modal"))
-                .backdrop_color(egui::Color32::from_black_alpha(backdrop))
+                .backdrop_color(veil)
                 .frame(
                     egui::Frame::new()
                         .fill(frame_fill)
@@ -1001,7 +1058,7 @@ impl App {
                             egui::Label::new(
                                 egui::RichText::new(short_text(&uuid, 32))
                                     .size(10.0)
-                                    .color(egui::Color32::from_rgb(210, 215, 224)),
+                                    .color(INK),
                             )
                             .truncate(),
                         );
@@ -1136,6 +1193,7 @@ impl App {
         });
     }
 
+    #[cfg(debug_assertions)]
     fn open_mods(&mut self) {
         let row = self.selected_row();
         self.enter_mods(row);
@@ -1184,6 +1242,9 @@ impl App {
         self.mods_loading = false;
         self.mods_deps_loading = false;
         self.mods_rx = None;
+        self.mods_scan_rx = None;
+        self.mods_installed_loading = false;
+        self.mods_updates_loading = false;
         self.mods_browse.clear();
         self.mods_browse_loading = false;
         self.mods_category = None;
@@ -1231,30 +1292,6 @@ impl App {
         self.mods_deps_loading = false;
     }
 
-    fn close_mods(&mut self) {
-        self.show_mods = false;
-        self.mods_row = None;
-        self.mods_game_dir = None;
-        self.mods_rx = None;
-        self.mods_loading = false;
-        self.mods_deps_loading = false;
-        self.mods_show_installed = false;
-        self.mods_installed.clear();
-        self.mods_installed_loading = false;
-        self.mods_updates.clear();
-        self.mods_updates_loading = false;
-        self.mods_notice = None;
-        self.mods_error = None;
-        self.mods_browse.clear();
-        self.mods_browse_loading = false;
-        self.mods_shelf = None;
-        self.mods_searching = false;
-        self.mods_quick = None;
-        self.mods_source_filter = None;
-        self.mods_icons.clear();
-        self.mods_icons_pending.clear();
-    }
-
     fn import_local_mod(&mut self, path: PathBuf) {
         if self.busy.is_some() {
             self.error = Some("正在安装，请等当前任务结束".into());
@@ -1299,7 +1336,7 @@ impl App {
         self.mods_installed_loading = true;
         self.mods_error = None;
         let (tx, rx) = mpsc::channel();
-        self.mods_rx = Some(rx);
+        self.mods_scan_rx = Some(rx);
         std::thread::spawn(move || {
             let result = installed::scan_all(&game_dir)
                 .map(|index| index.entries)
@@ -1329,7 +1366,7 @@ impl App {
         self.mods_updates_loading = true;
         self.mods_error = None;
         let (tx, rx) = mpsc::channel();
-        self.mods_rx = Some(rx);
+        self.mods_scan_rx = Some(rx);
         let mc = row.mc.clone();
         std::thread::spawn(move || {
             let mut updates = Vec::new();
@@ -1445,10 +1482,6 @@ impl App {
     }
 
     fn start_mods_search_at(&mut self, offset: usize) {
-        let Some(row) = self.mods_row.clone() else {
-            return;
-        };
-        let _ = &row;
         let loader = self.mods_loader;
         let mc = self.mods_mc.clone();
         let query = self.mods_query.trim().to_string();
@@ -1510,29 +1543,6 @@ impl App {
         self.mods_results.clear();
         self.mods_total = 0;
         self.mods_offset = 0;
-    }
-
-    fn switch_mods_kind(&mut self, kind: mods::ContentKind) {
-        if self.mods_kind == kind {
-            return;
-        }
-        self.mods_kind = kind;
-        self.mods_category = None;
-        self.mods_source_filter = None;
-        self.mods_shelf = None;
-        self.mods_searching = false;
-        self.mods_selected = None;
-        self.mods_results.clear();
-        self.mods_total = 0;
-        self.mods_offset = 0;
-        self.mods_versions.clear();
-        self.mods_version = None;
-        self.mods_choices.clear();
-        self.mods_optional.clear();
-        self.mods_notice = None;
-        self.mods_error = None;
-        self.fetch_cf_categories(kind);
-        self.start_browse();
     }
 
     /// 按当前品类拉两排内容：热门 + 最新。
@@ -1762,7 +1772,7 @@ impl App {
             return;
         }
         let Some(row) = self.mods_row.clone() else {
-            self.mods_error = Some("先回主界面安装一个版本，再回来点 +".into());
+            self.mods_error = Some("先在右上角「安装到」选一个版本，再点 +".into());
             return;
         };
         let kind = self.mods_kind;
@@ -1824,10 +1834,6 @@ impl App {
     }
 
     fn select_mods_project(&mut self, project: mods::Project) {
-        let Some(row) = self.mods_row.clone() else {
-            return;
-        };
-        let _ = &row;
         self.mods_loading = false;
         self.mods_browse_loading = false;
         self.mods_selected = Some(project.clone());
@@ -1840,9 +1846,15 @@ impl App {
         self.mods_error = None;
         self.mods_notice = None;
         let project_key = format!("{:?}:{}", project.source, project.id);
-        let Some(mc) = self.mods_mc.clone() else {
-            return;
-        };
+        let mc = self
+            .mods_mc
+            .clone()
+            .or_else(|| {
+                self.catalog
+                    .as_ref()
+                    .and_then(|catalog| catalog.minecraft.first().cloned())
+            })
+            .unwrap_or_else(|| "1.21.1".to_string());
         self.mods_versions_loading = true;
         let loader = self.mods_loader.unwrap_or(mods::Loader::Fabric);
         let (tx, rx) = mpsc::channel();
@@ -1884,6 +1896,7 @@ impl App {
             return;
         }
         let Some(row) = self.mods_row.clone() else {
+            self.mods_error = Some("先在右上角「安装到」选一个版本，再安装内容".into());
             return;
         };
         let loader = mod_loader(row.loader).unwrap_or(mods::Loader::Fabric);
@@ -2031,6 +2044,11 @@ impl App {
             }
         }
         if let Some(rx) = &self.mods_rx {
+            while let Ok(msg) = rx.try_recv() {
+                messages.push(msg);
+            }
+        }
+        if let Some(rx) = &self.mods_scan_rx {
             while let Ok(msg) = rx.try_recv() {
                 messages.push(msg);
             }
@@ -2207,7 +2225,7 @@ impl App {
                 }
                 Msg::ModsInstalled(inst) => {
                     self.mods_installed_loading = false;
-                    self.mods_rx = None;
+                    self.mods_scan_rx = None;
                     match inst {
                         Ok(entries) => {
                             self.mods_installed_keys = entries
@@ -2229,7 +2247,7 @@ impl App {
                 }
                 Msg::ModsUpdates(updates) => {
                     self.mods_updates_loading = false;
-                    self.mods_rx = None;
+                    self.mods_scan_rx = None;
                     match updates {
                         Ok(updates) => {
                             self.mods_updates = updates;
@@ -2361,91 +2379,405 @@ impl App {
         }
     }
 
-    fn top_bar(&mut self, ui: &mut egui::Ui) {
-        egui::Panel::top("top")
-            .default_size(64.0)
-            .frame(egui::Frame::new().fill(PANEL))
+    /// 当前侧边栏应该高亮哪一项。安装页属于「版本」的子流程。
+    fn nav_active(&self) -> Nav {
+        if matches!(self.busy, Some(Task::Install)) {
+            Nav::Versions
+        } else if self.show_mods {
+            Nav::Content
+        } else if self.show_saves {
+            Nav::Saves
+        } else if self.show_manage || self.show_install {
+            Nav::Versions
+        } else {
+            Nav::Home
+        }
+    }
+
+    fn nav_go(&mut self, nav: Nav) {
+        if self.busy.is_some() || self.login_busy {
+            return;
+        }
+        if self.nav_active() == nav {
+            // 再点一次当前入口：只做“回到这个入口的默认视图”，不重置数据。
+            match nav {
+                Nav::Versions if self.show_install => {
+                    self.show_install = false;
+                    self.show_manage = true;
+                    self.repair_target = None;
+                }
+                Nav::Content if !self.mods_show_installed => self.open_content(true),
+                _ => {}
+            }
+            return;
+        }
+        match nav {
+            Nav::Home => {
+                self.show_mods = false;
+                self.show_saves = false;
+                self.show_manage = false;
+                self.show_install = false;
+                self.repair_target = None;
+                self.error = None;
+                self.notice = None;
+                self.refresh();
+                self.ensure_visible_selection();
+            }
+            Nav::Versions => {
+                if self.visible_count() == 0 {
+                    self.open_install();
+                } else {
+                    self.show_mods = false;
+                    self.show_saves = false;
+                    self.show_install = false;
+                    self.show_manage = true;
+                    self.repair_target = None;
+                    self.delete_confirm = None;
+                    self.error = None;
+                    self.ensure_visible_selection();
+                }
+            }
+            Nav::Content => self.open_content(true),
+            Nav::Saves => self.open_saves_page(),
+        }
+    }
+
+    /// 内容只有一页：发现和已安装是同一页的两种模式。
+    fn open_content(&mut self, installed: bool) {
+        if self.busy.is_some() {
+            return;
+        }
+        let Some(row) = self
+            .selected_row()
+            .or_else(|| self.visible_rows().next().cloned())
+        else {
+            self.open_install();
+            return;
+        };
+        self.selected = Some(row.id.clone());
+        self.show_saves = false;
+        self.show_manage = false;
+        self.show_install = false;
+        self.error = None;
+        self.notice = None;
+        let same_target = self
+            .mods_row
+            .as_ref()
+            .is_some_and(|current| current.id == row.id);
+        if !self.show_mods || !same_target {
+            self.enter_mods(Some(row));
+        }
+        self.clear_mods_selection();
+        self.mods_show_installed = installed;
+        self.mods_filter.clear();
+        self.mods_delete_confirm = None;
+        self.mods_error = None;
+        self.mods_notice = None;
+        if installed {
+            if self.mods_game_dir.is_some() {
+                self.start_mods_scan();
+            }
+        } else {
+            self.mods_searching = false;
+            self.mods_shelf = None;
+            self.mods_query.clear();
+            if self.mods_browse.is_empty() && !self.mods_browse_loading {
+                self.start_browse();
+            }
+        }
+    }
+
+    fn open_saves_page(&mut self) {
+        if self.busy.is_some() || self.login_busy {
+            return;
+        }
+        let Some(row) = self
+            .selected_row()
+            .or_else(|| self.visible_rows().next().cloned())
+        else {
+            self.open_install();
+            return;
+        };
+        self.selected = Some(row.id.clone());
+        self.open_saves(row);
+    }
+
+    fn sidebar(&mut self, ui: &mut egui::Ui) {
+        let wide = ui.ctx().content_rect().width() >= 1080.0;
+        let width = if wide { 204.0 } else { 76.0 };
+        let active = self.nav_active();
+        let current = self.selected_row().or_else(|| {
+            self.visible_rows()
+                .min_by_key(|row| (row.loader.rank(), row.mc.clone()))
+                .cloned()
+        });
+        let versions = self.visible_count();
+        let account_name = self
+            .account
+            .as_ref()
+            .map(|account| account.name.clone())
+            .unwrap_or_else(|| self.username.clone());
+        let linked = self.account.is_some();
+        let busy = self.busy.is_some();
+        let login_busy = self.login_busy;
+        let enabled = !busy && !login_busy;
+        let mut go: Option<Nav> = None;
+        let mut account_clicked = false;
+
+        let panel = egui::Panel::left("shell_nav")
+            .resizable(false)
+            .exact_size(width)
+            .frame(egui::Frame::new().fill(PANEL).inner_margin(egui::Margin {
+                left: if wide { 14 } else { 10 },
+                right: if wide { 14 } else { 10 },
+                top: 18,
+                bottom: 14,
+            }))
             .show(ui, |ui| {
-                ui.horizontal_centered(|ui| {
-                    ui.add_space(22.0);
-                    logo_mark(ui);
-                    ui.add_space(9.0);
-                    ui.label(
-                        egui::RichText::new("nailong")
-                            .size(23.0)
-                            .strong()
-                            .color(ACCENT),
+                ui.set_width(ui.available_width());
+                if wide {
+                    ui.horizontal(|ui| {
+                        logo_mark(ui);
+                        ui.add_space(8.0);
+                        ui.vertical(|ui| {
+                            ui.spacing_mut().item_spacing.y = 0.0;
+                            ui.label(
+                                egui::RichText::new("nailong")
+                                    .size(19.0)
+                                    .strong()
+                                    .color(ACCENT_TEXT),
+                            );
+                            ui.label(
+                                egui::RichText::new("Minecraft 启动器")
+                                    .size(8.0)
+                                    .color(MUTED),
+                            );
+                        });
+                    });
+                } else {
+                    ui.vertical_centered(logo_mark);
+                }
+                ui.add_space(if wide { 20.0 } else { 18.0 });
+
+                if wide {
+                    let (rect, response) = ui.allocate_exact_size(
+                        egui::vec2(ui.available_width(), 66.0),
+                        egui::Sense::click(),
                     );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.add_space(22.0);
-                        if matches!(self.busy, Some(Task::Launch) | Some(Task::Mods)) {
-                            ui.spinner();
-                        } else if self.show_mods {
-                            if ghost_button(ui, "返回").clicked() {
-                                self.close_mods();
+                    ui.painter().rect(
+                        rect,
+                        11,
+                        CARD,
+                        egui::Stroke::new(1.0, if response.hovered() { ACCENT_HI } else { LINE }),
+                        egui::StrokeKind::Inside,
+                    );
+                    let inner = rect.shrink2(egui::vec2(12.0, 9.0));
+                    let mut child = ui.new_child(
+                        egui::UiBuilder::new()
+                            .max_rect(inner)
+                            .layout(egui::Layout::top_down(egui::Align::LEFT)),
+                    );
+                    child.spacing_mut().item_spacing.y = 1.0;
+                    if let Some(row) = &current {
+                        child.horizontal(|ui| {
+                            status_dot(ui, row.health.missing == 0);
+                            ui.add_space(1.0);
+                            ui.label(egui::RichText::new("当前版本").size(8.5).color(MUTED));
+                        });
+                        child.add(
+                            egui::Label::new(egui::RichText::new(&row.label).size(12.0).strong())
+                                .truncate(),
+                        );
+                        child.add(
+                            egui::Label::new(
+                                egui::RichText::new(format!("{} · {}", row.mc, row.loader.name()))
+                                    .size(8.5)
+                                    .color(MUTED),
+                            )
+                            .truncate(),
+                        );
+                    } else {
+                        child.add_space(2.0);
+                        child.label(egui::RichText::new("还没有版本").size(12.0).strong());
+                        child.label(egui::RichText::new("点击安装").size(8.5).color(ACCENT_TEXT));
+                    }
+                    let response = response
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .on_hover_text("打开版本管理");
+                    if response.clicked() {
+                        go = Some(Nav::Versions);
+                    }
+                    ui.add_space(16.0);
+                }
+
+                for nav in Nav::ALL {
+                    let response = sidebar_item(ui, nav, active == nav, wide, enabled);
+                    if response.clicked() {
+                        go = Some(nav);
+                    }
+                    ui.add_space(3.0);
+                }
+
+                // Footer is placed with an explicit spacer: a nested
+                // bottom_up layout can shrink to its content and overlap the
+                // nav list in a side panel.
+                let footer = if wide { 84.0 } else { 62.0 };
+                ui.add_space((ui.available_height() - footer).max(10.0));
+                if busy || login_busy {
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(ui.available_width(), 34.0),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            if wide {
+                                ui.spinner();
+                                ui.add_space(2.0);
+                                ui.label(
+                                    egui::RichText::new(if login_busy {
+                                        "正在登录…"
+                                    } else {
+                                        "任务进行中"
+                                    })
+                                    .size(9.5)
+                                    .color(MUTED),
+                                );
+                            } else {
+                                ui.vertical_centered(|ui| {
+                                    ui.spinner();
+                                });
                             }
-                        } else if self.show_manage {
-                            if ghost_button(ui, "返回").clicked() {
-                                self.show_manage = false;
-                                self.delete_confirm = None;
-                            }
-                        } else if self.show_saves {
-                            if ghost_button(ui, "返回").clicked() {
-                                self.show_saves = false;
-                                self.show_manage = true;
-                            }
-                        } else if self.show_install && !self.rows.is_empty() {
-                            if ghost_button(ui, "返回").clicked() {
-                                self.show_install = false;
-                                self.error = None;
-                            }
-                        } else if self.busy.is_none() {
-                            ui.add_space(4.0);
-                            let label = self
-                                .account
-                                .as_ref()
-                                .map(|account| account.name.clone())
-                                .unwrap_or_else(|| "登录".to_string());
-                            if ghost_button(ui, &label).clicked() {
-                                if self.account.is_some() {
-                                    self.show_account = true;
-                                } else {
-                                    self.start_login();
-                                }
-                            }
-                            ui.add_space(4.0);
-                            if ghost_button(ui, "下载中心").clicked() {
-                                self.open_mods();
-                            }
-                            if !self.show_install {
-                                if !self.rows.is_empty() {
-                                    ui.add_space(4.0);
-                                    if ghost_button(ui, "版本管理").clicked() {
-                                        self.show_manage = true;
-                                        self.delete_confirm = None;
-                                        self.error = None;
+                        },
+                    );
+                } else {
+                    let response = sidebar_account(ui, &account_name, linked, wide);
+                    if response.clicked() {
+                        account_clicked = true;
+                    }
+                }
+                ui.add_space(4.0);
+                ui.vertical_centered(|ui| {
+                    ui.label(
+                        egui::RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
+                            .size(8.0)
+                            .color(MUTED),
+                    );
+                    if wide {
+                        ui.label(
+                            egui::RichText::new(format!("{versions} 个版本"))
+                                .size(8.0)
+                                .color(MUTED),
+                        );
+                    }
+                });
+            });
+
+        let rect = panel.response.rect;
+        ui.painter().line_segment(
+            [rect.right_top(), rect.right_bottom()],
+            egui::Stroke::new(1.0, LINE),
+        );
+
+        if let Some(nav) = go {
+            self.nav_go(nav);
+        }
+        if account_clicked {
+            if self.account.is_some() {
+                self.show_account = true;
+            } else {
+                self.start_login();
+            }
+        }
+    }
+
+    /// 一个版本都没有时的启动台：不急着把安装表单糊到脸上。
+    fn welcome_view(&mut self, ui: &mut egui::Ui) {
+        let width = (ui.available_width() - 48.0).clamp(320.0, 560.0);
+        let pad = ((ui.available_width() - width) / 2.0).max(0.0);
+        let mut install = false;
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.add_space(70.0);
+                ui.horizontal(|ui| {
+                    ui.add_space(pad);
+                    ui.vertical(|ui| {
+                        ui.set_width(width);
+                        ui.horizontal(|ui| {
+                            motion::accent_bar(ui, 36.0);
+                            ui.add_space(11.0);
+                            ui.label(egui::RichText::new("欢迎使用 nailong").size(32.0).strong());
+                        });
+                        ui.add_space(7.0);
+                        ui.label(
+                            egui::RichText::new(
+                                "轻量、快速、原生启动。先装一个版本，启动台就会亮起来。",
+                            )
+                            .size(12.0)
+                            .color(MUTED),
+                        );
+                        ui.add_space(24.0);
+                        egui::Frame::new()
+                            .fill(SURFACE)
+                            .stroke(egui::Stroke::new(1.0, LINE))
+                            .corner_radius(16)
+                            .shadow(motion::card_shadow())
+                            .inner_margin(egui::Margin::symmetric(28, 28))
+                            .show(ui, |ui| {
+                                ui.set_width(width - 56.0);
+                                ui.vertical_centered(|ui| {
+                                    ui.label(
+                                        egui::RichText::new("还没有安装版本").size(18.0).strong(),
+                                    );
+                                    ui.add_space(5.0);
+                                    ui.label(
+                                        egui::RichText::new(
+                                            "原版或 Fabric / NeoForge，装好就能直接开玩",
+                                        )
+                                        .size(10.5)
+                                        .color(MUTED),
+                                    );
+                                    ui.add_space(18.0);
+                                    if primary_wide(ui, "安装第一个版本", true, 210.0) {
+                                        install = true;
                                     }
-                                }
-                                ui.add_space(4.0);
-                                if ghost_button(ui, "+ 安装").clicked() {
-                                    self.open_install();
-                                }
-                            }
-                        }
+                                });
+                            });
+                        ui.add_space(16.0);
+                        ui.horizontal(|ui| {
+                            status_dot(ui, self.java_ok);
+                            ui.label(
+                                egui::RichText::new(if self.java_ok {
+                                    "Java 21 已检测到"
+                                } else {
+                                    "未检测到 Java 21，安装后需要配置"
+                                })
+                                .size(10.0)
+                                .color(if self.java_ok {
+                                    MUTED
+                                } else {
+                                    WARN
+                                }),
+                            );
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if action_link(ui, "打开数据目录").clicked() {
+                                        open_folder(self.root.dir());
+                                    }
+                                    ui.label(
+                                        egui::RichText::new(self.root.dir().display().to_string())
+                                            .size(9.0)
+                                            .color(MUTED),
+                                    );
+                                },
+                            );
+                        });
+                        ui.add_space(28.0);
                     });
                 });
-                let screen = ui.ctx().content_rect();
-                let y = 64.0 - 1.0;
-                motion::gradient_h(
-                    ui.painter(),
-                    egui::Rect::from_min_size(
-                        egui::pos2(screen.left(), y),
-                        egui::vec2(screen.width(), 1.0),
-                    ),
-                    egui::Color32::from_rgba_unmultiplied(245, 196, 81, 55),
-                    egui::Color32::from_rgba_unmultiplied(245, 196, 81, 0),
-                );
             });
+        if install {
+            self.open_install();
+        }
     }
 
     fn main_view(&mut self, ui: &mut egui::Ui) {
@@ -2455,7 +2787,7 @@ impl App {
             .filter(|r| self.is_visible(r))
             .or_else(|| rows.first().cloned())
         else {
-            self.install_view(ui);
+            self.welcome_view(ui);
             return;
         };
         let width = (ui.available_width() - 48.0).clamp(320.0, 1000.0);
@@ -2465,9 +2797,11 @@ impl App {
             604.0
         } else {
             (width - gap - 300.0).max(480.0)
-        };
+        }
+        .min((width - gap - 280.0).max(320.0));
         let right_w = width - left_w - gap;
         let mut open_content = false;
+        let mut open_discover = false;
         let mut open_saves = false;
         let mut open_dir: Option<PathBuf> = None;
         let mut login = false;
@@ -2494,7 +2828,7 @@ impl App {
                                 egui::Layout::top_down(egui::Align::LEFT),
                                 |ui| {
                                     ui.set_width(left_w);
-                                    egui::Frame::new()
+                                    let hero = egui::Frame::new()
                                         .fill(SURFACE)
                                         .stroke(egui::Stroke::new(1.0, LINE))
                                         .corner_radius(14)
@@ -2504,17 +2838,6 @@ impl App {
                                             ui.set_width(left_w - 40.0);
                                             ui.set_min_height(240.0);
                                             motion::hero_rule(ui, 20.0);
-                                            let content = ui.max_rect();
-                                            motion::status_ring(
-                                                ui.painter(),
-                                                egui::pos2(
-                                                    content.right() - 38.0,
-                                                    content.bottom() - 78.0,
-                                                ),
-                                                24.0,
-                                                row.health.missing == 0,
-                                                row.health.missing,
-                                            );
                                             ui.horizontal(|ui| {
                                                 ui.label(
                                                     egui::RichText::new("当前版本")
@@ -2665,14 +2988,27 @@ impl App {
                                                 ui.add_space(10.0);
                                                 ui.add(
                                                     egui::Label::new(
-                                                        egui::RichText::new(err).size(11.0).color(
-                                                            egui::Color32::from_rgb(230, 120, 110),
-                                                        ),
+                                                        egui::RichText::new(err)
+                                                            .size(11.0)
+                                                            .color(DANGER),
                                                     )
                                                     .wrap(),
                                                 );
                                             }
                                         });
+                                    let hero_rect = hero.response.rect;
+                                    let (ring_x, ring_y, ring_r) = if left_w >= 520.0 {
+                                        (hero_rect.right() - 38.0, hero_rect.bottom() - 62.0, 22.0)
+                                    } else {
+                                        (hero_rect.right() - 26.0, hero_rect.bottom() - 54.0, 15.0)
+                                    };
+                                    motion::status_ring(
+                                        ui.painter(),
+                                        egui::pos2(ring_x, ring_y),
+                                        ring_r,
+                                        row.health.missing == 0,
+                                        row.health.missing,
+                                    );
                                 },
                             );
                             ui.add_space(gap);
@@ -2880,8 +3216,8 @@ impl App {
                                                         .color(MUTED),
                                                 );
                                                 ui.add_space(4.0);
-                                                if action_link(ui, "去下载中心").clicked() {
-                                                    open_content = true;
+                                                if action_link(ui, "去发现内容").clicked() {
+                                                    open_discover = true;
                                                 }
                                             } else {
                                                 for (index, (kind, name, size)) in
@@ -3060,7 +3396,7 @@ impl App {
                                                     human_size(bytes)
                                                 ))
                                                 .size(9.0)
-                                                .color(egui::Color32::from_rgb(116, 123, 136)),
+                                                .color(MUTED),
                                             );
                                         });
                                 },
@@ -3113,7 +3449,10 @@ impl App {
             open_folder(&dir);
         }
         if open_content {
-            self.enter_mods(Some(row.clone()));
+            self.open_content(true);
+        }
+        if open_discover {
+            self.open_content(false);
         }
         if open_saves {
             self.open_saves(row.clone());
@@ -3196,135 +3535,26 @@ impl App {
     }
 
     fn mods_header(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            motion::accent_bar(ui, 20.0);
-            ui.add_space(7.0);
-            ui.label(egui::RichText::new("下载中心").size(26.0).strong());
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let go = ui
-                    .add(
-                        egui::Button::new(egui::RichText::new("搜索").size(12.0).color(MUTED))
-                            .fill(PANEL)
-                            .stroke(egui::Stroke::new(1.0, LINE))
-                            .corner_radius(8)
-                            .min_size(egui::vec2(54.0, 30.0)),
-                    )
-                    .clicked();
-                let resp = text_field(ui, &mut self.mods_query, "名称或关键词", 190.0);
-                let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                if go || enter {
-                    if self.mods_query.trim().is_empty() {
-                        self.show_browse();
-                    } else {
-                        self.start_mods_search();
-                    }
-                }
-            });
-        });
-        ui.add_space(12.0);
+        let installed_count = self
+            .mods_installed
+            .iter()
+            .filter(|entry| entry.kind == self.mods_kind)
+            .count();
         let mut wanted_target: Option<Option<Row>> = None;
+        let mut search_go = false;
         ui.horizontal(|ui| {
-            for candidate in [
-                mods::ContentKind::Mod,
-                mods::ContentKind::ResourcePack,
-                mods::ContentKind::Shader,
-            ] {
-                let selected = self.mods_kind == candidate;
-                let (fill, text, stroke) = if selected && !self.mods_show_installed {
-                    (ACCENT, egui::Color32::BLACK, ACCENT)
-                } else if selected {
-                    (SURFACE2, ACCENT, ACCENT)
-                } else {
-                    (CARD, MUTED, LINE)
-                };
-                let button = egui::Button::new(
-                    egui::RichText::new(candidate.label())
-                        .size(13.0)
-                        .color(text),
-                )
-                .fill(fill)
-                .stroke(egui::Stroke::new(1.0, stroke))
-                .corner_radius(9)
-                .min_size(egui::vec2(78.0, 32.0));
-                let tab = ui.add(button);
-                if selected {
-                    let pulse =
-                        ((ui.input(|input| input.time) as f32 * 1.1).sin() * 0.5 + 0.5) * 10.0;
-                    motion::glow(
-                        ui.painter(),
-                        tab.rect,
-                        9,
-                        egui::Color32::from_rgba_unmultiplied(245, 196, 81, (22.0 + pulse) as u8),
-                        14,
-                    );
-                }
-                if tab.clicked() {
-                    let changed = self.mods_kind != candidate;
-                    if !changed {
-                        // 同一个品类再点一次没有副作用。
-                    } else if self.mods_show_installed {
-                        self.mods_kind = candidate;
-                        self.mods_filter.clear();
-                        self.mods_delete_confirm = None;
-                        self.mods_notice = None;
-                        self.mods_error = None;
-                    } else {
-                        self.switch_mods_kind(candidate);
-                        if self.mods_searching {
-                            self.start_mods_search();
-                        }
-                    }
-                }
-            }
-            ui.add_space(6.0);
-            let count = self
-                .mods_installed
-                .iter()
-                .filter(|entry| entry.kind == self.mods_kind)
-                .count();
-            let label = if count == 0 {
-                "已安装".to_string()
-            } else {
-                format!("已安装 {count}")
-            };
-            let selected = self.mods_show_installed;
-            let fill = if selected { ACCENT } else { CARD };
-            let text = if selected {
-                egui::Color32::BLACK
-            } else {
-                MUTED
-            };
-            let installed_tab =
-                egui::Button::new(egui::RichText::new(label).size(13.0).color(text))
-                    .fill(fill)
-                    .stroke(egui::Stroke::new(1.0, if selected { ACCENT } else { LINE }))
-                    .corner_radius(9)
-                    .min_size(egui::vec2(78.0, 32.0));
-            if ui
-                .add(installed_tab)
-                .on_hover_text(if selected {
-                    "再次点击返回浏览"
-                } else {
-                    "管理已安装的内容"
-                })
-                .clicked()
-            {
-                if selected {
-                    self.mods_show_installed = false;
-                    self.mods_filter.clear();
-                    self.mods_delete_confirm = None;
-                    self.show_browse();
-                } else if self.mods_game_dir.is_none() {
-                    self.mods_error = Some("先在右边选一个安装目标，或去版本管理点「内容」".into());
-                } else {
-                    self.mods_show_installed = true;
-                    self.mods_filter.clear();
-                    self.mods_delete_confirm = None;
-                    self.start_mods_scan();
-                }
-            }
+            motion::accent_bar(ui, 22.0);
+            ui.add_space(8.0);
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new("内容").size(26.0).strong());
+                ui.label(
+                    egui::RichText::new("Mod、资源包、光影 · 已安装与发现")
+                        .size(10.0)
+                        .color(MUTED),
+                );
+            });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let rows = self.rows.clone();
+                let rows: Vec<Row> = self.visible_rows().cloned().collect();
                 let label = self
                     .mods_row
                     .as_ref()
@@ -3332,7 +3562,7 @@ impl App {
                     .unwrap_or_else(|| "只浏览".to_string());
                 egui::ComboBox::from_id_salt("mods_target")
                     .selected_text(format!("安装到：{label}"))
-                    .width(230.0)
+                    .width(220.0)
                     .show_ui(ui, |ui| {
                         if ui
                             .selectable_label(self.mods_row.is_none(), "只浏览（不安装）")
@@ -3354,17 +3584,104 @@ impl App {
                             }
                         }
                     });
+                if !self.mods_show_installed {
+                    let go = ui
+                        .add(
+                            egui::Button::new(egui::RichText::new("搜索").size(12.0).color(MUTED))
+                                .fill(PANEL)
+                                .stroke(egui::Stroke::new(1.0, LINE))
+                                .corner_radius(8)
+                                .min_size(egui::vec2(54.0, 30.0)),
+                        )
+                        .clicked();
+                    let response = text_field(ui, &mut self.mods_query, "名称或关键词", 180.0);
+                    let enter =
+                        response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    if go || enter {
+                        search_go = true;
+                    }
+                }
             });
         });
         if let Some(target) = wanted_target {
             self.set_mods_target(target);
         }
-        ui.add_space(8.0);
-        if let Some(_row) = self.mods_row.clone() {
-            // 目标已在上方「安装到」里写清楚，这里不再重复一行说明。
-        } else {
+        if search_go {
+            if self.mods_query.trim().is_empty() {
+                self.show_browse();
+            } else {
+                self.start_mods_search();
+            }
+        }
+
+        ui.add_space(11.0);
+        let mut mode: Option<bool> = None;
+        let mut wanted_kind: Option<mods::ContentKind> = None;
+        ui.horizontal(|ui| {
+            if content_tab(ui, "已安装", installed_count, self.mods_show_installed).clicked() {
+                mode = Some(true);
+            }
+            ui.add_space(4.0);
+            if content_tab(ui, "发现", 0, !self.mods_show_installed).clicked() {
+                mode = Some(false);
+            }
+            ui.add_space(14.0);
+            for candidate in [
+                mods::ContentKind::Mod,
+                mods::ContentKind::ResourcePack,
+                mods::ContentKind::Shader,
+            ] {
+                let selected = self.mods_kind == candidate;
+                let (fill, text, stroke) = if selected {
+                    (SURFACE2, ACCENT_TEXT, ACCENT)
+                } else {
+                    (CARD, MUTED, LINE)
+                };
+                let button = egui::Button::new(
+                    egui::RichText::new(candidate.label())
+                        .size(12.5)
+                        .strong()
+                        .color(text),
+                )
+                .fill(fill)
+                .stroke(egui::Stroke::new(1.0, stroke))
+                .corner_radius(9)
+                .min_size(egui::vec2(74.0, 32.0));
+                let tip = match candidate {
+                    mods::ContentKind::Mod => "模组",
+                    mods::ContentKind::ResourcePack => "材质与资源包",
+                    mods::ContentKind::Shader => "光影",
+                };
+                if ui.add(button).on_hover_text(tip).clicked() && !selected {
+                    wanted_kind = Some(candidate);
+                }
+            }
+        });
+        if let Some(installed) = mode {
+            self.switch_content_mode(installed);
+        }
+        if let Some(kind) = wanted_kind {
+            self.mods_kind = kind;
+            self.mods_category = None;
+            self.mods_source_filter = None;
+            self.mods_shelf = None;
+            self.mods_searching = false;
+            self.mods_filter.clear();
+            self.mods_delete_confirm = None;
+            self.mods_notice = None;
+            self.mods_error = None;
+            self.clear_mods_selection();
+            if self.mods_show_installed {
+                self.start_mods_scan();
+            } else {
+                self.start_browse();
+            }
+        }
+
+        if !self.mods_show_installed && self.mods_row.is_none() {
             let mut wanted_mc: Option<Option<String>> = None;
             let mut wanted_loader: Option<Option<mods::Loader>> = None;
+            ui.add_space(8.0);
             ui.horizontal(|ui| {
                 let mc_label = self
                     .mods_mc
@@ -3431,7 +3748,7 @@ impl App {
                         });
                 }
                 ui.label(
-                    egui::RichText::new("只浏览：不写入磁盘；点卡片可以看文件和前置")
+                    egui::RichText::new("选一个目标版本可以一键安装到它；只浏览不会写入磁盘")
                         .size(10.0)
                         .color(MUTED),
                 );
@@ -3451,6 +3768,28 @@ impl App {
                 self.reset_browse_selection();
                 self.start_browse();
             }
+        }
+    }
+
+    /// 发现 / 已安装是同一个内容库的两种视图。
+    fn switch_content_mode(&mut self, installed: bool) {
+        if self.mods_show_installed == installed {
+            return;
+        }
+        self.mods_show_installed = installed;
+        self.mods_filter.clear();
+        self.mods_delete_confirm = None;
+        self.mods_notice = None;
+        self.mods_error = None;
+        self.clear_mods_selection();
+        if installed {
+            if self.mods_game_dir.is_some() {
+                self.start_mods_scan();
+            } else {
+                self.mods_error = Some("先在上方选一个安装目标".into());
+            }
+        } else {
+            self.show_browse();
         }
     }
 
@@ -3483,12 +3822,19 @@ impl App {
         self.mods_searching = false;
         self.mods_error = None;
         self.mods_notice = None;
+        self.mods_scan_rx = None;
+        self.mods_installed_loading = false;
+        self.mods_updates_loading = false;
         self.refresh_installed_keys();
         self.mods_installed.clear();
-        if self.mods_show_installed && self.mods_game_dir.is_some() {
-            self.start_mods_scan();
+        if self.mods_show_installed {
+            if self.mods_game_dir.is_some() {
+                self.start_mods_scan();
+            }
+        } else {
+            self.fetch_cf_categories(self.mods_kind);
+            self.start_browse();
         }
-        self.start_browse();
     }
 
     fn browse_view(&mut self, ui: &mut egui::Ui) {
@@ -3780,6 +4126,8 @@ impl App {
         width: f32,
         order: usize,
     ) -> Option<mods::Project> {
+        #[cfg(not(debug_assertions))]
+        let _ = order;
         let key = project_key(project);
         let summary_chars = ((width * 0.2) as usize).clamp(40, 62);
         let installed = self.mods_installed_keys.contains(&key);
@@ -3815,14 +4163,19 @@ impl App {
                 .animate_bool_with_time(response.id.with("card_hover"), hovered, 0.16);
         let lift = hover_t * 3.0;
         let paint = rect.translate(egui::vec2(0.0, -lift));
-        let fill = motion::mix(CARD, egui::Color32::from_rgb(33, 38, 47), hover_t);
+        let fill = motion::mix(CARD, egui::Color32::from_rgb(255, 245, 228), hover_t);
         let border = motion::mix(LINE, ACCENT, hover_t);
         ui.painter().add(
             egui::epaint::Shadow {
                 offset: [0, 10],
                 blur: 26,
                 spread: 0,
-                color: egui::Color32::from_black_alpha((60.0 + 50.0 * hover_t) as u8),
+                color: egui::Color32::from_rgba_unmultiplied(
+                    120,
+                    90,
+                    55,
+                    (30.0 + 28.0 * hover_t) as u8,
+                ),
             }
             .as_shape(paint, 12),
         );
@@ -3855,7 +4208,7 @@ impl App {
                 egui::pos2(paint.right() - 10.0, paint.top() + 1.6),
             ),
             1,
-            egui::Color32::from_white_alpha(14),
+            egui::Color32::from_rgba_unmultiplied(240, 224, 203, 200),
         );
 
         let inner = paint.shrink2(egui::vec2(12.0, 10.0));
@@ -3886,7 +4239,7 @@ impl App {
                     icon_rect,
                     9.0,
                     motion::mix(base, egui::Color32::WHITE, 0.14),
-                    motion::mix(base, egui::Color32::BLACK, 0.32),
+                    motion::mix(base, INK, 0.32),
                 );
                 let letter = project
                     .name
@@ -3925,23 +4278,15 @@ impl App {
                     .size(9.5)
                     .color(MUTED),
             );
-            ui.label(
-                egui::RichText::new("·")
-                    .size(9.5)
-                    .color(egui::Color32::from_rgb(96, 102, 114)),
-            );
+            ui.label(egui::RichText::new("·").size(9.5).color(MUTED));
             ui.label(
                 egui::RichText::new(project.source.label())
                     .size(9.5)
-                    .color(egui::Color32::from_rgb(120, 127, 140)),
+                    .color(MUTED),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if installed {
-                    ui.label(
-                        egui::RichText::new("已装")
-                            .size(10.0)
-                            .color(egui::Color32::from_rgb(120, 190, 140)),
-                    );
+                    ui.label(egui::RichText::new("已装").size(10.0).color(OK));
                 } else if quick {
                     ui.spinner();
                 } else if ui
@@ -3950,8 +4295,11 @@ impl App {
                         egui::Button::new(
                             egui::RichText::new("+").size(15.0).strong().color(ACCENT),
                         )
-                        .fill(egui::Color32::from_rgb(40, 36, 25))
-                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(92, 79, 44)))
+                        .fill(egui::Color32::from_rgb(255, 244, 222))
+                        .stroke(egui::Stroke::new(
+                            1.0,
+                            egui::Color32::from_rgb(232, 178, 92),
+                        ))
                         .corner_radius(11)
                         .min_size(egui::vec2(22.0, 22.0)),
                     )
@@ -4005,7 +4353,7 @@ impl App {
                 back = true;
             }
             ui.add_space(8.0);
-            ui.label(egui::RichText::new("下载中心").size(10.5).color(MUTED));
+            ui.label(egui::RichText::new("内容").size(10.5).color(MUTED));
             ui.label(egui::RichText::new("/").size(10.5).color(MUTED));
             ui.label(
                 egui::RichText::new(short_text(&project.name, 26))
@@ -4059,7 +4407,7 @@ impl App {
                                     rect,
                                     12.0,
                                     motion::mix(base, egui::Color32::WHITE, 0.14),
-                                    motion::mix(base, egui::Color32::BLACK, 0.32),
+                                    motion::mix(base, INK, 0.32),
                                 );
                                 let letter = project
                                     .name
@@ -4084,7 +4432,7 @@ impl App {
                                     if installed {
                                         ui.add_space(3.0);
                                         egui::Frame::new()
-                                            .fill(egui::Color32::from_rgb(31, 47, 38))
+                                            .fill(egui::Color32::from_rgb(234, 246, 238))
                                             .corner_radius(6)
                                             .inner_margin(egui::Margin::symmetric(7, 2))
                                             .show(ui, |ui| {
@@ -4112,9 +4460,7 @@ impl App {
                         ui.add_space(11.0);
                         ui.add(
                             egui::Label::new(
-                                egui::RichText::new(&project.summary)
-                                    .size(12.0)
-                                    .color(egui::Color32::from_rgb(198, 203, 213)),
+                                egui::RichText::new(&project.summary).size(12.0).color(INK),
                             )
                             .wrap(),
                         );
@@ -4390,7 +4736,7 @@ impl App {
                                 ui.horizontal_wrapped(|ui| {
                                     ui.spacing_mut().item_spacing = egui::vec2(5.0, 5.0);
                                     for game in version.game_versions.iter().take(6) {
-                                        tag(ui, game, egui::Color32::from_rgb(190, 196, 207));
+                                        tag(ui, game, INK);
                                     }
                                     if version.game_versions.len() > 6 {
                                         ui.label(
@@ -4410,11 +4756,7 @@ impl App {
                                 ui.horizontal_wrapped(|ui| {
                                     ui.spacing_mut().item_spacing = egui::vec2(5.0, 5.0);
                                     for loader in version.loaders.iter().take(4) {
-                                        tag(
-                                            ui,
-                                            &loader_label(loader),
-                                            egui::Color32::from_rgb(190, 196, 207),
-                                        );
+                                        tag(ui, &loader_label(loader), INK);
                                     }
                                 });
                             });
@@ -4474,16 +4816,16 @@ impl App {
                         } else {
                             for (index, choice) in choices.iter().enumerate() {
                                 let (label, color, fill) = match choice.dependency.kind {
-                                    mods::DependencyKind::Required => {
-                                        ("必需", ACCENT, egui::Color32::from_rgb(48, 42, 26))
-                                    }
-                                    mods::DependencyKind::Optional => {
-                                        ("可选", MUTED, egui::Color32::from_rgb(36, 41, 51))
-                                    }
+                                    mods::DependencyKind::Required => (
+                                        "必需",
+                                        ACCENT_TEXT,
+                                        egui::Color32::from_rgb(255, 243, 214),
+                                    ),
+                                    mods::DependencyKind::Optional => ("可选", MUTED, SURFACE2),
                                     mods::DependencyKind::Incompatible => {
-                                        ("不兼容", DANGER, egui::Color32::from_rgb(48, 32, 32))
+                                        ("不兼容", DANGER, egui::Color32::from_rgb(255, 226, 220))
                                     }
-                                    _ => ("内置", MUTED, egui::Color32::from_rgb(36, 41, 51)),
+                                    _ => ("内置", MUTED, SURFACE2),
                                 };
                                 ui.horizontal(|ui| {
                                     tag_fill(ui, label, color, fill);
@@ -4870,6 +5212,8 @@ impl App {
         let mut restore: Option<(String, String)> = None;
         let mut delete_world: Option<String> = None;
         let mut delete_snapshot: Option<(String, String)> = None;
+        let mut wanted_row: Option<Row> = None;
+        let version_rows: Vec<Row> = self.visible_rows().cloned().collect();
 
         egui::Panel::top("saves_header")
             .frame(
@@ -4878,23 +5222,39 @@ impl App {
                     .inner_margin(egui::Margin::symmetric(28, 14)),
             )
             .show(ui, |ui| {
-                let wide = ui.available_width() >= 1000.0;
+                let wide = ui.available_width() >= 840.0;
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
                         ui.horizontal(|ui| {
-                            motion::accent_bar(ui, 20.0);
+                            motion::accent_bar(ui, 22.0);
                             ui.add_space(7.0);
-                            ui.label(
-                                egui::RichText::new(format!("存档 · {}", row.label))
-                                    .size(22.0)
-                                    .strong(),
-                            );
+                            ui.label(egui::RichText::new("存档").size(26.0).strong());
+                            ui.add_space(12.0);
+                            egui::ComboBox::from_id_salt("saves_target")
+                                .selected_text(&row.label)
+                                .width(196.0)
+                                .show_ui(ui, |ui| {
+                                    for item in &version_rows {
+                                        if ui
+                                            .selectable_label(item.id == row.id, &item.label)
+                                            .clicked()
+                                        {
+                                            wanted_row = Some(item.clone());
+                                        }
+                                    }
+                                });
                         });
                         ui.label(
                             egui::RichText::new(if shared {
-                                "该版本未隔离，存档在共享目录"
+                                format!(
+                                    "{} 个世界 · 该版本未隔离，存档在共享目录",
+                                    self.saves_worlds.len()
+                                )
                             } else {
-                                "快照按内容分块去重，第二次只写改动块"
+                                format!(
+                                    "{} 个世界 · 快照分块去重，第二次只写改动块",
+                                    self.saves_worlds.len()
+                                )
                             })
                             .size(10.0)
                             .color(MUTED),
@@ -4993,6 +5353,42 @@ impl App {
                     .inner_margin(egui::Margin::symmetric(24, 20)),
             )
             .show(ui, |ui| {
+                if self.saves_worlds.is_empty() {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(54.0);
+                        egui::Frame::new()
+                            .fill(SURFACE)
+                            .stroke(egui::Stroke::new(1.0, LINE))
+                            .corner_radius(16)
+                            .shadow(motion::card_shadow())
+                            .inner_margin(egui::Margin::symmetric(30, 28))
+                            .show(ui, |ui| {
+                                ui.set_width(360.0);
+                                ui.label(
+                                    egui::RichText::new("这个版本还没有存档")
+                                        .size(17.0)
+                                        .strong(),
+                                );
+                                ui.add_space(6.0);
+                                ui.label(
+                                    egui::RichText::new(
+                                        "进游戏创建一个世界，回来刷新就能做快照和回滚。",
+                                    )
+                                    .size(10.5)
+                                    .color(MUTED),
+                                );
+                                ui.add_space(16.0);
+                                if primary_wide(ui, "打开游戏目录", true, 180.0) {
+                                    open_dir = Some(game_dir.clone());
+                                }
+                                ui.add_space(4.0);
+                                if action_link(ui, "刷新").clicked() {
+                                    reload = true;
+                                }
+                            });
+                    });
+                    return;
+                }
                 let Some(world) = self.saves_selected.clone() else {
                     ui.vertical_centered(|ui| {
                         ui.add_space(90.0);
@@ -5027,8 +5423,13 @@ impl App {
                             }
                             if ui
                                 .add(
-                                    egui::Button::new("确认删除世界")
-                                        .fill(egui::Color32::from_rgb(120, 48, 48)),
+                                    egui::Button::new(
+                                        egui::RichText::new("确认删除世界")
+                                            .size(11.0)
+                                            .color(DANGER),
+                                    )
+                                    .fill(egui::Color32::from_rgb(255, 226, 220))
+                                    .stroke(egui::Stroke::new(1.0, DANGER)),
                                 )
                                 .clicked()
                             {
@@ -5169,6 +5570,10 @@ impl App {
                 Err(e) => self.saves_error = Some(e.to_string()),
             }
         }
+        if let Some(row) = wanted_row {
+            self.selected = Some(row.id.clone());
+            self.open_saves(row);
+        }
     }
 
     fn installed_view(&mut self, ui: &mut egui::Ui) {
@@ -5187,15 +5592,14 @@ impl App {
                         ui.add_space(5.0);
                         ui.label(
                             egui::RichText::new(
-                                "内容管理需要知道要管理哪个版本。在上方「安装到」里选一个，或者回版本管理点「内容」。",
+                                "内容需要一个目标版本。在上方「安装到」里选一个，或去「版本」页创建隔离版本。",
                             )
                             .size(11.0)
                             .color(MUTED),
                         );
                         ui.add_space(14.0);
-                        if primary_wide(ui, "去版本管理", true, 168.0) {
-                            self.show_mods = false;
-                            self.show_manage = true;
+                        if primary_wide(ui, "去版本页", true, 168.0) {
+                            self.nav_go(Nav::Versions);
                         }
                     });
                 });
@@ -5335,14 +5739,14 @@ impl App {
                         ui.add_space(5.0);
                         ui.label(
                             egui::RichText::new(format!(
-                                "切回浏览挑一个，或者把 {} 文件拖进窗口。",
+                                "去「发现」挑一个，或者把 {} 文件拖进窗口。",
                                 content_ext(kind)
                             ))
                             .size(11.0)
                             .color(MUTED),
                         );
                         ui.add_space(14.0);
-                        if primary_wide(ui, &format!("浏览 {}", kind.label()), true, 168.0) {
+                        if primary_wide(ui, &format!("去发现 {}", kind.label()), true, 168.0) {
                             go_browse = true;
                         }
                         ui.add_space(3.0);
@@ -5355,8 +5759,11 @@ impl App {
             if !updates.is_empty() {
                 ui.add_space(12.0);
                 egui::Frame::new()
-                    .fill(egui::Color32::from_rgb(38, 34, 23))
-                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(88, 74, 40)))
+                    .fill(egui::Color32::from_rgb(255, 244, 214))
+                    .stroke(egui::Stroke::new(
+                        1.0,
+                        egui::Color32::from_rgb(232, 178, 92),
+                    ))
                     .corner_radius(12)
                     .inner_margin(egui::Margin::symmetric(14, 10))
                     .show(ui, |ui| {
@@ -5544,8 +5951,37 @@ impl App {
         }
     }
 
+    fn version_actions(&mut self, ui: &mut egui::Ui, row: &Row, open_dir: &mut Option<PathBuf>) {
+        if motion::primary_sized(ui, "启动", self.busy.is_none(), 92.0, 34.0, 13.0) {
+            self.selected = Some(row.id.clone());
+            self.start_launch();
+        }
+        ui.add_space(6.0);
+        if ui
+            .add(
+                egui::Button::new("打开目录")
+                    .fill(PANEL)
+                    .stroke(egui::Stroke::new(1.0, LINE))
+                    .corner_radius(9)
+                    .min_size(egui::vec2(78.0, 34.0)),
+            )
+            .clicked()
+        {
+            *open_dir = Some(
+                row.game_dir
+                    .clone()
+                    .unwrap_or_else(|| self.root.version_dir(&row.profile)),
+            );
+        }
+    }
+
     fn manage_view(&mut self, ui: &mut egui::Ui) {
-        let rows = self.rows.clone();
+        let rows: Vec<Row> = self
+            .rows
+            .iter()
+            .filter(|row| self.show_base || !row.hidden)
+            .cloned()
+            .collect();
         if self.selected.is_none()
             && let Some(first) = rows.first()
         {
@@ -5554,8 +5990,6 @@ impl App {
         let selected = self.selected_row();
         let mut chosen: Option<Row> = None;
         let mut go_install = false;
-        let mut open_content: Option<Row> = None;
-        let mut open_saves: Option<Row> = None;
         let mut delete_target: Option<Row> = None;
         let mut open_dir: Option<PathBuf> = None;
 
@@ -5597,6 +6031,9 @@ impl App {
                 let mut show_base = self.show_base;
                 if ui.checkbox(&mut show_base, "显示基础版本").changed() {
                     self.show_base = show_base;
+                    if !show_base {
+                        self.ensure_visible_selection();
+                    }
                 }
                 ui.add_space(8.0);
                 egui::ScrollArea::vertical()
@@ -5648,7 +6085,7 @@ impl App {
                                     egui::RichText::new("安装新版本")
                                         .size(13.0)
                                         .strong()
-                                        .color(egui::Color32::BLACK),
+                                        .color(INK),
                                 )
                                 .fill(ACCENT)
                                 .corner_radius(10)
@@ -5662,83 +6099,81 @@ impl App {
                     return;
                 };
 
+                let compact = ui.available_width() < 800.0;
                 ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        ui.horizontal(|ui| {
-                            motion::accent_bar(ui, 21.0);
-                            ui.add_space(7.0);
-                            ui.label(egui::RichText::new(&row.label).size(24.0).strong());
-                        });
-                        ui.add_space(3.0);
-                        ui.horizontal(|ui| {
-                            status_dot(ui, row.health.missing == 0);
-                            ui.label(
-                                egui::RichText::new(format!("{} · {}", row.mc, row.loader.name()))
+                    let title_w = if compact {
+                        ui.available_width()
+                    } else {
+                        (ui.available_width() - 196.0).max(240.0)
+                    };
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(title_w, 44.0),
+                        egui::Layout::top_down(egui::Align::LEFT),
+                        |ui| {
+                            ui.horizontal(|ui| {
+                                motion::accent_bar(ui, 21.0);
+                                ui.add_space(7.0);
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(&row.label).size(24.0).strong(),
+                                    )
+                                    .truncate(),
+                                );
+                            });
+                            ui.add_space(3.0);
+                            ui.horizontal(|ui| {
+                                status_dot(ui, row.health.missing == 0);
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "{} · {}",
+                                        row.mc,
+                                        row.loader.name()
+                                    ))
                                     .size(11.0)
                                     .color(MUTED),
-                            );
-                            ui.label(egui::RichText::new("·").size(11.0).color(MUTED));
-                            ui.label(
-                                egui::RichText::new(if row.health.missing == 0 {
-                                    "安装完整".to_string()
-                                } else {
-                                    format!("缺 {} 个文件", row.health.missing)
-                                })
-                                .size(11.0)
-                                .color(if row.health.missing == 0 { OK } else { WARN }),
-                            );
-                            if row.health.missing > 0
-                                && ui
-                                    .add(
-                                        egui::Button::new(egui::RichText::new("补全").size(10.0))
+                                );
+                                ui.label(egui::RichText::new("·").size(11.0).color(MUTED));
+                                ui.label(
+                                    egui::RichText::new(if row.health.missing == 0 {
+                                        "安装完整".to_string()
+                                    } else {
+                                        format!("缺 {} 个文件", row.health.missing)
+                                    })
+                                    .size(11.0)
+                                    .color(if row.health.missing == 0 { OK } else { WARN }),
+                                );
+                                if row.health.missing > 0
+                                    && ui
+                                        .add(
+                                            egui::Button::new(
+                                                egui::RichText::new("补全").size(10.0),
+                                            )
                                             .fill(PANEL)
                                             .stroke(egui::Stroke::new(1.0, LINE))
                                             .corner_radius(6)
                                             .min_size(egui::vec2(40.0, 20.0)),
-                                    )
-                                    .clicked()
-                            {
-                                self.selected = Some(row.id.clone());
-                                self.show_manage = false;
-                                self.start_repair(row.clone());
-                            }
+                                        )
+                                        .clicked()
+                                {
+                                    self.selected = Some(row.id.clone());
+                                    self.show_manage = false;
+                                    self.start_repair(row.clone());
+                                }
+                            });
+                        },
+                    );
+                    if !compact {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            self.version_actions(ui, &row, &mut open_dir);
                         });
-                    });
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if motion::primary_sized(ui, "启动", self.busy.is_none(), 92.0, 34.0, 13.0)
-                        {
-                            self.selected = Some(row.id.clone());
-                            self.show_manage = false;
-                            self.start_launch();
-                        }
-                        ui.add_space(6.0);
-                        if ui
-                            .add(
-                                egui::Button::new("存档")
-                                    .fill(PANEL)
-                                    .stroke(egui::Stroke::new(1.0, LINE))
-                                    .corner_radius(9)
-                                    .min_size(egui::vec2(62.0, 34.0)),
-                            )
-                            .clicked()
-                        {
-                            open_saves = Some(row.clone());
-                        }
-                        ui.add_space(6.0);
-                        if ui
-                            .add(
-                                egui::Button::new("内容")
-                                    .fill(PANEL)
-                                    .stroke(egui::Stroke::new(1.0, LINE))
-                                    .corner_radius(9)
-                                    .min_size(egui::vec2(62.0, 34.0)),
-                            )
-                            .clicked()
-                        {
-                            open_content = Some(row.clone());
-                        }
-                    });
+                    }
                 });
+                if compact {
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        self.version_actions(ui, &row, &mut open_dir);
+                    });
+                }
 
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
@@ -5846,110 +6281,32 @@ impl App {
                                 );
                             });
 
-                        ui.add_space(18.0);
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                egui::RichText::new("最近内容")
-                                    .size(12.0)
-                                    .strong()
-                                    .color(MUTED),
-                            );
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    if ui
-                                        .add(
-                                            egui::Button::new(
-                                                egui::RichText::new("全部").size(11.0),
-                                            )
-                                            .fill(PANEL)
-                                            .stroke(egui::Stroke::new(1.0, LINE))
-                                            .corner_radius(7)
-                                            .min_size(egui::vec2(52.0, 24.0)),
+                        ui.add_space(20.0);
+                        egui::Frame::new()
+                            .fill(SURFACE2)
+                            .stroke(egui::Stroke::new(1.0, LINE))
+                            .corner_radius(12)
+                            .inner_margin(egui::Margin::symmetric(16, 12))
+                            .show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        egui::RichText::new("内容与存档")
+                                            .size(11.5)
+                                            .strong(),
+                                    );
+                                    ui.add_space(8.0);
+                                    ui.label(
+                                        egui::RichText::new(
+                                            "在左侧「内容」「存档」里按版本管理，这里只负责启动与维护",
                                         )
-                                        .clicked()
-                                    {
-                                        open_content = Some(row.clone());
-                                    }
-                                },
-                            );
-                        });
-                        ui.add_space(8.0);
-                        let preview = self.content_preview(&row, 6);
-                        if preview.is_empty() {
-                            egui::Frame::new()
-                                .fill(SURFACE)
-                                .stroke(egui::Stroke::new(1.0, LINE))
-                                .corner_radius(12)
-                                .inner_margin(egui::Margin::symmetric(16, 14))
-                                .show(ui, |ui| {
-                                    ui.horizontal(|ui| {
-                                        ui.label(
-                                            egui::RichText::new("这个版本还没有安装内容")
-                                                .size(11.5)
-                                                .color(MUTED),
-                                        );
-                                        ui.with_layout(
-                                            egui::Layout::right_to_left(egui::Align::Center),
-                                            |ui| {
-                                                if ui
-                                                    .add(
-                                                        egui::Button::new("去下载")
-                                                            .fill(PANEL)
-                                                            .stroke(egui::Stroke::new(1.0, LINE))
-                                                            .corner_radius(7)
-                                                            .min_size(egui::vec2(64.0, 26.0)),
-                                                    )
-                                                    .clicked()
-                                                {
-                                                    open_content = Some(row.clone());
-                                                }
-                                            },
-                                        );
-                                    });
+                                        .size(10.0)
+                                        .color(MUTED),
+                                    );
                                 });
-                        } else {
-                            egui::Frame::new()
-                                .fill(SURFACE)
-                                .stroke(egui::Stroke::new(1.0, LINE))
-                                .corner_radius(12)
-                                .inner_margin(egui::Margin::symmetric(16, 10))
-                                .show(ui, |ui| {
-                                    for (index, (kind, name, size)) in preview.iter().enumerate() {
-                                        if index > 0 {
-                                            ui.add_space(6.0);
-                                            ui.separator();
-                                            ui.add_space(6.0);
-                                        }
-                                        ui.horizontal(|ui| {
-                                            ui.allocate_ui_with_layout(
-                                                egui::vec2(42.0, 16.0),
-                                                egui::Layout::left_to_right(egui::Align::Center),
-                                                |ui| {
-                                                    ui.label(
-                                                        egui::RichText::new(kind)
-                                                            .size(9.5)
-                                                            .color(ACCENT),
-                                                    );
-                                                },
-                                            );
-                                            ui.label(egui::RichText::new(name).size(11.5));
-                                            ui.with_layout(
-                                                egui::Layout::right_to_left(egui::Align::Center),
-                                                |ui| {
-                                                    ui.label(
-                                                        egui::RichText::new(human_size(*size))
-                                                            .size(10.0)
-                                                            .color(MUTED),
-                                                    );
-                                                },
-                                            );
-                                        });
-                                    }
-                                });
-                        }
+                            });
 
-                        ui.add_space(8.0);
+                        ui.add_space(10.0);
                         ui.horizontal(|ui| {
                             if self.delete_confirm.as_deref() == Some(row.id.as_str()) {
                                 ui.label(
@@ -5962,8 +6319,13 @@ impl App {
                                 }
                                 if ui
                                     .add(
-                                        egui::Button::new("确认删除")
-                                            .fill(egui::Color32::from_rgb(120, 48, 48)),
+                                        egui::Button::new(
+                                            egui::RichText::new("确认删除")
+                                                .size(11.0)
+                                                .color(DANGER),
+                                        )
+                                        .fill(egui::Color32::from_rgb(255, 226, 220))
+                                        .stroke(egui::Stroke::new(1.0, DANGER)),
                                     )
                                     .clicked()
                                 {
@@ -5974,10 +6336,12 @@ impl App {
                                     egui::Button::new(
                                         egui::RichText::new("删除这个版本")
                                             .size(10.5)
-                                            .color(egui::Color32::from_rgb(196, 120, 120)),
+                                            .color(DANGER),
                                     )
-                                    .fill(egui::Color32::TRANSPARENT)
-                                    .stroke(egui::Stroke::NONE),
+                                    .fill(SURFACE)
+                                    .stroke(egui::Stroke::new(1.0, LINE))
+                                    .corner_radius(8)
+                                    .min_size(egui::vec2(104.0, 30.0)),
                                 )
                                 .clicked()
                             {
@@ -5993,12 +6357,6 @@ impl App {
         }
         if let Some(dir) = open_dir {
             open_folder(&dir);
-        }
-        if let Some(row) = open_content {
-            self.enter_mods(Some(row));
-        }
-        if let Some(row) = open_saves {
-            self.open_saves(row);
         }
         if let Some(row) = delete_target {
             self.delete_row(&row);
@@ -6079,6 +6437,7 @@ impl App {
         let mut nv = self.install_neoforge.clone();
         let mut gv = self.install_forge.clone();
         let mut go = false;
+        let mut back = false;
         let mut choose_pack = false;
 
         egui::ScrollArea::vertical()
@@ -6089,6 +6448,15 @@ impl App {
                     ui.add_space(pad);
                     ui.vertical(|ui| {
                         ui.set_width(width);
+                        let back_label = if self.rows.is_empty() {
+                            "‹ 启动台"
+                        } else {
+                            "‹ 版本"
+                        };
+                        if ghost_button(ui, back_label).clicked() {
+                            back = true;
+                        }
+                        ui.add_space(12.0);
                         ui.horizontal(|ui| {
                             motion::accent_bar(ui, 23.0);
                             ui.add_space(8.0);
@@ -6302,24 +6670,14 @@ impl App {
                                                 && available(&catalog, kind, &mc)
                                                 && (kind == LoaderKind::Vanilla
                                                     || !version.is_empty());
-                                            if ui
-                                                .add_enabled(
-                                                    can_install,
-                                                    egui::Button::new(
-                                                        egui::RichText::new("安装")
-                                                            .size(14.0)
-                                                            .strong()
-                                                            .color(egui::Color32::BLACK),
-                                                    )
-                                                    .fill(ACCENT)
-                                                    .corner_radius(10)
-                                                    .min_size(egui::vec2(
-                                                        ui.available_width(),
-                                                        40.0,
-                                                    )),
-                                                )
-                                                .clicked()
-                                            {
+                                            if motion::primary_sized(
+                                                ui,
+                                                "安装",
+                                                can_install,
+                                                ui.available_width(),
+                                                40.0,
+                                                14.0,
+                                            ) {
                                                 go = true;
                                             }
                                         });
@@ -6411,6 +6769,17 @@ impl App {
             self.install_mc = mc.clone();
             self.start_install_worker(mc, kind, version);
         }
+        if back {
+            self.show_install = false;
+            self.repair_target = None;
+            self.error = None;
+            if self.rows.is_empty() {
+                self.show_manage = false;
+            } else {
+                self.show_manage = true;
+                self.ensure_visible_selection();
+            }
+        }
         if choose_pack && let Some(path) = pick_modpack() {
             self.start_modpack(path);
         }
@@ -6457,7 +6826,7 @@ impl App {
                                         egui::RichText::new("继续安装")
                                             .size(13.0)
                                             .strong()
-                                            .color(egui::Color32::BLACK),
+                                            .color(INK),
                                     )
                                     .fill(ACCENT)
                                     .corner_radius(10)
@@ -6488,6 +6857,8 @@ impl App {
                                 self.show_install = false;
                                 self.repair_target = None;
                                 self.error = None;
+                                self.show_manage = !self.rows.is_empty();
+                                self.ensure_visible_selection();
                             }
                         });
                     });
@@ -6600,7 +6971,7 @@ impl App {
                                             egui::Button::new(
                                                 egui::RichText::new("取消安装")
                                                     .size(11.5)
-                                                    .color(egui::Color32::from_rgb(214, 140, 140)),
+                                                    .color(DANGER),
                                             )
                                             .fill(PANEL)
                                             .stroke(egui::Stroke::new(1.0, LINE))
@@ -6669,6 +7040,7 @@ impl eframe::App for App {
             || self.login_busy
             || self.saves_rx.is_some()
             || self.mods_rx.is_some()
+            || self.mods_scan_rx.is_some()
             || self.mods_browse_loading
             || !self.mods_icons_pending.is_empty()
         {
@@ -6694,7 +7066,7 @@ impl eframe::App for App {
         if std::env::var_os("NAILONG_DEBUG_HOVER_CYCLE").is_some() {
             ui.ctx().request_repaint_after(Duration::from_millis(33));
         }
-        self.top_bar(ui);
+        self.sidebar(ui);
         egui::CentralPanel::default_margins().show(ui, |ui| {
             motion::paint_ambient(ui, now);
             ui.add_space((1.0 - eased) * 10.0);
@@ -6851,10 +7223,34 @@ fn mc_key(v: &str) -> Vec<u64> {
         .collect()
 }
 
+/// 内容页的「已安装 / 发现」主模式：橙色底、深色字，一眼能看出当前在哪。
+fn content_tab(ui: &mut egui::Ui, label: &str, count: usize, active: bool) -> egui::Response {
+    let text = if count > 0 {
+        format!("{label}  {count}")
+    } else {
+        label.to_string()
+    };
+    ui.add(
+        egui::Button::new(
+            egui::RichText::new(text)
+                .size(12.5)
+                .strong()
+                .color(if active { INK } else { MUTED }),
+        )
+        .fill(if active { ACCENT } else { CARD })
+        .stroke(egui::Stroke::new(
+            1.0,
+            if active { ACCENT_LO } else { LINE },
+        ))
+        .corner_radius(9)
+        .min_size(egui::vec2(if count > 0 { 104.0 } else { 78.0 }, 32.0)),
+    )
+}
+
 /// 品类胶囊 / 已安装切换用的小按钮。
 fn chip(ui: &mut egui::Ui, text: &str, selected: bool) -> egui::Response {
     let (fill, color, border) = if selected {
-        (egui::Color32::from_rgb(58, 52, 34), ACCENT, ACCENT)
+        (egui::Color32::from_rgb(255, 241, 214), ACCENT, ACCENT)
     } else {
         (CARD, MUTED, LINE)
     };
@@ -6936,11 +7332,11 @@ fn loader_tile(
         egui::StrokeKind::Inside,
     );
     let title_color = if !enabled {
-        egui::Color32::from_rgb(96, 102, 114)
+        MUTED
     } else if selected {
         ACCENT
     } else {
-        egui::Color32::from_rgb(226, 230, 238)
+        INK
     };
     let sub = if enabled && !subtitle.is_empty() {
         subtitle.to_string()
@@ -6968,7 +7364,7 @@ fn loader_tile(
             ui.painter(),
             rect,
             10,
-            egui::Color32::from_rgba_unmultiplied(245, 196, 81, 32),
+            egui::Color32::from_rgba_unmultiplied(245, 158, 11, 40),
             14,
         );
     }
@@ -7003,14 +7399,13 @@ fn avatar_sized(ui: &mut egui::Ui, name: &str, size: f32) {
     ui.painter().circle_filled(
         center,
         size / 2.0 + 3.0,
-        egui::Color32::from_rgba_unmultiplied(245, 196, 81, 14),
+        egui::Color32::from_rgba_unmultiplied(245, 158, 11, 18),
     );
-    ui.painter()
-        .circle_filled(center, size / 2.0, egui::Color32::from_rgb(52, 57, 69));
+    ui.painter().circle_filled(center, size / 2.0, SURFACE2);
     ui.painter().circle_stroke(
         center,
         size / 2.0 - 0.5,
-        egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(245, 196, 81, 70)),
+        egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(245, 158, 11, 80)),
     );
     let letter = name
         .chars()
@@ -7194,20 +7589,205 @@ fn logo_mark(ui: &mut egui::Ui) {
         egui::Color32::from_rgba_unmultiplied(245, 196, 81, (26.0 + 20.0 * pulse) as u8),
         16,
     );
-    motion::gradient_rrect(
-        ui.painter(),
-        rect,
-        8.0,
-        motion::ACCENT_HI,
-        motion::ACCENT_LO,
-    );
+    motion::gradient_rrect(ui.painter(), rect, 8.0, ACCENT_HI, ACCENT_LO);
     ui.painter().text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
         "N",
         egui::FontId::proportional(17.0),
-        egui::Color32::BLACK,
+        INK,
     );
+}
+
+/// 侧边栏的一级入口：宽窗口带文字，窄窗口只有图标。
+fn sidebar_item(
+    ui: &mut egui::Ui,
+    nav: Nav,
+    active: bool,
+    wide: bool,
+    enabled: bool,
+) -> egui::Response {
+    let height = 44.0;
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), height),
+        egui::Sense::click(),
+    );
+    let hovered = enabled && response.hovered();
+    if active {
+        ui.painter().rect(
+            rect,
+            10,
+            SURFACE2,
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(247, 219, 172)),
+            egui::StrokeKind::Inside,
+        );
+        ui.painter().rect_filled(
+            egui::Rect::from_min_size(
+                rect.left_top() + egui::vec2(0.0, 10.0),
+                egui::vec2(3.0, height - 20.0),
+            ),
+            2,
+            ACCENT,
+        );
+    } else if hovered {
+        ui.painter()
+            .rect_filled(rect, 10, egui::Color32::from_rgb(255, 247, 234));
+    }
+    let icon_color = if !enabled {
+        egui::Color32::from_rgb(201, 183, 161)
+    } else if active {
+        ACCENT_TEXT
+    } else {
+        egui::Color32::from_rgb(166, 146, 122)
+    };
+    let icon_rect = if wide {
+        egui::Rect::from_center_size(
+            egui::pos2(rect.left() + 25.0, rect.center().y),
+            egui::vec2(17.0, 17.0),
+        )
+    } else {
+        egui::Rect::from_center_size(rect.center(), egui::vec2(19.0, 19.0))
+    };
+    nav_glyph(ui.painter(), icon_rect, nav, icon_color);
+    if wide {
+        ui.painter().text(
+            egui::pos2(rect.left() + 44.0, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            nav.label(),
+            egui::FontId::proportional(if active { 13.5 } else { 13.0 }),
+            if !enabled {
+                egui::Color32::from_rgb(177, 159, 137)
+            } else if active {
+                INK
+            } else {
+                egui::Color32::from_rgb(110, 94, 76)
+            },
+        );
+        if active {
+            ui.painter().circle_filled(
+                egui::pos2(rect.right() - 13.0, rect.center().y),
+                2.5,
+                ACCENT,
+            );
+        }
+    }
+    if enabled {
+        response.on_hover_cursor(egui::CursorIcon::PointingHand)
+    } else {
+        response.on_hover_text("任务进行中，完成后再切换")
+    }
+    .on_hover_text(if wide { nav.hint() } else { nav.label() })
+}
+
+fn nav_glyph(ui_painter: &egui::Painter, rect: egui::Rect, nav: Nav, color: egui::Color32) {
+    let stroke = egui::Stroke::new(1.6, color);
+    let center = rect.center();
+    let w = rect.width();
+    match nav {
+        Nav::Home => {
+            ui_painter.add(egui::Shape::convex_polygon(
+                vec![
+                    egui::pos2(center.x, center.y - w * 0.48),
+                    egui::pos2(center.x + w * 0.46, center.y - w * 0.06),
+                    egui::pos2(center.x - w * 0.46, center.y - w * 0.06),
+                ],
+                egui::Color32::TRANSPARENT,
+                stroke,
+            ));
+            ui_painter.rect_stroke(
+                egui::Rect::from_min_max(
+                    egui::pos2(center.x - w * 0.30, center.y - w * 0.06),
+                    egui::pos2(center.x + w * 0.30, center.y + w * 0.44),
+                ),
+                1,
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+        }
+        Nav::Versions => {
+            for index in 0..3 {
+                let y = center.y - w * 0.32 + index as f32 * w * 0.30;
+                ui_painter.line_segment(
+                    [
+                        egui::pos2(center.x - w * 0.42, y),
+                        egui::pos2(center.x + w * 0.42, y),
+                    ],
+                    stroke,
+                );
+                ui_painter.circle_filled(egui::pos2(center.x - w * 0.20, y), 1.4, color);
+            }
+        }
+        Nav::Content => {
+            let side = w * 0.34;
+            for (dx, dy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+                ui_painter.rect_stroke(
+                    egui::Rect::from_center_size(
+                        egui::pos2(center.x + dx * w * 0.23, center.y + dy * w * 0.23),
+                        egui::vec2(side, side),
+                    ),
+                    2,
+                    stroke,
+                    egui::StrokeKind::Inside,
+                );
+            }
+        }
+        Nav::Saves => {
+            ui_painter.add(egui::Shape::convex_polygon(
+                vec![
+                    egui::pos2(center.x - w * 0.30, center.y - w * 0.42),
+                    egui::pos2(center.x + w * 0.30, center.y - w * 0.42),
+                    egui::pos2(center.x + w * 0.30, center.y + w * 0.42),
+                    egui::pos2(center.x, center.y + w * 0.18),
+                    egui::pos2(center.x - w * 0.30, center.y + w * 0.42),
+                ],
+                egui::Color32::TRANSPARENT,
+                stroke,
+            ));
+        }
+    }
+}
+
+fn sidebar_account(ui: &mut egui::Ui, name: &str, linked: bool, wide: bool) -> egui::Response {
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 44.0), egui::Sense::click());
+    if response.hovered() {
+        ui.painter()
+            .rect_filled(rect, 10, egui::Color32::from_rgb(255, 247, 234));
+    }
+    if wide {
+        let mut child = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(rect.shrink2(egui::vec2(8.0, 5.0)))
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
+        child.spacing_mut().item_spacing.x = 8.0;
+        avatar_sized(&mut child, name, 26.0);
+        child.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            ui.add(egui::Label::new(egui::RichText::new(name).size(11.5).strong()).truncate());
+            ui.label(
+                egui::RichText::new(if linked {
+                    "Microsoft 正版"
+                } else {
+                    "离线 · 点击登录"
+                })
+                .size(8.0)
+                .color(if linked { OK } else { MUTED }),
+            );
+        });
+    } else {
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(
+            egui::Layout::centered_and_justified(egui::Direction::TopDown),
+        ));
+        avatar_sized(&mut child, name, 26.0);
+    }
+    response
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(if linked {
+            "账户"
+        } else {
+            "登录 Microsoft 账户"
+        })
 }
 
 fn open_folder(path: &std::path::Path) {
@@ -7348,7 +7928,7 @@ fn toggle_switch(ui: &mut egui::Ui, on: bool) -> egui::Response {
     let knob = if t > 0.5 {
         BG
     } else {
-        egui::Color32::from_rgb(150, 157, 169)
+        egui::Color32::from_rgb(201, 184, 162)
     };
     ui.painter()
         .circle_filled(egui::pos2(x, rect.center().y), radius, knob);
@@ -7385,7 +7965,7 @@ fn installed_row(
         ui.allocate_exact_size(egui::vec2(ui.available_width(), 58.0), egui::Sense::hover());
     if response.hovered() {
         ui.painter()
-            .rect_filled(rect, 10, egui::Color32::from_rgb(33, 37, 45));
+            .rect_filled(rect, 10, egui::Color32::from_rgb(255, 247, 234));
     }
     let inner = rect.shrink2(egui::vec2(12.0, 6.0));
     let mut child = ui.new_child(
@@ -7412,9 +7992,9 @@ fn installed_row(
             ui.spacing_mut().item_spacing.y = 2.0;
             ui.add_space(3.0);
             let name_color = if entry.enabled {
-                egui::Color32::from_rgb(228, 232, 240)
+                INK
             } else {
-                egui::Color32::from_rgb(122, 129, 142)
+                egui::Color32::from_rgb(160, 143, 123)
             };
             ui.add(
                 egui::Label::new(
@@ -7483,7 +8063,7 @@ fn installed_row(
                 && ui
                     .add(
                         egui::Button::new(egui::RichText::new("可更新").size(10.0).color(ACCENT))
-                            .fill(egui::Color32::from_rgb(48, 42, 26))
+                            .fill(egui::Color32::from_rgb(255, 243, 214))
                             .stroke(egui::Stroke::new(
                                 1.0,
                                 egui::Color32::from_rgb(120, 100, 52),
@@ -7504,7 +8084,7 @@ fn installed_row(
                 egui::pos2(rect.left() + 14.0, rect.bottom()),
                 egui::pos2(rect.right() - 14.0, rect.bottom()),
             ],
-            egui::Stroke::new(1.0, egui::Color32::from_rgb(38, 43, 52)),
+            egui::Stroke::new(1.0, LINE),
         );
     }
     action
@@ -7517,10 +8097,10 @@ fn primary_wide(ui: &mut egui::Ui, text: &str, enabled: bool, width: f32) -> boo
 fn accent_outline(ui: &mut egui::Ui, text: &str) -> egui::Response {
     ui.add(
         egui::Button::new(egui::RichText::new(text).size(11.5).strong().color(ACCENT))
-            .fill(egui::Color32::from_rgb(41, 37, 25))
+            .fill(egui::Color32::from_rgb(255, 244, 222))
             .stroke(egui::Stroke::new(
                 1.0,
-                egui::Color32::from_rgb(122, 101, 49),
+                egui::Color32::from_rgb(232, 178, 92),
             ))
             .corner_radius(8)
             .min_size(egui::vec2(88.0, 30.0)),
@@ -7547,7 +8127,7 @@ fn snapshot_row(
         ui.allocate_exact_size(egui::vec2(ui.available_width(), 52.0), egui::Sense::hover());
     if response.hovered() {
         ui.painter()
-            .rect_filled(rect, 8, egui::Color32::from_rgb(33, 37, 45));
+            .rect_filled(rect, 8, egui::Color32::from_rgb(255, 247, 234));
     }
     if newest {
         ui.painter().rect_filled(
@@ -7605,7 +8185,7 @@ fn snapshot_row(
                 egui::pos2(rect.left() + 12.0, rect.bottom()),
                 egui::pos2(rect.right() - 12.0, rect.bottom()),
             ],
-            egui::Stroke::new(1.0, egui::Color32::from_rgb(38, 43, 52)),
+            egui::Stroke::new(1.0, LINE),
         );
     }
     action
@@ -7762,14 +8342,7 @@ fn detail_kv_label(ui: &mut egui::Ui, label: &str) {
 fn detail_kv(ui: &mut egui::Ui, label: &str, value: &str) {
     ui.horizontal(|ui| {
         detail_kv_label(ui, label);
-        ui.add(
-            egui::Label::new(
-                egui::RichText::new(value)
-                    .size(10.0)
-                    .color(egui::Color32::from_rgb(210, 215, 224)),
-            )
-            .truncate(),
-        );
+        ui.add(egui::Label::new(egui::RichText::new(value).size(10.0).color(INK)).truncate());
     });
 }
 
@@ -7800,8 +8373,11 @@ fn tag_fill(ui: &mut egui::Ui, text: &str, color: egui::Color32, fill: egui::Col
 fn small_accent(ui: &mut egui::Ui, text: &str) -> egui::Response {
     ui.add(
         egui::Button::new(egui::RichText::new(text).size(10.0).color(ACCENT))
-            .fill(egui::Color32::from_rgb(40, 36, 25))
-            .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(92, 79, 44)))
+            .fill(egui::Color32::from_rgb(255, 244, 222))
+            .stroke(egui::Stroke::new(
+                1.0,
+                egui::Color32::from_rgb(232, 178, 92),
+            ))
             .corner_radius(6)
             .min_size(egui::vec2(44.0, 24.0)),
     )
@@ -7844,7 +8420,7 @@ fn version_row_mini(ui: &mut egui::Ui, version: &mods::Version, active: bool) ->
             if active {
                 SURFACE2
             } else {
-                egui::Color32::from_rgb(31, 35, 43)
+                egui::Color32::from_rgb(255, 247, 234)
             },
         );
     }
@@ -7869,11 +8445,7 @@ fn version_row_mini(ui: &mut egui::Ui, version: &mods::Version, active: bool) ->
         egui::RichText::new(short_text(&version.version_number, 34))
             .size(11.5)
             .strong()
-            .color(if active {
-                egui::Color32::from_rgb(238, 232, 214)
-            } else {
-                egui::Color32::from_rgb(210, 215, 224)
-            }),
+            .color(INK),
     );
     let mut meta = Vec::new();
     if let Some(size) = version.size {
@@ -7947,21 +8519,39 @@ fn main() -> eframe::Result<()> {
         "nailong",
         options,
         Box::new(move |cc| {
-            let mut visuals = egui::Visuals::dark();
+            let mut visuals = egui::Visuals::light();
+            visuals.override_text_color = Some(INK);
             visuals.panel_fill = BG;
             visuals.window_fill = CARD;
+            visuals.extreme_bg_color = egui::Color32::from_rgb(255, 253, 248);
             visuals.window_stroke = egui::Stroke::new(1.0, LINE);
-            visuals.window_corner_radius = egui::CornerRadius::same(10);
-            visuals.menu_corner_radius = egui::CornerRadius::same(10);
+            visuals.window_corner_radius = egui::CornerRadius::same(12);
+            visuals.menu_corner_radius = egui::CornerRadius::same(12);
             visuals.popup_shadow = egui::epaint::Shadow {
-                offset: [0, 6],
-                blur: 20,
+                offset: [0, 8],
+                blur: 24,
                 spread: 0,
-                color: egui::Color32::from_black_alpha(110),
+                color: egui::Color32::from_rgba_unmultiplied(120, 90, 55, 32),
             };
             visuals.faint_bg_color = SURFACE2;
-            visuals.selection.bg_fill = ACCENT;
-            visuals.selection.stroke = egui::Stroke::new(1.0, ACCENT);
+            visuals.selection.bg_fill = ACCENT_HI;
+            visuals.selection.stroke = egui::Stroke::new(1.0, ACCENT_LO);
+            visuals.hyperlink_color = ACCENT_TEXT;
+            visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(255, 253, 248);
+            visuals.widgets.inactive.weak_bg_fill = egui::Color32::from_rgb(255, 250, 242);
+            visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, LINE);
+            visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, INK);
+            visuals.widgets.hovered.bg_fill = SURFACE2;
+            visuals.widgets.hovered.weak_bg_fill = SURFACE2;
+            visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, ACCENT_HI);
+            visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.5, INK);
+            visuals.widgets.active.bg_fill = ACCENT_HI;
+            visuals.widgets.active.weak_bg_fill = ACCENT_HI;
+            visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, ACCENT_LO);
+            visuals.widgets.active.fg_stroke = egui::Stroke::new(1.5, INK);
+            visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, LINE);
+            visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, INK);
+            visuals.text_cursor.stroke = egui::Stroke::new(2.0, ACCENT_LO);
             cc.egui_ctx.set_visuals(visuals);
             install_cjk(&cc.egui_ctx);
             Ok(Box::new(App::new(root)))

@@ -10,10 +10,7 @@
 use eframe::egui;
 use egui::epaint::{Mesh, Shadow, Vertex, WHITE_UV};
 
-use crate::{LINE, MUTED, SURFACE2};
-
-pub const ACCENT_HI: egui::Color32 = egui::Color32::from_rgb(255, 215, 116);
-pub const ACCENT_LO: egui::Color32 = egui::Color32::from_rgb(232, 164, 44);
+use crate::{ACCENT_HI, ACCENT_LO, INK, LINE, MUTED, SURFACE2};
 
 pub fn ease_out_cubic(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
@@ -65,40 +62,6 @@ pub fn gradient_rect(
 }
 
 /// Horizontal gradient, used for thin accent rules.
-pub fn gradient_h(
-    painter: &egui::Painter,
-    rect: egui::Rect,
-    left: egui::Color32,
-    right: egui::Color32,
-) {
-    let mut mesh = Mesh::default();
-    mesh.vertices.push(Vertex {
-        pos: rect.left_top(),
-        uv: WHITE_UV,
-        color: left,
-    });
-    mesh.vertices.push(Vertex {
-        pos: rect.right_top(),
-        uv: WHITE_UV,
-        color: right,
-    });
-    mesh.vertices.push(Vertex {
-        pos: rect.right_bottom(),
-        uv: WHITE_UV,
-        color: right,
-    });
-    mesh.vertices.push(Vertex {
-        pos: rect.left_bottom(),
-        uv: WHITE_UV,
-        color: left,
-    });
-    mesh.add_triangle(0, 1, 2);
-    mesh.add_triangle(0, 2, 3);
-    painter.add(egui::Shape::mesh(mesh));
-}
-
-/// Vertical gradient clipped to a rounded rectangle, implemented as a triangle fan.
-/// This keeps the silhouette round while letting top/bottom colours differ.
 pub fn gradient_rrect(
     painter: &egui::Painter,
     rect: egui::Rect,
@@ -163,7 +126,7 @@ pub fn card_shadow() -> Shadow {
         offset: [0, 16],
         blur: 38,
         spread: 0,
-        color: egui::Color32::from_black_alpha(165),
+        color: egui::Color32::from_rgba_unmultiplied(120, 90, 55, 46),
     }
 }
 
@@ -249,12 +212,12 @@ pub fn paint_ambient(ui: &egui::Ui, time: f64) {
     gradient_rect(
         painter,
         rect,
-        egui::Color32::from_rgb(13, 15, 20),
-        egui::Color32::from_rgb(10, 12, 17),
+        egui::Color32::from_rgb(255, 250, 242),
+        egui::Color32::from_rgb(255, 243, 229),
     );
     // A very quiet dot grid gives the large empty areas some texture.
     let step = 44.0;
-    let dot = egui::Color32::from_rgba_unmultiplied(145, 155, 175, 7);
+    let dot = egui::Color32::from_rgba_unmultiplied(203, 178, 146, 42);
     let mut y = rect.top() + 22.0;
     while y < rect.bottom() {
         let mut x = rect.left() + 30.0;
@@ -272,7 +235,7 @@ pub fn paint_ambient(ui: &egui::Ui, time: f64) {
             rect.top() + rect.height() * 0.20,
         ),
         rect.width() * 0.68,
-        egui::Color32::from_rgba_unmultiplied(245, 196, 81, (4.0 + 3.5 * breathe) as u8),
+        egui::Color32::from_rgba_unmultiplied(255, 178, 72, (10.0 + 8.0 * breathe) as u8),
     );
     radial_glow(
         painter,
@@ -281,7 +244,7 @@ pub fn paint_ambient(ui: &egui::Ui, time: f64) {
             rect.bottom() + rect.height() * 0.06,
         ),
         rect.width() * 0.55,
-        egui::Color32::from_rgba_unmultiplied(86, 118, 170, 6),
+        egui::Color32::from_rgba_unmultiplied(255, 168, 74, 7),
     );
 
     if let Some(pointer) = ui.ctx().pointer_hover_pos()
@@ -291,7 +254,7 @@ pub fn paint_ambient(ui: &egui::Ui, time: f64) {
             painter,
             pointer,
             300.0,
-            egui::Color32::from_rgba_unmultiplied(255, 220, 140, 7),
+            egui::Color32::from_rgba_unmultiplied(255, 170, 55, 14),
         );
     }
 
@@ -311,19 +274,19 @@ pub fn paint_ambient(ui: &egui::Ui, time: f64) {
         painter.circle_filled(
             egui::pos2(x, y),
             radius,
-            egui::Color32::from_rgba_unmultiplied(255, 214, 128, alpha),
+            egui::Color32::from_rgba_unmultiplied(226, 138, 40, alpha),
         );
     }
 
-    // A thin warm line at the very bottom ties the page to the top bar.
+    // A thin warm line at the very bottom closes the page softly.
     let line = egui::Rect::from_min_size(
         egui::pos2(rect.left(), rect.bottom() - 1.0),
         egui::vec2(rect.width(), 1.0),
     );
     painter.add(egui::Shape::mesh({
         let mut mesh = Mesh::default();
-        let c0 = egui::Color32::from_rgba_unmultiplied(245, 196, 81, 22);
-        let c1 = egui::Color32::from_rgba_unmultiplied(245, 196, 81, 0);
+        let c0 = egui::Color32::from_rgba_unmultiplied(245, 158, 11, 38);
+        let c1 = egui::Color32::from_rgba_unmultiplied(245, 158, 11, 0);
         mesh.vertices.push(Vertex {
             pos: line.left_top(),
             uv: WHITE_UV,
@@ -367,7 +330,7 @@ pub fn hero_rule(ui: &mut egui::Ui, margin: f32) {
         ui.painter(),
         rect,
         2,
-        egui::Color32::from_rgba_unmultiplied(245, 196, 81, 70),
+        egui::Color32::from_rgba_unmultiplied(245, 158, 11, 80),
         12,
     );
 }
@@ -381,9 +344,9 @@ pub fn status_ring(
     missing: u64,
 ) {
     let color = if healthy {
-        egui::Color32::from_rgb(126, 198, 153)
+        egui::Color32::from_rgb(47, 143, 91)
     } else {
-        egui::Color32::from_rgb(232, 161, 92)
+        egui::Color32::from_rgb(190, 110, 15)
     };
     painter.circle_filled(
         center,
@@ -393,7 +356,7 @@ pub fn status_ring(
     painter.circle_stroke(
         center,
         radius,
-        egui::Stroke::new(3.0, egui::Color32::from_rgb(44, 54, 70)),
+        egui::Stroke::new(3.0, egui::Color32::from_rgb(236, 225, 210)),
     );
     // 300-degree gauge with softly rounded ends.
     let start = -std::f32::consts::FRAC_PI_2 + 0.45;
@@ -439,7 +402,7 @@ pub fn accent_bar(ui: &mut egui::Ui, height: f32) {
         ui.painter(),
         rect,
         2,
-        egui::Color32::from_rgba_unmultiplied(245, 196, 81, 55),
+        egui::Color32::from_rgba_unmultiplied(245, 158, 11, 65),
         10,
     );
 }
@@ -476,7 +439,7 @@ pub fn primary_sized(
                 offset: [0, 8],
                 blur: 24,
                 spread: 0,
-                color: egui::Color32::from_rgba_unmultiplied(245, 196, 81, glow_alpha as u8),
+                color: egui::Color32::from_rgba_unmultiplied(245, 158, 11, glow_alpha as u8),
             }
             .as_shape(rect, 9),
         );
@@ -489,13 +452,13 @@ pub fn primary_sized(
             egui::pos2(body.left() + 7.0, body.top() + 1.0),
             egui::pos2(body.right() - 7.0, body.top() + 1.6),
         );
-        painter.rect_filled(gloss, 1, egui::Color32::from_white_alpha(60));
+        painter.rect_filled(gloss, 1, egui::Color32::from_white_alpha(78));
         painter.text(
             body.center() + egui::vec2(0.0, if pressed { 1.0 } else { 0.0 }),
             egui::Align2::CENTER_CENTER,
             text,
             egui::FontId::proportional(font_size),
-            egui::Color32::from_rgb(26, 21, 9),
+            INK,
         );
         if response.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -527,7 +490,7 @@ pub fn progress_bar(ui: &mut egui::Ui, fraction: f32, indeterminate: bool, time:
     painter.rect(
         rect,
         5,
-        egui::Color32::from_rgb(24, 28, 36),
+        SURFACE2,
         egui::Stroke::new(1.0, LINE),
         egui::StrokeKind::Inside,
     );
@@ -550,13 +513,7 @@ pub fn progress_bar(ui: &mut egui::Ui, fraction: f32, indeterminate: bool, time:
         )
     };
     if fill_rect.width() > 0.5 {
-        gradient_rrect(
-            painter,
-            fill_rect,
-            5.0,
-            ACCENT_HI,
-            egui::Color32::from_rgb(230, 168, 50),
-        );
+        gradient_rrect(painter, fill_rect, 5.0, ACCENT_HI, ACCENT_LO);
         // Sheen sweeps across the filled part. Clipped to the fill so the track
         // never lights up ahead of progress.
         let clip = painter.with_clip_rect(fill_rect.intersect(track));
@@ -569,7 +526,7 @@ pub fn progress_bar(ui: &mut egui::Ui, fraction: f32, indeterminate: bool, time:
                 egui::pos2(x + sheen_w, fill_rect.bottom()),
             ),
             3,
-            egui::Color32::from_white_alpha(36),
+            egui::Color32::from_white_alpha(70),
         );
     }
     if !indeterminate && fraction >= 0.995 {
@@ -577,14 +534,10 @@ pub fn progress_bar(ui: &mut egui::Ui, fraction: f32, indeterminate: bool, time:
             painter,
             fill_rect,
             5,
-            egui::Color32::from_rgba_unmultiplied(245, 196, 81, 18),
+            egui::Color32::from_rgba_unmultiplied(245, 158, 11, 28),
             10,
         );
     }
     // Tiny baseline pin so the empty track still reads as a component.
-    painter.circle_filled(
-        egui::pos2(track.right() - 2.0, track.center().y),
-        1.0,
-        egui::Color32::from_rgb(42, 47, 58),
-    );
+    painter.circle_filled(egui::pos2(track.right() - 2.0, track.center().y), 1.0, LINE);
 }

@@ -8,7 +8,7 @@ A small, native Minecraft: Java Edition launcher written in Rust. Windows ships 
 
 [简体中文](README.md) | **English**
 
-> Current version: **0.17.0** (preview)
+> Current version: **0.18.0** (preview)
 >
 > Goals: small binaries, few dependencies, visible install progress, and a repair path after interruption. See [implementation status](docs/design/14-implementation-status.md) for exact boundaries.
 
@@ -27,17 +27,17 @@ It is not a universal launcher, and it is not 1.0 yet. What works and what does 
 
 ## Interface
 
-0.17 builds on the 0.16 [design system](docs/design/15-ui-design-system.md) with light and motion: ambient glow and embers, hover lift and border glow on cards, page transitions, a breathing primary action, a sheen on progress, and modal entrances. Dark neutral surfaces, one warm accent, a fixed page header, and a single scrolling content area. Each page has one primary action; deletes confirm inline; empty states point at the next step.
+0.18 rearranges the UI around a player's daily path. A persistent sidebar holds four places — **Home, Versions, Content, Saves**. Content merges discovery and installed items into one library; Versions is only launch and maintenance; Saves is a first-class page with its own version picker. The theme is now cream, white cards and orange/yellow accents, with the same quiet motion recalibrated for light surfaces.
 
-![Motion demo: page transitions, card hover, switches and modal entrance](docs/screenshots/motion.gif)
+![Motion demo: sidebar, content library, card hover and detail return](docs/screenshots/motion.gif)
 
-| Home | Download center |
+| Home | Content · Discover |
 |---|---|
-| ![Home](docs/screenshots/01-main.png) | ![Download center](docs/screenshots/04-browse.png) |
-| **Project page** | **Content manager** |
-| ![Project page](docs/screenshots/06-detail.png) | ![Content manager](docs/screenshots/07-installed.png) |
+| ![Home](docs/screenshots/01-main.png) | ![Content · Discover](docs/screenshots/04-browse.png) |
+| **Content · Installed** | **Saves** |
+| ![Content · Installed](docs/screenshots/07-installed.png) | ![Saves](docs/screenshots/11-saves.png) |
 
-More screenshots (version manager, install, search, updates, saves, progress, account dialogs): [docs/screenshots](docs/screenshots). The motion clip is about 11 seconds and covers hover, page transitions, a switch, progress and the account dialog.
+More screenshots (versions, install, search, detail, updates, empty states, welcome, progress, account dialogs): [docs/screenshots](docs/screenshots). The motion clip is about 15 seconds and covers the sidebar, content library, card hover, detail return and saves.
 
 ## Features
 
@@ -68,11 +68,13 @@ Six formats are detected automatically:
 
 Drag a `.mrpack` or `.zip` into the window to start an import. A single mod `.jar` is not treated as a modpack.
 
-### Download center: mods, resource packs and shaders
+### Content library: discovery and installed
 
-- Pick “install to: <installed version>” in the download center first. Browsing and search then lock to that version's Minecraft version and loader, and `+` writes straight into its `mods/`, `resourcepacks/` or `shaderpacks/`.
-- Prefer window-shopping? Choose “browse only”, pick any version/loader, and `+` will ask for an install target first.
-- The download center opens on a browse page: title, search, content type and “install to” stay pinned at the top; the content area is a row of category chips (optimization, technology, adventure, realistic, fantasy, …) plus “Popular” and “Newest” shelves. No keyword required.
+- **Content** in the sidebar is the only place for mods, resource packs and shaders. The “Installed / Discover” tabs are two modes of the same library, not two pages.
+- Pick “install to: <installed version>” at the top right. Browsing and search then lock to that version's Minecraft version and loader, and `+` writes straight into its `mods/`, `resourcepacks/` or `shaderpacks/`.
+- Prefer window-shopping? Choose “browse only”, pick any version/loader; cards still open their details, and `+` asks for an install target first.
+- Content opens on **Installed**: counts, enable/disable switches, filtering, update checks, per-row/all updates and file import all live here. An empty library points straight at Discover.
+- Switch to **Discover** for the browse page: title, search, content type and “install to” stay pinned at the top; the content area is a row of category chips (optimization, technology, adventure, realistic, fantasy, …) plus “Popular” and “Newest” shelves. No keyword required.
 - Each card shows the icon, name, summary and download count, with a `+` in its bottom-right corner. It installs the latest build compatible with the selected version and loader, plus required dependencies, and then turns into “installed”.
 - Clicking the rest of a card opens a two-column project page: project/version info and dependencies on the left, the install panel and version history on the right. Pick a file version and review `required` / `optional` / `incompatible` dependencies; `required` is added automatically, `optional` is off by default, `incompatible` blocks the download.
 - Each shelf has “More ›” in its corner: it opens the full list for that shelf (24 per page) with “load more” pagination.
@@ -82,17 +84,17 @@ Drag a `.mrpack` or `.zip` into the window to start an import. A single mod `.ja
 - The chip row shows 12 categories by default and folds the rest behind “more categories”. A source switch (All / Modrinth / CurseForge) lets you browse the CurseForge catalogue as-is, with its categories and sort orders. Downloads are still resolved and verified by the launcher; no website is involved.
 - Search stays in the top bar (Enter to run) and renders the same cards with pagination.
 - Files go into that version's `mods/`, `resourcepacks/` or `shaderpacks/`. A normal version gets an isolated `gameDir` (`versions/<id>/`) on first download; existing saves in the root are not migrated.
-- The installed page is a real content manager: filter by name, toggle files, check for updates, update one or all, and see duplicate warnings. Delete asks inline, and updating a disabled file keeps it disabled.
+- **Installed** mode is the content manager: filter by name, toggle files, check for updates, update one or all, and see duplicate warnings. Delete asks inline from the `⋯` menu, and updating a disabled file keeps it disabled.
 - Local `.jar` drag/import is supported, as is local `.zip` import for resource packs and shaders.
 - Identical existing files are skipped; conflicts are reported, never silently overwritten. Updates replace the old version and keep the index in sync.
 
 ### Everyday use
 
-- Microsoft account login from the top-right button: browser authorization code + PKCE on a loopback port, automatic token refresh, and `--accessToken` / `--uuid` / `--xuid` at launch.
+- Microsoft account login from the account chip at the bottom of the sidebar: browser authorization code + PKCE on a loopback port, automatic token refresh, and `--accessToken` / `--uuid` / `--xuid` at launch.
 - Tokens live in `account.json` under the data directory (mode 0600 on Unix) and never appear in logs; logging out deletes it.
 - Offline-account launch (singleplayer / LAN) still works when nobody is signed in.
-- Version management: base versions required by a loader are hidden from the main picker and protected from deletion; every version has “content” and “saves” entries.
-- Saves: list worlds with size and modified time. Backups are **git-style snapshots**: content-defined chunking stores only changed chunks, so a second backup usually adds a few MB; restore, delete and prune by count.
+- Versions: base versions required by a loader are hidden from the main picker and protected from deletion; this page only launches, repairs, reveals the folder and deletes. Content and saves live in their own sidebar places.
+- Saves: a first-class page with a version picker at the top; list worlds with size and modified time. Backups are **git-style snapshots**: content-defined chunking stores only changed chunks, so a second backup usually adds a few MB; restore, delete and prune by count.
 - Automatic backups: every 15/30/60/120 minutes, keeping 5/10/20/50 snapshots per world; settings live in `backups.json` under the data directory and run while the launcher is open.
 - Resource packs and shaders get the same enable/disable, delete, file-size and open-folder affordances as mods.
 - Install progress: stage, percentage, downloaded / total bytes, and file count.
@@ -103,7 +105,7 @@ Drag a `.mrpack` or `.zip` into the window to start an import. A single mod `.ja
 | Platform | File | Size | Requirements |
 |---|---|---:|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | ~8 MB | Windows 10/11, Java 21 |
-| Linux x64 (deb) | [nailong_0.17.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.17.0_amd64.deb) | ~3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
+| Linux x64 (deb) | [nailong_0.18.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.18.0_amd64.deb) | ~3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
 
 Checksums: [SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS).
 
@@ -160,7 +162,7 @@ Ran for real:
 - Fabulously Optimized `.mrpack`: 151 mods loaded and launched.
 - CurseForge: a real file was downloaded through the no-key official-page fallback; the approved API key returned the official file name, size, SHA1, and download URL.
 - GUI cancellation: cancelled an install under Xvfb and returned to the “continue install” page without crashing.
-- Download center: real Modrinth + CurseForge APIs; mod/resource-pack/shader search; Jade plus its required dependency downloaded into the version-isolated `mods/`; installed scan, toggles, duplicate detection and update checks. 0.10.0 adds a real click-through test: the `+` button on a browse card downloaded Fabric API into the isolated `mods/` and wrote the content index.
+- Content library: real Modrinth + CurseForge APIs; mod/resource-pack/shader search; Jade plus its required dependency downloaded into the version-isolated `mods/`; installed scan, toggles, duplicate detection and update checks. 0.10.0 adds a real click-through test: the `+` button on a browse card downloaded Fabric API into the isolated `mods/` and wrote the content index.
 - Prism, MCBBS, HMCL, and ATLauncher: real or synthetic samples passed format detection and instance creation.
 
 Not verified yet:
