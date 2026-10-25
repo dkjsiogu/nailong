@@ -8,7 +8,7 @@ A small, native Minecraft: Java Edition launcher written in Rust. Windows ships 
 
 [简体中文](README.md) | **English**
 
-> Current version: **0.24.0** (preview)
+> Current version: **0.25.0** (preview)
 >
 > Goals: small binaries, few dependencies, visible install progress, and a repair path after interruption. See [implementation status](docs/design/14-implementation-status.md) for exact boundaries.
 
@@ -26,6 +26,8 @@ nailong tries to do one thing simply:
 It is not a universal launcher, and it is not 1.0 yet. What works and what does not is laid out below.
 
 ## Interface
+
+0.25 unifies the controls that were still default egui: version stats now put a 20 px bold number above a small muted label, and Auto Backup / Show Base Versions use the same warm 36×20 switch as the content list instead of checkboxes. The Saves toolbar reads left-to-right as auto-backup → interval → keep → back up all → prune. No new features, just a quieter, more consistent page.
 
 0.24 treats failure and dismissal as part of the interface. A failed login gets its own “login did not finish” result card with Retry and Close instead of dropping a raw AADSTS line behind the main window. Escape now closes Settings, Account, Restore Points, the login wait and the login-error card; content errors no longer expose raw URLs: an empty result shows a centered “content did not load” card with Reload, while a failed refresh keeps the list and adds a retry bar. Raw errors stay in the Settings log.
 
@@ -120,7 +122,7 @@ Drag a `.mrpack` or `.zip` into the window to start an import. A single mod `.ja
 | Platform | File | Size | Requirements |
 |---|---|---:|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | ~8 MB | Windows 10/11, Java 21 |
-| Linux x64 (deb) | [nailong_0.24.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.24.0_amd64.deb) | ~3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
+| Linux x64 (deb) | [nailong_0.25.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.25.0_amd64.deb) | ~3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
 
 Checksums: [SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS).
 

@@ -6486,7 +6486,17 @@ impl App {
             let _ = snapshots::save_config(&self.root, &self.backup_cfg);
         }
         let mut enabled = self.backup_cfg.enabled;
-        if ui.checkbox(&mut enabled, "自动备份").changed() {
+        ui.horizontal(|ui| {
+            if toggle_switch(ui, enabled).clicked() {
+                enabled = !enabled;
+            }
+            ui.label(
+                egui::RichText::new("自动备份")
+                    .size(10.5)
+                    .color(if enabled { INK } else { MUTED }),
+            );
+        });
+        if enabled != self.backup_cfg.enabled {
             self.backup_cfg.enabled = enabled;
             let _ = snapshots::save_config(&self.root, &self.backup_cfg);
         }
@@ -7364,7 +7374,17 @@ impl App {
                 });
                 ui.add_space(10.0);
                 let mut show_base = self.show_base;
-                if ui.checkbox(&mut show_base, "显示基础版本").changed() {
+                ui.horizontal(|ui| {
+                    if toggle_switch(ui, show_base).clicked() {
+                        show_base = !show_base;
+                    }
+                    ui.label(
+                        egui::RichText::new("显示基础版本")
+                            .size(10.5)
+                            .color(if show_base { INK } else { MUTED }),
+                    );
+                });
+                if show_base != self.show_base {
                     self.show_base = show_base;
                     if !show_base {
                         self.ensure_visible_selection();
@@ -8827,16 +8847,15 @@ fn inline_dot(ui: &mut egui::Ui) {
 
 fn stat_cell(ui: &mut egui::Ui, value: usize, label: &str) {
     ui.allocate_ui_with_layout(
-        egui::vec2(96.0, 38.0),
+        egui::vec2(96.0, 42.0),
         egui::Layout::top_down(egui::Align::LEFT),
         |ui| {
-            ui.label(egui::RichText::new(label).size(10.0).color(MUTED));
-            ui.add_space(1.0);
             ui.label(
                 egui::RichText::new(value.to_string())
-                    .size(17.0)
+                    .size(20.0)
                     .family(bold_family()),
             );
+            ui.label(egui::RichText::new(label).size(9.5).color(MUTED));
         },
     );
 }

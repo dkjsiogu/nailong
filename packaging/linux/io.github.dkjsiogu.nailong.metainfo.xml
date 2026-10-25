@@ -25,6 +25,11 @@
   <url type="bugtracker">https://github.com/dkjsiogu/nailong/issues</url>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.25.0" date="2026-10-26">
+      <description>
+        <p>Control consistency: version statistics put the number above its label, Auto Backup and Show Base Versions use the warm toggle switch instead of default checkboxes, and the Saves toolbar is ordered auto-backup → interval → keep → back up all → prune.</p>
+      </description>
+    </release>
     <release version="0.24.0" date="2026-10-26">
       <description>
         <p>Failure states and dismissal polish: a failed login opens a dedicated result card with Retry and Close, Escape closes Settings, Account, Restore Points, login wait and login error, and content errors offer Reload. Raw OAuth details stay in the Settings log.</p>

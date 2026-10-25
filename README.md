@@ -8,7 +8,7 @@
 
 **简体中文** | [English](README.en.md)
 
-> 当前版本：**0.24.0**（预览版）
+> 当前版本：**0.25.0**（预览版）
 >
 > 目标：小体积、少依赖、安装过程可见、中断可补。功能边界见 [实现状态](docs/design/14-implementation-status.md)。
 
@@ -26,6 +26,8 @@ nailong 的思路很直：
 它不是“万能启动器”，也还不是 1.0。能做和不能做的，下文列清楚了。
 
 ## 界面
+
+0.25 继续收页面里的控件：版本页统计改成大数字在上、标签在下；自动备份和「显示基础版本」不再用默认 checkbox，换成内容页同一套暖色开关；存档工具条按“自动备份 → 间隔 → 保留份数 → 备份全部 → 清理”排顺。没有加功能，只把已有的页面读起来更顺。
 
 0.24 把失败和关闭也当成界面：登录失败弹独立的「登录没有完成」结果卡，给「重新登录 / 关闭」，不再把一句 AADSTS 丢在首页背景里；设置、账户、恢复点、登录等待、登录失败、安装确认都支持 Esc 关闭；内容错误不再显示带完整 URL 的裸错误：没有内容时给「内容没有加载出来」居中卡，已有列表刷新失败只在顶部给重载条。原始错误只进设置日志。
 
@@ -121,7 +123,7 @@ nailong 的思路很直：
 | 平台 | 文件 | 大小 | 要求 |
 |---|---|---:|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | 约 8 MB | Windows 10/11，Java 21 |
-| Linux x64 (deb) | [nailong_0.24.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.24.0_amd64.deb) | 约 3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
+| Linux x64 (deb) | [nailong_0.25.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.25.0_amd64.deb) | 约 3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
 
 校验值：[SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS)。
 
@@ -138,7 +140,7 @@ nailong 的思路很直：
 ### Linux（Debian / Ubuntu）
 
 ```bash
-sudo apt install ./nailong_0.24.0_amd64.deb
+sudo apt install ./nailong_0.25.0_amd64.deb
 nailong
 ```
 
