@@ -8,7 +8,7 @@ A small, native Minecraft: Java Edition launcher written in Rust. Windows ships 
 
 [简体中文](README.md) | **English**
 
-> Current version: **0.19.0** (preview)
+> Current version: **0.20.0** (preview)
 >
 > Goals: small binaries, few dependencies, visible install progress, and a repair path after interruption. See [implementation status](docs/design/14-implementation-status.md) for exact boundaries.
 
@@ -27,7 +27,9 @@ It is not a universal launcher, and it is not 1.0 yet. What works and what does 
 
 ## Interface
 
-0.19 turns Home from a dashboard into a play surface: **current version, one play action, version details, the latest world and recent content**. Account, player name, memory, Java, game/data folders and logs move into a sidebar Settings dialog; player name and memory persist in the data directory. The product thesis lives in the [product brief](docs/product/00-brief.md): **clean installs, recoverable mistakes**. Instance-level content/config rollback is next.
+0.20 makes “recoverable mistakes” real: every install, update, import or delete of mods/resource packs/shaders creates an instance **restore point** first. If something breaks, the Content page's restore-point dialog rolls back mods, configs, resource packs, shaders and the content index; it takes a safety point of the current state before restoring and verifies every object by SHA-1. Ten points are kept, whole files are deduplicated, and world saves remain on their own snapshot system.
+
+0.19 turns Home from a dashboard into a play surface: **current version, one play action, version details, the latest world and recent content**. Account, player name, memory, Java, game/data folders and logs move into a sidebar Settings dialog; player name and memory persist in the data directory. The product thesis lives in the [product brief](docs/product/00-brief.md): **clean installs, recoverable mistakes**.
 
 0.18 rearranges the UI around a player's daily path. A persistent sidebar holds four places — **Home, Versions, Content, Saves**. Content merges discovery and installed items into one library; Versions is only launch and maintenance; Saves is a first-class page with its own version picker. The theme is cream, white cards and orange/yellow accents. 0.18.1 adds a real bold CJK family, a matte amber primary action with optional play/download glyphs, and secondary buttons with warm borders and contact shadows.
 
@@ -39,7 +41,7 @@ It is not a universal launcher, and it is not 1.0 yet. What works and what does 
 | **Content · Installed** | **Saves** |
 | ![Content · Installed](docs/screenshots/07-installed.png) | ![Saves](docs/screenshots/11-saves.png) |
 
-More screenshots (versions, install, search, detail, updates, empty states, welcome, progress, account dialogs, settings): [docs/screenshots](docs/screenshots). The motion clip is about 19 seconds and covers Home, Settings, the content library, card hover, detail return and Saves.
+More screenshots (versions, install, search, detail, updates, empty states, welcome, progress, account dialogs, settings, restore points): [docs/screenshots](docs/screenshots). The motion clip is about 20 seconds and covers Home, Settings, restore points, the content library, card hover, detail return and Saves.
 
 ## Features
 
@@ -87,6 +89,7 @@ Drag a `.mrpack` or `.zip` into the window to start an import. A single mod `.ja
 - Search stays in the top bar (Enter to run) and renders the same cards with pagination.
 - Files go into that version's `mods/`, `resourcepacks/` or `shaderpacks/`. A normal version gets an isolated `gameDir` (`versions/<id>/`) on first download; existing saves in the root are not migrated.
 - **Installed** mode is the content manager: filter by name, toggle files, check for updates, update one or all, and see duplicate warnings. Delete asks inline from the `⋯` menu, and updating a disabled file keeps it disabled.
+- **Restore points**: created automatically before content installs, updates, imports and deletes; the Content page's restore-point dialog can create, restore or delete points. Restoring takes a safety point first and verifies every stored object by SHA-1. A failed point creation aborts the operation instead of continuing silently.
 - Local `.jar` drag/import is supported, as is local `.zip` import for resource packs and shaders.
 - Identical existing files are skipped; conflicts are reported, never silently overwritten. Updates replace the old version and keep the index in sync.
 
@@ -108,7 +111,7 @@ Drag a `.mrpack` or `.zip` into the window to start an import. A single mod `.ja
 | Platform | File | Size | Requirements |
 |---|---|---:|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | ~8 MB | Windows 10/11, Java 21 |
-| Linux x64 (deb) | [nailong_0.19.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.19.0_amd64.deb) | ~3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
+| Linux x64 (deb) | [nailong_0.20.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.20.0_amd64.deb) | ~3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
 
 Checksums: [SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS).
 
@@ -160,7 +163,7 @@ Official releases include a project key, so CurseForge packs use the official AP
 
 Ran for real:
 
-- GUI: every page was walked at 1120×720 and the 900×620 minimum, including browse/search/detail, content manager, update banner, delete confirmation, empty states, save snapshots, the settings dialog, progress, and the account/login dialogs; 19 screenshots and a 19-second motion GIF live in `docs/screenshots/`.
+- GUI: every page was walked at 1120×720 and the 900×620 minimum, including browse/search/detail, content manager, update banner, delete confirmation, empty states, save snapshots, the settings dialog, content restore points, progress, and the account/login dialogs; 20 screenshots and a 20-second motion GIF live in `docs/screenshots/`.
 - Linux (Xvfb + Mesa): Fabric 0.19.5, NeoForge 21.1.209, and Forge 52.1.20 on 1.21.1 reached the main menu.
 - Fabulously Optimized `.mrpack`: 151 mods loaded and launched.
 - CurseForge: a real file was downloaded through the no-key official-page fallback; the approved API key returned the official file name, size, SHA1, and download URL.

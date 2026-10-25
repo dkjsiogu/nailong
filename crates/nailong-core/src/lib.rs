@@ -12,6 +12,7 @@ pub mod manifest;
 pub mod mods;
 pub mod paths;
 pub mod progress;
+pub mod rollback;
 pub mod saves;
 pub mod snapshots;
 

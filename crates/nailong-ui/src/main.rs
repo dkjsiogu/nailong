@@ -7,6 +7,7 @@ use nailong_core::installed;
 use nailong_core::launch::{self, LaunchOptions};
 use nailong_core::mods;
 use nailong_core::progress::{Progress, Sink, from_fn};
+use nailong_core::rollback;
 use nailong_core::saves;
 use nailong_core::snapshots;
 use nailong_core::{Error, Root, cancel, java};
@@ -193,6 +194,7 @@ enum Msg {
         result: Result<mods::SearchPage, String>,
     },
     SavesDone(Result<String, String>),
+    RollbackDone(Result<String, String>),
     LoginBrowser(String),
     LoginDone(Result<auth::Account, String>),
     LaunchDone(i32),
@@ -306,6 +308,13 @@ struct App {
     login_busy: bool,
     show_account: bool,
     show_settings: bool,
+    show_rollback: bool,
+    rollback_points: Vec<rollback::Snapshot>,
+    rollback_busy: bool,
+    rollback_confirm: Option<String>,
+    rollback_notice: Option<String>,
+    rollback_error: Option<String>,
+    rollback_rx: Option<mpsc::Receiver<Msg>>,
     page_key: u8,
     page_enter_at: f64,
     modal_key: u8,
@@ -445,6 +454,13 @@ impl App {
             login_busy: false,
             show_account: false,
             show_settings: false,
+            show_rollback: false,
+            rollback_points: Vec::new(),
+            rollback_busy: false,
+            rollback_confirm: None,
+            rollback_notice: None,
+            rollback_error: None,
+            rollback_rx: None,
             page_key: 255,
             page_enter_at: 0.0,
             modal_key: 0,
@@ -1424,6 +1440,292 @@ impl App {
         }
     }
 
+    fn reload_rollback_points(&mut self) {
+        let Some(dir) = self.mods_game_dir.clone() else {
+            self.rollback_points.clear();
+            return;
+        };
+        match rollback::list(&dir) {
+            Ok(items) => {
+                self.rollback_points = items;
+                self.rollback_error = None;
+            }
+            Err(e) => self.rollback_error = Some(e.to_string()),
+        }
+    }
+
+    fn open_rollback(&mut self) {
+        if self.mods_game_dir.is_none() {
+            self.mods_error = Some("先选一个安装目标，再查看恢复点".into());
+            return;
+        }
+        self.show_rollback = true;
+        self.rollback_confirm = None;
+        self.rollback_notice = None;
+        self.rollback_error = None;
+        self.reload_rollback_points();
+    }
+
+    fn start_rollback_backup(&mut self) {
+        if self.rollback_busy {
+            return;
+        }
+        let Some(dir) = self.mods_game_dir.clone() else {
+            return;
+        };
+        self.rollback_busy = true;
+        self.rollback_notice = None;
+        self.rollback_error = None;
+        let (tx, rx) = mpsc::channel();
+        self.rollback_rx = Some(rx);
+        std::thread::spawn(move || {
+            let result = rollback::backup(&dir, "手动恢复点")
+                .map(|point| {
+                    format!(
+                        "已创建恢复点（{} 个文件，{}）",
+                        point.files.len(),
+                        human_size(point.bytes)
+                    )
+                })
+                .map_err(|e| e.to_string());
+            let _ = tx.send(Msg::RollbackDone(result));
+        });
+    }
+
+    fn start_rollback_restore(&mut self, id: String) {
+        if self.rollback_busy {
+            return;
+        }
+        let Some(dir) = self.mods_game_dir.clone() else {
+            return;
+        };
+        self.rollback_busy = true;
+        self.rollback_notice = None;
+        self.rollback_error = None;
+        self.rollback_confirm = None;
+        let (tx, rx) = mpsc::channel();
+        self.rollback_rx = Some(rx);
+        std::thread::spawn(move || {
+            let result = rollback::restore(&dir, &id)
+                .map(|count| format!("已恢复 {count} 个文件；恢复前的状态也留了恢复点"))
+                .map_err(|e| e.to_string());
+            let _ = tx.send(Msg::RollbackDone(result));
+        });
+    }
+
+    /// 内容页的“恢复点”入口：恢复 Mod / 配置 / 内容索引，不动存档。
+    fn rollback_overlay(&mut self, ctx: &egui::Context) {
+        if !self.show_rollback {
+            return;
+        }
+        let mut close = false;
+        let mut create = false;
+        let mut restore: Option<String> = None;
+        let mut delete: Option<String> = None;
+        let veil = egui::Color32::from_rgba_unmultiplied(46, 36, 24, 72);
+        let modal = egui::Modal::new(egui::Id::unique("rollback_modal"))
+            .backdrop_color(veil)
+            .frame(
+                egui::Frame::new()
+                    .fill(CARD)
+                    .stroke(egui::Stroke::new(1.0, LINE))
+                    .corner_radius(16)
+                    .shadow(motion::card_shadow())
+                    .inner_margin(egui::Margin::symmetric(26, 22)),
+            )
+            .show(ctx, |ui| {
+                ui.set_width(520.0);
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.label(
+                            egui::RichText::new("恢复点")
+                                .size(20.0)
+                                .family(bold_family()),
+                        );
+                        ui.label(
+                            egui::RichText::new(
+                                "恢复 Mod、配置和内容索引；恢复前会自动留一份当前状态",
+                            )
+                            .size(10.0)
+                            .color(MUTED),
+                        );
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            egui::RichText::new(format!("保留最近 {} 个", rollback::KEEP))
+                                .size(9.0)
+                                .color(MUTED),
+                        );
+                    });
+                });
+                ui.add_space(12.0);
+                if let Some(note) = &self.rollback_notice {
+                    ui.label(egui::RichText::new(note).size(10.0).color(OK));
+                    ui.add_space(6.0);
+                }
+                if let Some(err) = &self.rollback_error {
+                    ui.label(egui::RichText::new(err).size(10.0).color(DANGER));
+                    ui.add_space(6.0);
+                }
+                ui.horizontal(|ui| {
+                    if self.rollback_busy {
+                        ui.spinner();
+                        ui.label(egui::RichText::new("正在处理内容…").size(10.0).color(MUTED));
+                    } else if motion::primary_sized(ui, "立即创建恢复点", true, 128.0, 32.0, 11.0)
+                    {
+                        create = true;
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if motion::secondary_sized(ui, "完成", true, 68.0, 30.0, 11.0).clicked() {
+                            close = true;
+                        }
+                    });
+                });
+                ui.add_space(10.0);
+                egui::ScrollArea::vertical()
+                    .max_height(300.0)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        if self.rollback_points.is_empty() {
+                            ui.add_space(18.0);
+                            ui.vertical_centered(|ui| {
+                                ui.label(
+                                    egui::RichText::new("还没有恢复点")
+                                        .size(14.0)
+                                        .family(bold_family()),
+                                );
+                                ui.add_space(4.0);
+                                ui.label(
+                                    egui::RichText::new(
+                                        "安装或更新内容前会自动创建一个；也可以手动创建。",
+                                    )
+                                    .size(10.0)
+                                    .color(MUTED),
+                                );
+                            });
+                            ui.add_space(18.0);
+                        }
+                        for point in &self.rollback_points {
+                            egui::Frame::new()
+                                .fill(PANEL)
+                                .stroke(egui::Stroke::new(1.0, LINE))
+                                .corner_radius(10)
+                                .inner_margin(egui::Margin::symmetric(12, 9))
+                                .show(ui, |ui| {
+                                    ui.set_width(496.0);
+                                    ui.horizontal(|ui| {
+                                        ui.vertical(|ui| {
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "{} · {}",
+                                                    human_age(point.created_at),
+                                                    point.reason
+                                                ))
+                                                .size(11.5)
+                                                .family(bold_family()),
+                                            );
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "{} 个文件 · {}",
+                                                    point.files.len(),
+                                                    human_size(point.bytes)
+                                                ))
+                                                .size(9.0)
+                                                .color(MUTED),
+                                            );
+                                        });
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                if self.rollback_confirm.as_deref()
+                                                    == Some(point.id.as_str())
+                                                {
+                                                    if ui
+                                                        .add(
+                                                            egui::Button::new(
+                                                                egui::RichText::new("确认恢复")
+                                                                    .size(10.0)
+                                                                    .color(DANGER),
+                                                            )
+                                                            .fill(egui::Color32::from_rgb(
+                                                                255, 226, 220,
+                                                            ))
+                                                            .stroke(egui::Stroke::new(1.0, DANGER)),
+                                                        )
+                                                        .clicked()
+                                                    {
+                                                        restore = Some(point.id.clone());
+                                                    }
+                                                    if motion::secondary_sized(
+                                                        ui, "取消", true, 52.0, 24.0, 10.0,
+                                                    )
+                                                    .clicked()
+                                                    {
+                                                        self.rollback_confirm = None;
+                                                    }
+                                                } else {
+                                                    if motion::secondary_sized(
+                                                        ui, "恢复", true, 56.0, 24.0, 10.0,
+                                                    )
+                                                    .clicked()
+                                                    {
+                                                        self.rollback_confirm =
+                                                            Some(point.id.clone());
+                                                    }
+                                                    if ui
+                                                        .add(
+                                                            egui::Button::new(
+                                                                egui::RichText::new("删除")
+                                                                    .size(10.0)
+                                                                    .color(MUTED),
+                                                            )
+                                                            .fill(egui::Color32::TRANSPARENT)
+                                                            .stroke(egui::Stroke::NONE),
+                                                        )
+                                                        .clicked()
+                                                    {
+                                                        delete = Some(point.id.clone());
+                                                    }
+                                                }
+                                            },
+                                        );
+                                    });
+                                });
+                            ui.add_space(6.0);
+                        }
+                    });
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new("只恢复内容，不动世界存档；世界备份在「存档」里。")
+                        .size(9.0)
+                        .color(MUTED),
+                );
+            });
+        if modal.backdrop_response.clicked() {
+            close = true;
+        }
+        if create {
+            self.start_rollback_backup();
+        }
+        if let Some(id) = restore {
+            self.start_rollback_restore(id);
+        }
+        if let Some(id) = delete
+            && let Some(dir) = self.mods_game_dir.clone()
+        {
+            match rollback::delete(&dir, &id) {
+                Ok(()) => {
+                    self.rollback_notice = Some("已删除恢复点".into());
+                    self.reload_rollback_points();
+                }
+                Err(e) => self.rollback_error = Some(e.to_string()),
+            }
+        }
+        if close {
+            self.show_rollback = false;
+        }
+    }
+
     fn start_login(&mut self) {
         if self.login_busy {
             return;
@@ -1636,6 +1938,10 @@ impl App {
                 return;
             }
         }
+        if let Err(e) = rollback::backup(&game_dir, "导入本地文件前") {
+            self.error = Some(format!("无法创建恢复点: {e}"));
+            return;
+        }
         match installed::import_local(&game_dir, mods::ContentKind::Mod, &path) {
             Ok(entry) => {
                 self.notice = Some(format!("已导入 {}", entry.name));
@@ -1727,6 +2033,12 @@ impl App {
             })
         };
         std::thread::spawn(move || {
+            if let Err(e) = rollback::backup(&game_dir, "更新内容前") {
+                if let Ok(tx) = tx.lock() {
+                    let _ = tx.send(Msg::ModsFailed(format!("无法创建恢复点: {e}")));
+                }
+                return;
+            }
             let old_entries = installed::load(&game_dir).entries;
             let empty = BTreeSet::new();
             let mut updated = 0usize;
@@ -2135,6 +2447,12 @@ impl App {
             })
         };
         std::thread::spawn(move || {
+            if let Err(e) = rollback::backup(&game_dir, &format!("安装 {} 前", project.name)) {
+                if let Ok(tx) = tx.lock() {
+                    let _ = tx.send(Msg::ModsFailed(format!("无法创建恢复点: {e}")));
+                }
+                return;
+            }
             let result = mods::install_project(&game_dir, kind, &project, &mc, loader, &sink);
             let msg = match result {
                 Ok(report) => Msg::ModsDone(format!(
@@ -2251,6 +2569,8 @@ impl App {
         };
         let kind = self.mods_kind;
         let mods_dir = game_dir.join(kind.folder());
+        let rollback_dir = game_dir.clone();
+        let rollback_reason = format!("安装 {} 前", version.file_name);
         if let Err(e) = std::fs::create_dir_all(&mods_dir) {
             self.mods_error = Some(format!("创建 mods 目录失败: {e}"));
             return;
@@ -2288,6 +2608,12 @@ impl App {
             })
         };
         std::thread::spawn(move || {
+            if let Err(e) = rollback::backup(&rollback_dir, &rollback_reason) {
+                if let Ok(tx) = tx.lock() {
+                    let _ = tx.send(Msg::ModsFailed(format!("无法创建恢复点: {e}")));
+                }
+                return;
+            }
             let result = mods::plan(&version, &mc, loader, &optional).and_then(|plan| {
                 let report = mods::download_plan(&mods_dir, &plan, false, &sink)?;
                 if let Some(game_dir) = mods_dir.parent() {
@@ -2346,6 +2672,11 @@ impl App {
             }
         }
         if let Some(rx) = &self.login_rx {
+            while let Ok(msg) = rx.try_recv() {
+                messages.push(msg);
+            }
+        }
+        if let Some(rx) = &self.rollback_rx {
             while let Ok(msg) = rx.try_recv() {
                 messages.push(msg);
             }
@@ -2652,6 +2983,20 @@ impl App {
                             self.reload_saves();
                         }
                         Err(e) => self.saves_error = Some(e),
+                    }
+                }
+                Msg::RollbackDone(result) => {
+                    self.rollback_busy = false;
+                    self.rollback_rx = None;
+                    match result {
+                        Ok(note) => {
+                            self.rollback_notice = Some(note);
+                            self.rollback_error = None;
+                            self.reload_rollback_points();
+                            self.refresh_installed_keys();
+                            self.start_mods_scan();
+                        }
+                        Err(e) => self.rollback_error = Some(e),
                     }
                 }
                 Msg::LoginBrowser(url) => {
@@ -5767,6 +6112,7 @@ impl App {
         let mut toggles: Vec<(installed::InstalledEntry, bool)> = Vec::new();
         let mut deletes: Vec<installed::InstalledEntry> = Vec::new();
         let mut open_dir = false;
+        let mut open_rollback = false;
 
         let entries_all: Vec<installed::InstalledEntry> = self
             .mods_installed
@@ -5817,6 +6163,13 @@ impl App {
                         .size(10.5)
                         .color(MUTED),
                 );
+            }
+            ui.add_space(8.0);
+            if motion::secondary_sized(ui, "恢复点", true, 66.0, 24.0, 10.0)
+                .on_hover_text("恢复 Mod / 配置到之前的状态")
+                .clicked()
+            {
+                open_rollback = true;
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if accent_outline(ui, "＋ 导入文件").clicked() {
@@ -6045,13 +6398,17 @@ impl App {
         }
 
         if import && let Some(path) = pick_content_file(kind) {
-            match installed::import_local(&game_dir, kind, &path) {
-                Ok(entry) => {
-                    self.mods_notice = Some(format!("已导入 {}", entry.name));
-                    self.mods_error = None;
-                    self.start_mods_scan();
+            if let Err(e) = rollback::backup(&game_dir, "导入内容前") {
+                self.mods_error = Some(format!("无法创建恢复点: {e}"));
+            } else {
+                match installed::import_local(&game_dir, kind, &path) {
+                    Ok(entry) => {
+                        self.mods_notice = Some(format!("已导入 {}", entry.name));
+                        self.mods_error = None;
+                        self.start_mods_scan();
+                    }
+                    Err(e) => self.mods_error = Some(e.to_string()),
                 }
-                Err(e) => self.mods_error = Some(e.to_string()),
             }
         }
         if rescan {
@@ -6082,6 +6439,10 @@ impl App {
             }
         }
         for entry in deletes {
+            if let Err(e) = rollback::backup(&game_dir, "删除内容前") {
+                self.mods_error = Some(format!("无法创建恢复点: {e}"));
+                break;
+            }
             match installed::remove(&game_dir, &entry) {
                 Ok(()) => {
                     self.mods_notice = Some(format!("已删除 {}", entry.name));
@@ -6099,6 +6460,9 @@ impl App {
         }
         if go_browse {
             self.show_browse();
+        }
+        if open_rollback {
+            self.open_rollback();
         }
     }
 
@@ -7209,6 +7573,7 @@ impl eframe::App for App {
             || self.saves_rx.is_some()
             || self.mods_rx.is_some()
             || self.mods_scan_rx.is_some()
+            || self.rollback_rx.is_some()
             || self.mods_browse_loading
             || !self.mods_icons_pending.is_empty()
         {
@@ -7270,6 +7635,7 @@ impl eframe::App for App {
         });
         self.account_overlay(ui.ctx());
         self.settings_overlay(ui.ctx());
+        self.rollback_overlay(ui.ctx());
     }
 }
 

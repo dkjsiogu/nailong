@@ -25,6 +25,11 @@
   <url type="bugtracker">https://github.com/dkjsiogu/nailong/issues</url>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.20.0" date="2026-10-25">
+      <description>
+        <p>Instance content restore points: mods, configs, resource packs, shaders and the content index are stored in a deduplicated object store, snapshotted automatically before installs, updates, imports and deletes. The Content page gains a restore-point dialog with manual creation, verified restore and a safety point of the current state. World saves keep their own separate snapshot system.</p>
+      </description>
+    </release>
     <release version="0.19.0" date="2026-10-25">
       <description>
         <p>The play-first product pass: the home screen is rebuilt around a single primary action and a recent world, while account, memory, Java, paths and logs move into a sidebar Settings dialog with persisted preferences. Decorative status rings, dashboard cards and quick-action clutter are removed from Home.</p>
