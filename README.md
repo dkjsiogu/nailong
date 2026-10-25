@@ -8,7 +8,7 @@
 
 **简体中文** | [English](README.en.md)
 
-> 当前版本：**0.20.0**（预览版）
+> 当前版本：**0.21.0**（预览版）
 >
 > 目标：小体积、少依赖、安装过程可见、中断可补。功能边界见 [实现状态](docs/design/14-implementation-status.md)。
 
@@ -27,6 +27,8 @@ nailong 的思路很直：
 
 ## 界面
 
+0.21 把“装之前先看一眼”补上：卡片 `+` 和详情页「安装」都会先弹出确认清单——装到哪个版本、实际写哪个目录、版本/文件、预计大小、会一起装的前置，以及安装前会自动创建恢复点；确认后才下载，取消不写盘。首次启动不再直接进入安装表单，而是三步引导：**确认 Java → 确认游戏目录 → 安装第一个版本或导入整合包**。没有版本时，启动台就是这张引导页。
+
 0.20 把“坏了能救”做进内容库：安装、更新、导入、删除 Mod/资源包/光影前会自动留一个**恢复点**；装坏了在内容页点「恢复点」就能回到之前，恢复前还会为当前状态再留一份。恢复点存 Mod、配置、资源包、光影和内容索引，按整文件 SHA-1 去重，默认保留最近 10 份，不含世界存档（世界有自己的快照）。
 
 0.19 把启动台从“仪表盘”收成一个主行动：**当前版本、开始游戏、版本详情、最近世界、最近内容**。账户、玩家名、内存、Java、游戏目录、数据目录和日志全部收进侧边栏底部的「设置」，玩家名与内存会保存到数据目录，重启后还在。产品方向写在 [产品 brief](docs/product/00-brief.md)：**装得干净，坏了能救**。
@@ -41,7 +43,7 @@ nailong 的思路很直：
 | **内容 · 已安装** | **存档** |
 | ![内容 · 已安装](docs/screenshots/07-installed.png) | ![存档](docs/screenshots/11-saves.png) |
 
-更多截图（版本、安装、搜索、详情、更新、空状态、欢迎页、进度、账户弹窗、设置、恢复点）：[docs/screenshots](docs/screenshots)。动效约 20 秒，包含启动台、设置弹窗、恢复点、内容库、卡片悬停、详情返回和存档页。
+更多截图（版本、安装、搜索、详情、更新、空状态、首次启动、进度、账户弹窗、设置、恢复点、安装确认）：[docs/screenshots](docs/screenshots)。动效约 18 秒，包含首次启动引导、安装表单、安装确认、取消返回、内容详情和设置弹窗。
 
 ## 特性
 
@@ -90,6 +92,7 @@ nailong 的思路很直：
 - 浏览和安装都锁定当前选中版本：Mod 跟随该版本的加载器，资源包/光影只跟随 Minecraft 版本。
 - 下载到该版本的 `mods/`、`resourcepacks/` 或 `shaderpacks/`。普通版本首次下载会启用独立 `gameDir`（`versions/<id>/`），不会和其他版本互相污染；根目录旧存档不会自动迁移。
 - 「已安装」模式就是内容管理：按名称筛选、开关启用、检查更新、逐项/全部更新、重复项目提醒；删除走 `⋯` 菜单里的行内二次确认，更新一个禁用项不会把它悄悄启用。
+- **安装确认**：卡片 `+` 和详情安装都先看清单（目标版本、写入目录、版本/大小、前置、恢复点说明），确认才下载；取消不写盘。
 - **恢复点**：安装、更新、导入、删除内容前自动创建；内容页「恢复点」可手动创建、恢复、删除。恢复前自动留一份当前状态，恢复时校验对象哈希；留点失败会中止操作，不静默继续。
 - 支持本地 `.jar` 拖入/导入，以及资源包/光影的本地 `.zip` 导入。
 - 同名文件内容相同则跳过，内容不同会报冲突，不静默覆盖；更新会替换旧版本并保留索引。
@@ -112,14 +115,14 @@ nailong 的思路很直：
 | 平台 | 文件 | 大小 | 要求 |
 |---|---|---:|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | 约 8 MB | Windows 10/11，Java 21 |
-| Linux x64 (deb) | [nailong_0.20.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.20.0_amd64.deb) | 约 3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
+| Linux x64 (deb) | [nailong_0.21.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.21.0_amd64.deb) | 约 3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
 
 校验值：[SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS)。
 
 ### Windows
 
 1. 下载 `nailong.exe`，放到任意目录，双击运行。
-2. 第一次打开就是安装页：选 Minecraft 版本，再选 Fabric / NeoForge / Forge / 原版，点“安装”。
+2. 第一次打开是三步引导：确认 Java、确认目录，再点“安装第一个版本”；选 Minecraft 版本和 Fabric / NeoForge / Forge / 原版，点“安装”。
 3. 进度走完后回到主页，点“启动游戏”。
 
 需要系统里有 **Java 21**。启动器会自动查找；没找到时界面会提示。
@@ -129,7 +132,7 @@ nailong 的思路很直：
 ### Linux（Debian / Ubuntu）
 
 ```bash
-sudo apt install ./nailong_0.20.0_amd64.deb
+sudo apt install ./nailong_0.21.0_amd64.deb
 nailong
 ```
 
@@ -164,7 +167,7 @@ sudo apt remove nailong
 
 已经实际跑过的：
 
-- GUI：1120×720 与最小 900×620 下逐页走查，覆盖侧边栏四入口、内容发现/已安装、搜索、详情、更新横幅、删除确认、空状态、存档快照、设置弹窗、内容恢复点、进度页和账户/登录弹窗；20 张截图和 20 秒动效 GIF 在 `docs/screenshots/`。
+- GUI：1120×720 与最小 900×620 下逐页走查，覆盖侧边栏四入口、首次启动引导、安装确认、内容发现/已安装、搜索、详情、更新横幅、删除确认、空状态、存档快照、设置弹窗、内容恢复点、进度页和账户/登录弹窗；21 张截图和 18 秒动效 GIF 在 `docs/screenshots/`。
 - Linux（Xvfb + Mesa）：Fabric 0.19.5、NeoForge 21.1.209、Forge 52.1.20 在 1.21.1 启动到主菜单。
 - Fabulously Optimized `.mrpack`：151 个模组加载并启动。
 - CurseForge：真实文件通过无 key 的官方下载页回退下载成功；官方 API key 实测返回文件名、大小、SHA1 和下载地址。

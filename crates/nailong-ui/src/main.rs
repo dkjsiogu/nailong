@@ -72,6 +72,14 @@ fn mod_loader(kind: LoaderKind) -> Option<mods::Loader> {
     }
 }
 
+/// 「安装到」的完整说明：游戏版本 + 加载器 + 加载器版本。
+fn target_label(row: &Row) -> String {
+    match row.loader_version.as_deref() {
+        Some(version) => format!("{} · {} {}", row.mc, row.loader.name(), version),
+        None => format!("{} · {}", row.mc, row.loader.name()),
+    }
+}
+
 #[derive(Clone)]
 struct Row {
     id: String,
@@ -208,6 +216,38 @@ struct Shelf {
     projects: Vec<mods::Project>,
 }
 
+/// 安装确认里列出的一个前置。
+#[derive(Clone)]
+struct ReviewDependency {
+    name: String,
+    required: bool,
+    missing: bool,
+}
+
+/// 写入磁盘之前给玩家看的最后一张清单。
+#[derive(Clone)]
+struct InstallReview {
+    name: String,
+    kind: mods::ContentKind,
+    target: String,
+    path: String,
+    version: String,
+    size: Option<u64>,
+    dependencies: Vec<ReviewDependency>,
+    quick: bool,
+}
+
+#[derive(Clone)]
+enum InstallRequest {
+    Quick(mods::Project),
+    Detail,
+}
+
+struct PendingInstall {
+    review: InstallReview,
+    request: InstallRequest,
+}
+
 type CfCategoryFetch = (mods::ContentKind, Result<Vec<mods::CurseCategory>, String>);
 
 fn project_key(project: &mods::Project) -> String {
@@ -221,6 +261,7 @@ struct App {
     username: String,
     memory: u32,
     java_ok: bool,
+    java_label: Option<String>,
     show_install: bool,
     show_manage: bool,
     show_mods: bool,
@@ -315,6 +356,7 @@ struct App {
     rollback_notice: Option<String>,
     rollback_error: Option<String>,
     rollback_rx: Option<mpsc::Receiver<Msg>>,
+    pending_install: Option<PendingInstall>,
     page_key: u8,
     page_enter_at: f64,
     modal_key: u8,
@@ -346,7 +388,9 @@ fn load_ui_prefs(root: &Root) -> (String, u32) {
 
 impl App {
     fn new(root: Root) -> Self {
-        let java_ok = java::find_all().iter().any(|j| j.major >= 21);
+        let javas = java::find_all();
+        let java_ok = javas.iter().any(|j| j.major >= 21);
+        let java_label = javas.iter().find(|j| j.major >= 21).map(|j| j.label());
         let account = auth::load(&root);
         let backup_cfg = snapshots::load_config(&root);
         let (username, memory) = load_ui_prefs(&root);
@@ -368,6 +412,7 @@ impl App {
             username,
             memory,
             java_ok,
+            java_label,
             show_install: false,
             show_manage: false,
             show_mods: false,
@@ -461,6 +506,7 @@ impl App {
             rollback_notice: None,
             rollback_error: None,
             rollback_rx: None,
+            pending_install: None,
             page_key: 255,
             page_enter_at: 0.0,
             modal_key: 0,
@@ -575,17 +621,20 @@ impl App {
             app.start_mods_search();
         }
         #[cfg(debug_assertions)]
+        if std::env::var("NAILONG_DEBUG_REVIEW").as_deref() == Ok("quick")
+            && app.show_mods
+            && let Some(project) = app.mods_selected.clone()
+        {
+            app.review_quick_install(project);
+        }
+        #[cfg(debug_assertions)]
         if std::env::var_os("NAILONG_DEBUG_OPEN_SAVES").is_some()
             && let Some(row) = app.selected_row().or_else(|| app.rows.first().cloned())
         {
             app.open_saves(row);
         }
-        if app.visible_count() == 0 {
-            if app.rows.is_empty() {
-                app.open_install();
-            } else {
-                app.show_manage = true;
-            }
+        if app.visible_count() == 0 && !app.rows.is_empty() {
+            app.show_manage = true;
         }
         #[cfg(debug_assertions)]
         if std::env::var("NAILONG_DEBUG_SCREEN").as_deref() == Ok("welcome") {
@@ -1726,6 +1775,217 @@ impl App {
         }
     }
 
+    /// 安装确认：玩家点下安装之后、真正写盘之前，再看一眼清单。
+    fn install_review_overlay(&mut self, ctx: &egui::Context) {
+        let Some(pending) = self.pending_install.as_ref() else {
+            return;
+        };
+        let review = pending.review.clone();
+        let mut cancel = false;
+        let mut confirm = false;
+        let veil = egui::Color32::from_rgba_unmultiplied(46, 36, 24, 72);
+        let modal = egui::Modal::new(egui::Id::unique("install_review_modal"))
+            .backdrop_color(veil)
+            .frame(
+                egui::Frame::new()
+                    .fill(CARD)
+                    .stroke(egui::Stroke::new(1.0, LINE))
+                    .corner_radius(16)
+                    .shadow(motion::card_shadow())
+                    .inner_margin(egui::Margin::symmetric(26, 22)),
+            )
+            .show(ctx, |ui| {
+                ui.set_width(500.0);
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.label(
+                            egui::RichText::new("确认安装")
+                                .size(20.0)
+                                .family(bold_family()),
+                        );
+                        ui.label(
+                            egui::RichText::new("先确认写入位置，再开始下载")
+                                .size(10.0)
+                                .color(MUTED),
+                        );
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        tag_fill(ui, review.kind.label(), MUTED, SURFACE2);
+                    });
+                });
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(short_text(&review.name, 58))
+                            .size(15.0)
+                            .family(bold_family()),
+                    );
+                    if review.quick {
+                        ui.label(
+                            egui::RichText::new("一键安装")
+                                .size(9.0)
+                                .color(MUTED),
+                        );
+                    }
+                });
+                ui.add_space(9.0);
+                egui::Frame::new()
+                    .fill(PANEL)
+                    .stroke(egui::Stroke::new(1.0, LINE))
+                    .corner_radius(10)
+                    .inner_margin(egui::Margin::symmetric(12, 10))
+                    .show(ui, |ui| {
+                        ui.set_width(476.0);
+                        install_review_row(ui, "安装到", &review.target);
+                        ui.add_space(5.0);
+                        install_review_row(ui, "写入目录", &review.path);
+                        ui.add_space(5.0);
+                        install_review_row(ui, "版本", &review.version);
+                        if let Some(size) = review.size {
+                            ui.add_space(5.0);
+                            install_review_row(ui, "预计大小", &human_size(size));
+                        }
+                        ui.add_space(5.0);
+                        install_review_row(ui, "影响范围", "只写这个版本的内容目录，不动世界存档");
+                    });
+                ui.add_space(12.0);
+                if review.quick {
+                    ui.label(
+                        egui::RichText::new(
+                            "点「确认安装」后才会解析最新兼容版本与必需前置；解析失败不会改动现有文件。",
+                        )
+                        .size(10.0)
+                        .color(MUTED),
+                    );
+                } else if review.dependencies.is_empty() {
+                    ui.horizontal(|ui| {
+                        status_dot(ui, true);
+                        ui.label(
+                            egui::RichText::new("没有额外前置，只安装这一个文件")
+                                .size(10.5)
+                                .color(MUTED),
+                        );
+                    });
+                } else {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "一起安装 {} 个前置",
+                                review.dependencies.len()
+                            ))
+                            .size(11.5)
+                            .family(bold_family()),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new("必需自动勾选，可选按你的选择")
+                                    .size(9.0)
+                                    .color(MUTED),
+                            );
+                        });
+                    });
+                    ui.add_space(6.0);
+                    egui::ScrollArea::vertical()
+                        .id_salt("install_review_deps")
+                        .max_height(112.0)
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            for dependency in &review.dependencies {
+                                ui.horizontal(|ui| {
+                                    if dependency.required {
+                                        tag_fill(
+                                            ui,
+                                            "必需",
+                                            ACCENT_TEXT,
+                                            egui::Color32::from_rgb(255, 243, 214),
+                                        );
+                                    } else {
+                                        tag_fill(ui, "可选", MUTED, SURFACE2);
+                                    }
+                                    ui.add_space(3.0);
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(short_text(
+                                                &dependency.name,
+                                                44,
+                                            ))
+                                            .size(11.0),
+                                        )
+                                        .truncate(),
+                                    );
+                                    if dependency.missing {
+                                        ui.label(
+                                            egui::RichText::new("缺失")
+                                                .size(9.0)
+                                                .color(WARN),
+                                        );
+                                    }
+                                });
+                                ui.add_space(4.0);
+                            }
+                        });
+                }
+                ui.add_space(12.0);
+                egui::Frame::new()
+                    .fill(egui::Color32::from_rgb(255, 248, 232))
+                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(244, 222, 178)))
+                    .corner_radius(10)
+                    .inner_margin(egui::Margin::symmetric(12, 10))
+                    .show(ui, |ui| {
+                        ui.set_width(476.0);
+                        ui.label(
+                            egui::RichText::new("安装前自动创建恢复点")
+                                .size(11.0)
+                                .family(bold_family())
+                                .color(ACCENT_TEXT),
+                        );
+                        ui.label(
+                            egui::RichText::new(
+                                "装完发现不对，在「内容 › 恢复点」一键回到现在。",
+                            )
+                            .size(9.5)
+                            .color(MUTED),
+                        );
+                    });
+                ui.add_space(14.0);
+                ui.horizontal(|ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if motion::primary_sized_glyph(
+                            ui,
+                            "确认安装",
+                            true,
+                            118.0,
+                            34.0,
+                            12.0,
+                            motion::PrimaryGlyph::Download,
+                        ) {
+                            confirm = true;
+                        }
+                        ui.add_space(8.0);
+                        if motion::secondary_sized(ui, "取消", true, 76.0, 34.0, 11.5)
+                            .clicked()
+                        {
+                            cancel = true;
+                        }
+                    });
+                });
+            });
+        if modal.backdrop_response.clicked()
+            || ctx.input(|input| input.key_pressed(egui::Key::Escape))
+        {
+            cancel = true;
+        }
+        if cancel {
+            self.pending_install = None;
+        }
+        if confirm && let Some(pending) = self.pending_install.take() {
+            match pending.request {
+                InstallRequest::Quick(project) => self.quick_install(project),
+                InstallRequest::Detail => self.start_mods_download(),
+            }
+        }
+    }
+
     fn start_login(&mut self) {
         if self.login_busy {
             return;
@@ -2393,6 +2653,103 @@ impl App {
             let texture = ctx.load_texture(&key, color, egui::TextureOptions::LINEAR);
             self.mods_icons.insert(key, texture);
         }
+    }
+
+    /// 一键安装前先把清单摆出来：装到哪、写什么、是否会动恢复点。
+    fn review_quick_install(&mut self, project: mods::Project) {
+        if self.busy.is_some() {
+            return;
+        }
+        let Some(row) = self.mods_row.clone() else {
+            self.mods_error = Some("先在右上角「安装到」选一个版本，再点 +".into());
+            return;
+        };
+        if self.mods_kind == mods::ContentKind::Mod && mod_loader(row.loader).is_none() {
+            self.mods_error = Some("原版不能装 Mod，先装 Fabric / NeoForge / Forge".into());
+            return;
+        }
+        let Some(path) = self.mods_game_dir.clone() else {
+            self.mods_error = Some("目标目录无效".into());
+            return;
+        };
+        self.pending_install = Some(PendingInstall {
+            review: InstallReview {
+                name: project.name.clone(),
+                kind: self.mods_kind,
+                target: target_label(&row),
+                path: path.display().to_string(),
+                version: "最新兼容版本 · 自动解析前置".into(),
+                size: None,
+                dependencies: Vec::new(),
+                quick: true,
+            },
+            request: InstallRequest::Quick(project),
+        });
+    }
+
+    /// 详情页的安装同样先确认，尤其是前置和可选依赖都选好之后。
+    fn review_detail_install(&mut self) {
+        if self.busy.is_some() {
+            return;
+        }
+        let Some(project) = self.mods_selected.clone() else {
+            return;
+        };
+        let Some(version) = self.mods_version.clone() else {
+            return;
+        };
+        let Some(row) = self.mods_row.clone() else {
+            self.mods_error = Some("先在「安装到」选一个版本".into());
+            return;
+        };
+        let Some(path) = self.mods_game_dir.clone() else {
+            self.mods_error = Some("目标目录无效".into());
+            return;
+        };
+        let mut dependencies = Vec::new();
+        let mut size = version.size.unwrap_or(0);
+        for choice in &self.mods_choices {
+            let key = (
+                choice.dependency.source,
+                choice.dependency.project_id.clone(),
+            );
+            let required = choice.dependency.kind == mods::DependencyKind::Required;
+            let optional = choice.dependency.kind == mods::DependencyKind::Optional;
+            if !required && !(optional && self.mods_optional.contains(&key)) {
+                continue;
+            }
+            let name = choice
+                .project
+                .as_ref()
+                .map(|project| project.name.clone())
+                .or_else(|| choice.dependency.name.clone())
+                .unwrap_or_else(|| choice.dependency.project_id.clone());
+            if let Some(dep) = &choice.version {
+                size += dep.size.unwrap_or(0);
+            }
+            dependencies.push(ReviewDependency {
+                name,
+                required,
+                missing: choice.version.is_none(),
+            });
+        }
+        self.pending_install = Some(PendingInstall {
+            review: InstallReview {
+                name: project.name.clone(),
+                kind: self.mods_kind,
+                target: target_label(&row),
+                path: path.display().to_string(),
+                version: format!(
+                    "{} · {}",
+                    version.version_number,
+                    short_text(&version.file_name, 42)
+                ),
+                size: (size > 0).then_some(size),
+                dependencies,
+                quick: false,
+            },
+            request: InstallRequest::Detail,
+        });
     }
 
     /// 一键安装：不选版本、不点详情，直接装最新兼容版 + 必需前置。
@@ -3371,15 +3728,18 @@ impl App {
         }
     }
 
-    /// 一个版本都没有时的启动台：不急着把安装表单糊到脸上。
+    /// 首次启动：把 Java、目录和第一个版本排成三步，别一上来就甩表单。
     fn welcome_view(&mut self, ui: &mut egui::Ui) {
-        let width = (ui.available_width() - 48.0).clamp(320.0, 560.0);
+        let width = (ui.available_width() - 48.0).clamp(320.0, 720.0);
         let pad = ((ui.available_width() - width) / 2.0).max(0.0);
+        let content_w = width - 48.0;
         let mut install = false;
+        let mut import_pack = false;
+        let mut recheck = false;
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                ui.add_space(70.0);
+                ui.add_space(46.0);
                 ui.horizontal(|ui| {
                     ui.add_space(pad);
                     ui.vertical(|ui| {
@@ -3389,91 +3749,279 @@ impl App {
                             ui.add_space(11.0);
                             ui.label(
                                 egui::RichText::new("欢迎使用 nailong")
-                                    .size(32.0)
+                                    .size(31.0)
                                     .family(bold_family()),
                             );
                         });
-                        ui.add_space(7.0);
-                        ui.label(
-                            egui::RichText::new(
-                                "轻量、快速、原生启动。先装一个版本，启动台就会亮起来。",
-                            )
-                            .size(12.0)
-                            .color(MUTED),
-                        );
-                        ui.add_space(24.0);
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new("装得干净，坏了能救。")
+                                    .size(13.0)
+                                    .family(bold_family())
+                                    .color(ACCENT_TEXT),
+                            );
+                            ui.label(
+                                egui::RichText::new("第一次启动，只需要把这三件事准备好。")
+                                    .size(11.0)
+                                    .color(MUTED),
+                            );
+                        });
+                        ui.add_space(20.0);
                         egui::Frame::new()
                             .fill(SURFACE)
                             .stroke(egui::Stroke::new(1.0, LINE))
                             .corner_radius(16)
                             .shadow(motion::card_shadow())
-                            .inner_margin(egui::Margin::symmetric(28, 28))
+                            .inner_margin(egui::Margin::symmetric(24, 20))
                             .show(ui, |ui| {
-                                ui.set_width(width - 56.0);
-                                ui.vertical_centered(|ui| {
+                                ui.set_width(content_w);
+                                ui.horizontal(|ui| {
                                     ui.label(
-                                        egui::RichText::new("还没有安装版本")
-                                            .size(18.0)
+                                        egui::RichText::new("开始之前")
+                                            .size(17.0)
                                             .family(bold_family()),
                                     );
-                                    ui.add_space(5.0);
-                                    ui.label(
-                                        egui::RichText::new(
-                                            "原版或 Fabric / NeoForge，装好就能直接开玩",
-                                        )
-                                        .size(10.5)
-                                        .color(MUTED),
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            ui.label(
+                                                egui::RichText::new("大约 1 分钟")
+                                                    .size(9.5)
+                                                    .color(MUTED),
+                                            );
+                                        },
                                     );
-                                    ui.add_space(18.0);
+                                });
+                                ui.add_space(10.0);
+                                ui.separator();
+                                ui.add_space(12.0);
+
+                                // 第一步：Java。没有 Java 不拦着下载，但先把路说清楚。
+                                ui.horizontal_top(|ui| {
+                                    onboarding_badge(ui, "1", self.java_ok);
+                                    ui.add_space(10.0);
+                                    ui.allocate_ui_with_layout(
+                                        egui::vec2(content_w - 236.0, 1.0),
+                                        egui::Layout::top_down(egui::Align::LEFT),
+                                        |ui| {
+                                            ui.set_width(content_w - 236.0);
+                                            ui.label(
+                                                egui::RichText::new("确认 Java")
+                                                    .size(14.0)
+                                                    .family(bold_family()),
+                                            );
+                                            ui.label(
+                                                egui::RichText::new(
+                                                    "启动游戏需要 Java 21 或更高；下载版本本身不需要。",
+                                                )
+                                                .size(10.0)
+                                                .color(MUTED),
+                                            );
+                                            if let Some(label) = &self.java_label {
+                                                ui.add_space(3.0);
+                                                ui.label(
+                                                    egui::RichText::new(short_text(label, 46))
+                                                        .size(9.5)
+                                                        .color(OK),
+                                                )
+                                                .on_hover_text(label);
+                                            }
+                                        },
+                                    );
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            ui.vertical(|ui| {
+                                                if self.java_ok {
+                                                    ui.horizontal(|ui| {
+                                                        status_dot(ui, true);
+                                                        ui.label(
+                                                            egui::RichText::new("已就绪")
+                                                                .size(10.5)
+                                                                .color(OK),
+                                                        );
+                                                    });
+                                                } else {
+                                                    ui.label(
+                                                        egui::RichText::new("未找到合适的 Java")
+                                                            .size(10.5)
+                                                            .color(WARN),
+                                                    );
+                                                    ui.add_space(5.0);
+                                                    if motion::secondary_sized(
+                                                        ui,
+                                                        "打开 Java 下载页",
+                                                        true,
+                                                        146.0,
+                                                        30.0,
+                                                        10.5,
+                                                    )
+                                                    .clicked()
+                                                    {
+                                                        open_url(
+                                                            "https://adoptium.net/temurin/releases/?version=21",
+                                                        );
+                                                    }
+                                                    if action_link(ui, "重新检测").clicked() {
+                                                        recheck = true;
+                                                    }
+                                                }
+                                            });
+                                        },
+                                    );
+                                });
+                                ui.add_space(12.0);
+                                ui.separator();
+                                ui.add_space(12.0);
+
+                                // 第二步：目录。玩家只需要知道东西放在哪。
+                                ui.horizontal_top(|ui| {
+                                    onboarding_badge(ui, "2", true);
+                                    ui.add_space(10.0);
+                                    ui.allocate_ui_with_layout(
+                                        egui::vec2(content_w - 236.0, 1.0),
+                                        egui::Layout::top_down(egui::Align::LEFT),
+                                        |ui| {
+                                            ui.set_width(content_w - 236.0);
+                                            ui.label(
+                                                egui::RichText::new("确认游戏目录")
+                                                    .size(14.0)
+                                                    .family(bold_family()),
+                                            );
+                                            ui.label(
+                                                egui::RichText::new(
+                                                    "版本、Mod 和存档都在这里，不写系统目录。",
+                                                )
+                                                .size(10.0)
+                                                .color(MUTED),
+                                            );
+                                        },
+                                    );
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            ui.vertical(|ui| {
+                                                let path = self.root.dir().display().to_string();
+                                                ui.add(
+                                                    egui::Label::new(
+                                                        egui::RichText::new(short_text(&path, 34))
+                                                            .size(9.5)
+                                                            .color(MUTED),
+                                                    )
+                                                    .truncate(),
+                                                )
+                                                .on_hover_text(&path);
+                                                if action_link(ui, "打开目录").clicked() {
+                                                    open_folder(self.root.dir());
+                                                }
+                                            });
+                                        },
+                                    );
+                                });
+                                ui.add_space(12.0);
+                                ui.separator();
+                                ui.add_space(12.0);
+
+                                // 第三步：只留一个主行动，整合包是次选。
+                                ui.horizontal_top(|ui| {
+                                    onboarding_badge(ui, "3", false);
+                                    ui.add_space(10.0);
+                                    ui.vertical(|ui| {
+                                        ui.label(
+                                            egui::RichText::new("装第一个游戏配置")
+                                                .size(14.0)
+                                                .family(bold_family()),
+                                        );
+                                        ui.label(
+                                            egui::RichText::new(
+                                                "原版 / Fabric / NeoForge 都可以；整合包会顺带装好加载器和 Mod。",
+                                            )
+                                            .size(10.0)
+                                            .color(MUTED),
+                                        );
+                                    });
+                                });
+                                ui.add_space(12.0);
+                                ui.horizontal(|ui| {
                                     if motion::primary_sized_glyph(
                                         ui,
                                         "安装第一个版本",
                                         true,
-                                        210.0,
+                                        198.0,
                                         40.0,
-                                        13.5,
+                                        13.0,
                                         motion::PrimaryGlyph::Download,
                                     ) {
                                         install = true;
                                     }
+                                    if motion::secondary_sized(
+                                        ui,
+                                        "导入整合包",
+                                        true,
+                                        112.0,
+                                        38.0,
+                                        11.0,
+                                    )
+                                    .clicked()
+                                    {
+                                        import_pack = true;
+                                    }
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            ui.label(
+                                                egui::RichText::new(
+                                                    "装完就能在启动台点开始",
+                                                )
+                                                .size(9.5)
+                                                .color(MUTED),
+                                            );
+                                        },
+                                    );
                                 });
                             });
-                        ui.add_space(16.0);
+                        ui.add_space(12.0);
                         ui.horizontal(|ui| {
-                            status_dot(ui, self.java_ok);
+                            status_dot(ui, true);
                             ui.label(
-                                egui::RichText::new(if self.java_ok {
-                                    "Java 21 已检测到"
-                                } else {
-                                    "未检测到 Java 21，安装后需要配置"
-                                })
-                                .size(10.0)
-                                .color(if self.java_ok {
-                                    MUTED
-                                } else {
-                                    WARN
-                                }),
+                                egui::RichText::new(
+                                    "下载会校验完整性；内容变更前自动创建恢复点。Java 缺失时也能先装版本。",
+                                )
+                                .size(9.5)
+                                .color(MUTED),
                             );
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
-                                    if action_link(ui, "打开数据目录").clicked() {
-                                        open_folder(self.root.dir());
-                                    }
                                     ui.label(
-                                        egui::RichText::new(self.root.dir().display().to_string())
-                                            .size(9.0)
-                                            .color(MUTED),
+                                        egui::RichText::new(format!(
+                                            "v{}",
+                                            env!("CARGO_PKG_VERSION")
+                                        ))
+                                        .size(9.0)
+                                        .color(MUTED),
                                     );
                                 },
                             );
                         });
-                        ui.add_space(28.0);
+                        ui.add_space(24.0);
                     });
                 });
             });
+        if recheck {
+            let runtimes = java::find_all();
+            self.java_ok = runtimes.iter().any(|runtime| runtime.major >= 21);
+            self.java_label = runtimes
+                .iter()
+                .find(|runtime| runtime.major >= 21)
+                .map(|runtime| runtime.label());
+        }
         if install {
             self.open_install();
+        }
+        if import_pack && let Some(path) = pick_modpack() {
+            self.start_modpack(path);
         }
     }
 
@@ -4440,7 +4988,7 @@ impl App {
             self.start_shelf(sort);
         }
         for project in installs {
-            self.quick_install(project);
+            self.review_quick_install(project);
         }
         if let Some(note) = &self.mods_notice {
             ui.add_space(10.0);
@@ -4530,7 +5078,7 @@ impl App {
         }
         self.mods_results = results;
         for project in installs {
-            self.quick_install(project);
+            self.review_quick_install(project);
         }
         if !self.mods_loading && self.mods_results.is_empty() && self.mods_error.is_none() {
             ui.add_space(16.0);
@@ -5453,7 +6001,7 @@ impl App {
             }
         }
         if install {
-            self.start_mods_download();
+            self.review_detail_install();
         }
     }
 
@@ -7636,6 +8184,7 @@ impl eframe::App for App {
         self.account_overlay(ui.ctx());
         self.settings_overlay(ui.ctx());
         self.rollback_overlay(ui.ctx());
+        self.install_review_overlay(ui.ctx());
     }
 }
 
@@ -8083,6 +8632,38 @@ fn card() -> egui::Frame {
         .shadow(motion::card_shadow())
         .inner_margin(egui::Margin::same(18))
         .shadow(motion::card_shadow())
+}
+
+/// 首次启动的步骤编号：完成的一步用绿色，未完成用暖色。
+fn onboarding_badge(ui: &mut egui::Ui, number: &str, done: bool) {
+    egui::Frame::new()
+        .fill(if done {
+            egui::Color32::from_rgb(232, 246, 238)
+        } else {
+            SURFACE2
+        })
+        .corner_radius(9)
+        .inner_margin(egui::Margin::symmetric(9, 6))
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new(number)
+                    .size(11.0)
+                    .family(bold_family())
+                    .color(if done { OK } else { ACCENT_TEXT }),
+            );
+        });
+}
+
+/// 安装确认里的一行「标签 + 值」。长路径省略显示，悬停可看全。
+fn install_review_row(ui: &mut egui::Ui, label: &str, value: &str) {
+    ui.horizontal(|ui| {
+        ui.add_sized(
+            [64.0, 16.0],
+            egui::Label::new(egui::RichText::new(label).size(10.0).color(MUTED)),
+        );
+        ui.add(egui::Label::new(egui::RichText::new(value).size(11.0)).truncate())
+            .on_hover_text(value);
+    });
 }
 
 fn ghost_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
