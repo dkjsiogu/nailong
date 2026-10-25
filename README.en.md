@@ -8,7 +8,7 @@ A small, native Minecraft: Java Edition launcher written in Rust. Windows ships 
 
 [简体中文](README.md) | **English**
 
-> Current version: **0.21.0** (preview)
+> Current version: **0.22.0** (preview)
 >
 > Goals: small binaries, few dependencies, visible install progress, and a repair path after interruption. See [implementation status](docs/design/14-implementation-status.md) for exact boundaries.
 
@@ -26,6 +26,8 @@ nailong tries to do one thing simply:
 It is not a universal launcher, and it is not 1.0 yet. What works and what does not is laid out below.
 
 ## Interface
+
+0.22 makes restore points loader-aware: when content lives in an isolated version directory, the version JSON and patched client jar are stored with the point and restored exactly — the old patched jar is removed first, so rolling back to vanilla does not leave it behind. Reinstalling or repairing an existing loader takes a point first. Shared `libraries/` are not copied because old libraries are never deleted; world saves keep their own snapshot system, and custom external `gameDir` instances restore content only.
 
 0.21 adds a confirmation step before anything is written: the card `+` and the detail-page install button now show project, target version, actual destination directory, version/file, size, dependencies and a restore-point note. Nothing downloads until you confirm, and cancelling writes nothing. First launch no longer drops you straight into the install form; it walks through **Java → game directory → install your first version or import a modpack** in one page.
 
@@ -92,7 +94,7 @@ Drag a `.mrpack` or `.zip` into the window to start an import. A single mod `.ja
 - Files go into that version's `mods/`, `resourcepacks/` or `shaderpacks/`. A normal version gets an isolated `gameDir` (`versions/<id>/`) on first download; existing saves in the root are not migrated.
 - **Installed** mode is the content manager: filter by name, toggle files, check for updates, update one or all, and see duplicate warnings. Delete asks inline from the `⋯` menu, and updating a disabled file keeps it disabled.
 - **Install confirmation**: the card `+` and detail install both show target, destination directory, version/file, size, dependencies and the restore-point note before anything is written; cancelling leaves disk untouched.
-- **Restore points**: created automatically before content installs, updates, imports and deletes; the Content page's restore-point dialog can create, restore or delete points. Restoring takes a safety point first and verifies every stored object by SHA-1. A failed point creation aborts the operation instead of continuing silently.
+- **Restore points**: created automatically before content installs, updates, imports, deletes and loader reinstalls; the Content page's restore-point dialog can create, restore or delete points. In isolated instances the version JSON and patched client jar are stored too. Restoring takes a safety point first and verifies every stored object by SHA-1. A failed point creation aborts the operation instead of continuing silently.
 - Local `.jar` drag/import is supported, as is local `.zip` import for resource packs and shaders.
 - Identical existing files are skipped; conflicts are reported, never silently overwritten. Updates replace the old version and keep the index in sync.
 
@@ -114,7 +116,7 @@ Drag a `.mrpack` or `.zip` into the window to start an import. A single mod `.ja
 | Platform | File | Size | Requirements |
 |---|---|---:|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | ~8 MB | Windows 10/11, Java 21 |
-| Linux x64 (deb) | [nailong_0.21.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.21.0_amd64.deb) | ~3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
+| Linux x64 (deb) | [nailong_0.22.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.22.0_amd64.deb) | ~3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
 
 Checksums: [SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS).
 

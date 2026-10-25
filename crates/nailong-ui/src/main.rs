@@ -80,6 +80,17 @@ fn target_label(row: &Row) -> String {
     }
 }
 
+/// 只有内容直接写进版本目录时，版本身份/补丁 jar 才在恢复点范围内。
+fn loader_state_files(root: &Root, row: &Row, game_dir: &std::path::Path) -> Vec<String> {
+    if game_dir != root.version_dir(&row.profile) {
+        return Vec::new();
+    }
+    vec![
+        format!("{}.json", row.profile),
+        format!("{}.jar", row.profile),
+    ]
+}
+
 #[derive(Clone)]
 struct Row {
     id: String,
@@ -953,6 +964,9 @@ impl App {
         self.log.push(format!("安装 {target_label}"));
 
         let root = self.root.clone();
+        let point_dir = root.version_dir(&target);
+        let point_files = vec![format!("{target}.json"), format!("{target}.jar")];
+        let point_json = point_dir.join(format!("{target}.json"));
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         let tx = Arc::new(Mutex::new(tx));
@@ -965,6 +979,15 @@ impl App {
             })
         };
         std::thread::spawn(move || {
+            // 重装/修复已有加载器前留一份，恢复点里会带上版本 JSON 与补丁 jar。
+            if point_json.is_file()
+                && let Err(e) = rollback::backup_extra(&point_dir, "更新加载器前", &point_files)
+            {
+                if let Ok(tx) = tx.lock() {
+                    let _ = tx.send(Msg::InstallFailed(format!("无法创建恢复点: {e}")));
+                }
+                return;
+            }
             let result: Result<String, Error> = match loader {
                 LoaderKind::Vanilla => {
                     vanilla::install_with(&root, &mc, "official", &sink).map(|()| target.clone())
@@ -1527,8 +1550,13 @@ impl App {
         self.rollback_error = None;
         let (tx, rx) = mpsc::channel();
         self.rollback_rx = Some(rx);
+        let loader = self
+            .mods_row
+            .as_ref()
+            .map(|row| loader_state_files(&self.root, row, &dir))
+            .unwrap_or_default();
         std::thread::spawn(move || {
-            let result = rollback::backup(&dir, "手动恢复点")
+            let result = rollback::backup_extra(&dir, "手动恢复点", &loader)
                 .map(|point| {
                     format!(
                         "已创建恢复点（{} 个文件，{}）",
@@ -1593,7 +1621,7 @@ impl App {
                         );
                         ui.label(
                             egui::RichText::new(
-                                "恢复 Mod、配置和内容索引；恢复前会自动留一份当前状态",
+                                "恢复 Mod、配置、内容索引和加载器版本文件；恢复前会自动留一份当前状态",
                             )
                             .size(10.0)
                             .color(MUTED),
@@ -1646,7 +1674,7 @@ impl App {
                                 ui.add_space(4.0);
                                 ui.label(
                                     egui::RichText::new(
-                                        "安装或更新内容前会自动创建一个；也可以手动创建。",
+                                        "安装或更新内容前会自动创建一个；版本目录内的加载器 JSON / 补丁 jar 也会一起保存。",
                                     )
                                     .size(10.0)
                                     .color(MUTED),
@@ -1745,7 +1773,7 @@ impl App {
                     });
                 ui.add_space(4.0);
                 ui.label(
-                    egui::RichText::new("只恢复内容，不动世界存档；世界备份在「存档」里。")
+                    egui::RichText::new("只恢复内容与加载器版本文件，不动世界存档；世界备份在「存档」里。")
                         .size(9.0)
                         .color(MUTED),
                 );
@@ -2198,7 +2226,8 @@ impl App {
                 return;
             }
         }
-        if let Err(e) = rollback::backup(&game_dir, "导入本地文件前") {
+        let loader = loader_state_files(&self.root, &row, &game_dir);
+        if let Err(e) = rollback::backup_extra(&game_dir, "导入本地文件前", &loader) {
             self.error = Some(format!("无法创建恢复点: {e}"));
             return;
         }
@@ -2276,6 +2305,7 @@ impl App {
         let loader = mod_loader(row.loader).unwrap_or(mods::Loader::Fabric);
         let mc = row.mc.clone();
         let dir = game_dir.join(kind.folder());
+        let loader_files = loader_state_files(&self.root, &row, &game_dir);
         cancel::reset();
         self.cancel_requested = false;
         self.busy = Some(Task::Mods);
@@ -2293,7 +2323,7 @@ impl App {
             })
         };
         std::thread::spawn(move || {
-            if let Err(e) = rollback::backup(&game_dir, "更新内容前") {
+            if let Err(e) = rollback::backup_extra(&game_dir, "更新内容前", &loader_files) {
                 if let Ok(tx) = tx.lock() {
                     let _ = tx.send(Msg::ModsFailed(format!("无法创建恢复点: {e}")));
                 }
@@ -2792,6 +2822,7 @@ impl App {
         self.progress = Some(Progress::stage(format!("安装 {}", project.name)));
         self.progress_label = project.name.clone();
         let mc = row.mc.clone();
+        let loader_files = loader_state_files(&self.root, &row, &game_dir);
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         let tx = Arc::new(Mutex::new(tx));
@@ -2804,7 +2835,11 @@ impl App {
             })
         };
         std::thread::spawn(move || {
-            if let Err(e) = rollback::backup(&game_dir, &format!("安装 {} 前", project.name)) {
+            if let Err(e) = rollback::backup_extra(
+                &game_dir,
+                &format!("安装 {} 前", project.name),
+                &loader_files,
+            ) {
                 if let Ok(tx) = tx.lock() {
                     let _ = tx.send(Msg::ModsFailed(format!("无法创建恢复点: {e}")));
                 }
@@ -2928,6 +2963,7 @@ impl App {
         let mods_dir = game_dir.join(kind.folder());
         let rollback_dir = game_dir.clone();
         let rollback_reason = format!("安装 {} 前", version.file_name);
+        let loader_files = loader_state_files(&self.root, &row, &game_dir);
         if let Err(e) = std::fs::create_dir_all(&mods_dir) {
             self.mods_error = Some(format!("创建 mods 目录失败: {e}"));
             return;
@@ -2965,7 +3001,7 @@ impl App {
             })
         };
         std::thread::spawn(move || {
-            if let Err(e) = rollback::backup(&rollback_dir, &rollback_reason) {
+            if let Err(e) = rollback::backup_extra(&rollback_dir, &rollback_reason, &loader_files) {
                 if let Ok(tx) = tx.lock() {
                     let _ = tx.send(Msg::ModsFailed(format!("无法创建恢复点: {e}")));
                 }
@@ -6945,8 +6981,13 @@ impl App {
             }
         }
 
+        let loader_files = self
+            .mods_row
+            .as_ref()
+            .map(|row| loader_state_files(&self.root, row, &game_dir))
+            .unwrap_or_default();
         if import && let Some(path) = pick_content_file(kind) {
-            if let Err(e) = rollback::backup(&game_dir, "导入内容前") {
+            if let Err(e) = rollback::backup_extra(&game_dir, "导入内容前", &loader_files) {
                 self.mods_error = Some(format!("无法创建恢复点: {e}"));
             } else {
                 match installed::import_local(&game_dir, kind, &path) {
@@ -6987,7 +7028,7 @@ impl App {
             }
         }
         for entry in deletes {
-            if let Err(e) = rollback::backup(&game_dir, "删除内容前") {
+            if let Err(e) = rollback::backup_extra(&game_dir, "删除内容前", &loader_files) {
                 self.mods_error = Some(format!("无法创建恢复点: {e}"));
                 break;
             }

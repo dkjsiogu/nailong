@@ -32,6 +32,10 @@ pub struct Snapshot {
     pub reason: String,
     pub bytes: u64,
     pub files: Vec<Entry>,
+    /// Loader metadata/binary files managed by this point (direct children of
+    /// `game_dir`). Older snapshots lack this field and default to empty.
+    #[serde(default)]
+    pub extra_files: Vec<String>,
 }
 
 fn instance_dir(game_dir: &Path) -> PathBuf {
@@ -130,16 +134,27 @@ fn walk(
 /// The manifest is written after every object is safely in the store; old
 /// points are pruned to [`KEEP`].
 pub fn backup(game_dir: &Path, reason: &str) -> Result<Snapshot> {
+    backup_extra(game_dir, reason, &[])
+}
+
+/// Like [`backup`], but also snapshots direct-child files such as the version
+/// JSON and patched client jar. Files absent at backup time are recorded so a
+/// later restore removes a loader file that did not exist before.
+pub fn backup_extra(game_dir: &Path, reason: &str, extra: &[String]) -> Result<Snapshot> {
     let objects = objects_dir(game_dir);
     fs::create_dir_all(&objects).map_err(|e| crate::error::io(&objects, e))?;
-    let mut files = Vec::new();
+    let mut files: Vec<Entry> = Vec::new();
     let mut bytes = 0u64;
     let mut add = |relative: &Path, path: &Path| -> Result<()> {
+        let relative = relative.to_string_lossy().replace('\\', "/");
+        if files.iter().any(|entry| entry.path == relative) {
+            return Ok(());
+        }
         let (hash, size) = hash_file(path)?;
         store_object(game_dir, path, &hash)?;
         bytes += size;
         files.push(Entry {
-            path: relative.to_string_lossy().replace('\\', "/"),
+            path: relative,
             size,
             hash,
         });
@@ -157,6 +172,24 @@ pub fn backup(game_dir: &Path, reason: &str) -> Result<Snapshot> {
             add(Path::new(name), &path)?;
         }
     }
+    let mut extra_files = Vec::new();
+    for name in extra {
+        let relative = safe_relative(name)?;
+        if relative.components().count() != 1 {
+            return Err(Error::Install(format!(
+                "恢复点附加文件必须是直接子文件: {name}"
+            )));
+        }
+        if extra_files.contains(name) {
+            continue;
+        }
+        let path = game_dir.join(&relative);
+        if path.is_file() {
+            add(&relative, &path)?;
+        }
+        extra_files.push(name.clone());
+    }
+    extra_files.sort();
     files.sort_by(|a, b| a.path.cmp(&b.path));
     let created_at = now();
     let snapshot = Snapshot {
@@ -169,6 +202,7 @@ pub fn backup(game_dir: &Path, reason: &str) -> Result<Snapshot> {
         },
         bytes,
         files,
+        extra_files,
     };
     let dir = snapshots_dir(game_dir);
     fs::create_dir_all(&dir).map_err(|e| crate::error::io(&dir, e))?;
@@ -218,6 +252,20 @@ pub fn restore(game_dir: &Path, id: &str) -> Result<usize> {
     }
     for name in ROOT_FILES {
         let path = game_dir.join(name);
+        if path.is_file() {
+            fs::remove_file(&path).map_err(|e| crate::error::io(&path, e))?;
+        }
+    }
+    // Loader files are a small, explicit set; remove them so restoring a
+    // pre-loader state does not leave a stale patched jar behind.
+    for name in &snapshot.extra_files {
+        let relative = safe_relative(name)?;
+        if relative.components().count() != 1 {
+            return Err(Error::Install(format!(
+                "恢复点附加文件必须是直接子文件: {name}"
+            )));
+        }
+        let path = game_dir.join(&relative);
         if path.is_file() {
             fs::remove_file(&path).map_err(|e| crate::error::io(&path, e))?;
         }
@@ -373,6 +421,36 @@ mod tests {
         // A safety point for the broken state must exist.
         let points = list(&game).unwrap();
         assert!(points.iter().any(|point| point.reason.contains("恢复")));
+    }
+
+    #[test]
+    fn loader_files_restore_exactly() {
+        let game = temp_game("loader");
+        fs::write(game.join("1.21.1.json"), b"loader-v1").unwrap();
+        fs::write(game.join("1.21.1.jar"), b"jar-v1").unwrap();
+        let extra = vec![
+            "1.21.1.json".to_string(),
+            "1.21.1.jar".to_string(),
+            "playerdata.json".to_string(),
+        ];
+        let point = backup_extra(&game, "加载器更新前", &extra).unwrap();
+        assert_eq!(point.files.len(), 2);
+        assert_eq!(point.extra_files.len(), 3);
+
+        fs::write(game.join("1.21.1.json"), b"loader-v2").unwrap();
+        fs::remove_file(game.join("1.21.1.jar")).unwrap();
+        fs::write(game.join("playerdata.json"), b"added-later").unwrap();
+        restore(&game, &point.id).unwrap();
+        assert_eq!(fs::read(game.join("1.21.1.json")).unwrap(), b"loader-v1");
+        assert_eq!(fs::read(game.join("1.21.1.jar")).unwrap(), b"jar-v1");
+        assert!(!game.join("playerdata.json").exists());
+    }
+
+    #[test]
+    fn old_snapshot_without_extra_files_still_loads() {
+        let json = r#"{"id":"1","created_at":0,"reason":"old","bytes":0,"files":[]}"#;
+        let snapshot: Snapshot = serde_json::from_str(json).unwrap();
+        assert!(snapshot.extra_files.is_empty());
     }
 
     #[test]

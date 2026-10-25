@@ -25,6 +25,11 @@
   <url type="bugtracker">https://github.com/dkjsiogu/nailong/issues</url>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.22.0" date="2026-10-25">
+      <description>
+        <p>Loader-aware restore points: version JSON and patched client jar inside an isolated version directory are stored with the content restore point and restored exactly. Reinstalling or repairing an existing loader takes a point first. Shared libraries are not copied, and world saves keep their separate snapshot system.</p>
+      </description>
+    </release>
     <release version="0.21.0" date="2026-10-25">
       <description>
         <p>Install confirmation and first-launch onboarding: every content install now shows the target version, destination directory, file, size, dependencies and a restore-point note before writing; cancelling leaves disk untouched. First launch becomes a three-step guide for Java 21+, the game directory, and installing the first version or importing a modpack.</p>

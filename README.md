@@ -8,7 +8,7 @@
 
 **简体中文** | [English](README.en.md)
 
-> 当前版本：**0.21.0**（预览版）
+> 当前版本：**0.22.0**（预览版）
 >
 > 目标：小体积、少依赖、安装过程可见、中断可补。功能边界见 [实现状态](docs/design/14-implementation-status.md)。
 
@@ -26,6 +26,8 @@ nailong 的思路很直：
 它不是“万能启动器”，也还不是 1.0。能做和不能做的，下文列清楚了。
 
 ## 界面
+
+0.22 让恢复点也管加载器：内容写进版本目录时，版本 JSON 和补丁 jar 会跟 Mod/配置一起进恢复点；恢复时先删掉这两个文件再按清单还原，不会出现“退回原版但还留着旧补丁 jar”。重装或修复已有加载器前也会自动留一份。共享 `libraries/` 不复制，旧库仍在；世界存档继续走独立快照。自定义外部 `gameDir` 的实例只恢复内容。
 
 0.21 把“装之前先看一眼”补上：卡片 `+` 和详情页「安装」都会先弹出确认清单——装到哪个版本、实际写哪个目录、版本/文件、预计大小、会一起装的前置，以及安装前会自动创建恢复点；确认后才下载，取消不写盘。首次启动不再直接进入安装表单，而是三步引导：**确认 Java → 确认游戏目录 → 安装第一个版本或导入整合包**。没有版本时，启动台就是这张引导页。
 
@@ -93,7 +95,7 @@ nailong 的思路很直：
 - 下载到该版本的 `mods/`、`resourcepacks/` 或 `shaderpacks/`。普通版本首次下载会启用独立 `gameDir`（`versions/<id>/`），不会和其他版本互相污染；根目录旧存档不会自动迁移。
 - 「已安装」模式就是内容管理：按名称筛选、开关启用、检查更新、逐项/全部更新、重复项目提醒；删除走 `⋯` 菜单里的行内二次确认，更新一个禁用项不会把它悄悄启用。
 - **安装确认**：卡片 `+` 和详情安装都先看清单（目标版本、写入目录、版本/大小、前置、恢复点说明），确认才下载；取消不写盘。
-- **恢复点**：安装、更新、导入、删除内容前自动创建；内容页「恢复点」可手动创建、恢复、删除。恢复前自动留一份当前状态，恢复时校验对象哈希；留点失败会中止操作，不静默继续。
+- **恢复点**：安装、更新、导入、删除内容、重装加载器前自动创建；内容页「恢复点」可手动创建、恢复、删除。默认实例会连版本 JSON 和补丁 jar 一起保存；恢复前自动留一份当前状态，恢复时校验对象哈希。留点失败会中止操作，不静默继续。
 - 支持本地 `.jar` 拖入/导入，以及资源包/光影的本地 `.zip` 导入。
 - 同名文件内容相同则跳过，内容不同会报冲突，不静默覆盖；更新会替换旧版本并保留索引。
 
@@ -115,7 +117,7 @@ nailong 的思路很直：
 | 平台 | 文件 | 大小 | 要求 |
 |---|---|---:|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | 约 8 MB | Windows 10/11，Java 21 |
-| Linux x64 (deb) | [nailong_0.21.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.21.0_amd64.deb) | 约 3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
+| Linux x64 (deb) | [nailong_0.22.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.22.0_amd64.deb) | 约 3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
 
 校验值：[SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS)。
 
@@ -132,7 +134,7 @@ nailong 的思路很直：
 ### Linux（Debian / Ubuntu）
 
 ```bash
-sudo apt install ./nailong_0.21.0_amd64.deb
+sudo apt install ./nailong_0.22.0_amd64.deb
 nailong
 ```
 
