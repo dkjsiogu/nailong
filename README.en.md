@@ -8,7 +8,7 @@ A small, native Minecraft: Java Edition launcher written in Rust. Windows ships 
 
 [简体中文](README.md) | **English**
 
-> Current version: **0.26.0** (preview)
+> Current version: **0.27.0** (preview)
 >
 > Goals: small binaries, few dependencies, visible install progress, and a repair path after interruption. See [implementation status](docs/design/14-implementation-status.md) for exact boundaries.
 
@@ -26,6 +26,8 @@ nailong tries to do one thing simply:
 It is not a universal launcher, and it is not 1.0 yet. What works and what does not is laid out below.
 
 ## Interface
+
+0.27 tightens the Settings dialog: memory is a 1 GB `− 4 GB +` stepper instead of a raw DragValue, the Java row shows the actual detected version with Recheck and a Download Java 21 link when missing, and name/memory/Java now use two rows instead of one crowded line.
 
 0.26 adds an update confirmation. “Update all” and a single row’s Update no longer overwrite files immediately: a checklist lists each project’s from → to version, the target instance, number of projects, download size, and notes that old files are cleaned up and a restore point is taken first. Updates and installs now share the same “look before writing” language.
 
@@ -124,7 +126,7 @@ Drag a `.mrpack` or `.zip` into the window to start an import. A single mod `.ja
 | Platform | File | Size | Requirements |
 |---|---|---:|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | ~8 MB | Windows 10/11, Java 21 |
-| Linux x64 (deb) | [nailong_0.26.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.26.0_amd64.deb) | ~3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
+| Linux x64 (deb) | [nailong_0.27.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.27.0_amd64.deb) | ~3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
 
 Checksums: [SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS).
 

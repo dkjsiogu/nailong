@@ -8,7 +8,7 @@
 
 **简体中文** | [English](README.en.md)
 
-> 当前版本：**0.26.0**（预览版）
+> 当前版本：**0.27.0**（预览版）
 >
 > 目标：小体积、少依赖、安装过程可见、中断可补。功能边界见 [实现状态](docs/design/14-implementation-status.md)。
 
@@ -26,6 +26,8 @@ nailong 的思路很直：
 它不是“万能启动器”，也还不是 1.0。能做和不能做的，下文列清楚了。
 
 ## 界面
+
+0.27 收设置弹窗：内存从裸输入框换成 `− 4 GB +` 的 1 GB 步进器；Java 行显示实际检测版本，可「重新检测」，缺失时直接给「下载 Java 21」；玩家名、内存、Java 拆成两行，不再挤在一条线上。
 
 0.26 给更新加确认：「全部更新」和单行「更新」不再直接覆盖文件，而是先弹确认清单——每个项目从哪个版本到哪个版本、目标版本、写入目录、项目数和下载大小，并说明旧文件会清理、更新前自动创建恢复点。更新和安装现在共用同一套“先看一眼再写盘”的语言。
 
@@ -125,7 +127,7 @@ nailong 的思路很直：
 | 平台 | 文件 | 大小 | 要求 |
 |---|---|---:|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | 约 8 MB | Windows 10/11，Java 21 |
-| Linux x64 (deb) | [nailong_0.26.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.26.0_amd64.deb) | 约 3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
+| Linux x64 (deb) | [nailong_0.27.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.27.0_amd64.deb) | 约 3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
 
 校验值：[SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS)。
 
@@ -142,7 +144,7 @@ nailong 的思路很直：
 ### Linux（Debian / Ubuntu）
 
 ```bash
-sudo apt install ./nailong_0.26.0_amd64.deb
+sudo apt install ./nailong_0.27.0_amd64.deb
 nailong
 ```
 

@@ -715,6 +715,15 @@ impl App {
         }
     }
 
+    fn refresh_java(&mut self) {
+        let runtimes = java::find_all();
+        self.java_ok = runtimes.iter().any(|runtime| runtime.major >= 21);
+        self.java_label = runtimes
+            .iter()
+            .find(|runtime| runtime.major >= 21)
+            .map(|runtime| runtime.label());
+    }
+
     fn refresh(&mut self) {
         self.home_cache = None;
         self.version_cache = None;
@@ -1359,6 +1368,7 @@ impl App {
         let mut open_account = false;
         let mut open_dir: Option<PathBuf> = None;
         let mut refresh = false;
+        let mut recheck_java = false;
         let veil = egui::Color32::from_rgba_unmultiplied(46, 36, 24, 72);
         let modal = egui::Modal::new(egui::Id::unique("settings_modal"))
             .backdrop_color(veil)
@@ -1459,28 +1469,35 @@ impl App {
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new("玩家名").size(10.5).color(MUTED));
                             text_field(ui, &mut self.username, "", 150.0);
-                            ui.add_space(12.0);
+                            ui.add_space(10.0);
                             ui.label(egui::RichText::new("内存").size(10.5).color(MUTED));
+                            memory_stepper(ui, &mut self.memory);
+                        });
+                        ui.add_space(8.0);
+                        ui.horizontal(|ui| {
+                            status_dot(ui, self.java_ok);
+                            let label = self.java_label.clone().unwrap_or_else(|| {
+                                if self.java_ok {
+                                    "Java 21+ 已检测".to_string()
+                                } else {
+                                    "未检测到 Java 21+".to_string()
+                                }
+                            });
                             ui.add(
-                                egui::DragValue::new(&mut self.memory)
-                                    .range(1024..=16384)
-                                    .suffix(" MB"),
-                            );
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    status_dot(ui, self.java_ok);
-                                    ui.label(
-                                        egui::RichText::new(if self.java_ok {
-                                            "Java 21 已检测"
-                                        } else {
-                                            "缺少 Java 21"
-                                        })
+                                egui::Label::new(
+                                    egui::RichText::new(short_text(&label, 34))
                                         .size(9.5)
                                         .color(if self.java_ok { MUTED } else { WARN }),
-                                    );
-                                },
-                            );
+                                )
+                                .truncate(),
+                            )
+                            .on_hover_text(&label);
+                            if action_link(ui, "重新检测").clicked() {
+                                recheck_java = true;
+                            }
+                            if !self.java_ok && action_link(ui, "下载 Java 21").clicked() {
+                                open_url("https://adoptium.net/temurin/releases/?version=21");
+                            }
                         });
                     });
                 ui.add_space(12.0);
@@ -1614,6 +1631,9 @@ impl App {
         }
         if refresh {
             self.refresh();
+        }
+        if recheck_java {
+            self.refresh_java();
         }
         if close {
             self.save_ui_config();
@@ -4324,12 +4344,7 @@ impl App {
                 });
             });
         if recheck {
-            let runtimes = java::find_all();
-            self.java_ok = runtimes.iter().any(|runtime| runtime.major >= 21);
-            self.java_label = runtimes
-                .iter()
-                .find(|runtime| runtime.major >= 21)
-                .map(|runtime| runtime.label());
+            self.refresh_java();
         }
         if install {
             self.open_install();
@@ -10060,6 +10075,40 @@ fn text_field(ui: &mut egui::Ui, text: &mut String, hint: &str, width: f32) -> e
                     .inner_margin(egui::Margin::symmetric(8, 4)),
             ),
     )
+}
+
+/// 内存用 1 GB 步进的紧凑步进器，比裸 DragValue 更像启动器设置。
+fn memory_stepper(ui: &mut egui::Ui, memory: &mut u32) {
+    let gb = (*memory as f32 / 1024.0).round().clamp(1.0, 16.0) as u32;
+    let button = |ui: &mut egui::Ui, text: &str, enabled: bool| {
+        ui.add_enabled(
+            enabled,
+            egui::Button::new(egui::RichText::new(text).size(12.0).color(MUTED))
+                .fill(PANEL)
+                .stroke(egui::Stroke::new(1.0, LINE))
+                .corner_radius(7)
+                .min_size(egui::vec2(24.0, 26.0)),
+        )
+        .clicked()
+    };
+    if button(ui, "−", gb > 1) {
+        *memory = (gb - 1) * 1024;
+    }
+    egui::Frame::new()
+        .fill(CARD)
+        .stroke(egui::Stroke::new(1.0, LINE))
+        .corner_radius(7)
+        .inner_margin(egui::Margin::symmetric(9, 4))
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new(format!("{gb} GB"))
+                    .size(11.0)
+                    .family(bold_family()),
+            );
+        });
+    if button(ui, "+", gb < 16) {
+        *memory = (gb + 1) * 1024;
+    }
 }
 
 fn detail_kv_label(ui: &mut egui::Ui, label: &str) {
