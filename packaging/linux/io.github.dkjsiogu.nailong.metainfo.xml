@@ -25,6 +25,11 @@
   <url type="bugtracker">https://github.com/dkjsiogu/nailong/issues</url>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.19.0" date="2026-10-25">
+      <description>
+        <p>The play-first product pass: the home screen is rebuilt around a single primary action and a recent world, while account, memory, Java, paths and logs move into a sidebar Settings dialog with persisted preferences. Decorative status rings, dashboard cards and quick-action clutter are removed from Home.</p>
+      </description>
+    </release>
     <release version="0.18.1" date="2026-10-25">
       <description>
         <p>Typography and control polish: a real bold CJK family for headings, list titles and primary buttons, a matte amber primary action with optional play/download glyphs, and layered secondary buttons with warm borders and contact shadows.</p>

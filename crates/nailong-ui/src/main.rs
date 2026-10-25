@@ -305,6 +305,7 @@ struct App {
     login_rx: Option<mpsc::Receiver<Msg>>,
     login_busy: bool,
     show_account: bool,
+    show_settings: bool,
     page_key: u8,
     page_enter_at: f64,
     modal_key: u8,
@@ -313,11 +314,33 @@ struct App {
     catalog_rx: Option<mpsc::Receiver<Msg>>,
 }
 
+/// 玩家名与内存存在数据目录的 `ui.json`，随设置弹窗关闭落盘。
+fn load_ui_prefs(root: &Root) -> (String, u32) {
+    let value = std::fs::read(root.dir().join("ui.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+    let username = value
+        .as_ref()
+        .and_then(|value| value.get("username"))
+        .and_then(|value| value.as_str())
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or("Player")
+        .to_string();
+    let memory = value
+        .as_ref()
+        .and_then(|value| value.get("memory"))
+        .and_then(|value| value.as_u64())
+        .unwrap_or(4096)
+        .clamp(1024, 16384) as u32;
+    (username, memory)
+}
+
 impl App {
     fn new(root: Root) -> Self {
         let java_ok = java::find_all().iter().any(|j| j.major >= 21);
         let account = auth::load(&root);
         let backup_cfg = snapshots::load_config(&root);
+        let (username, memory) = load_ui_prefs(&root);
         let (icon_jobs, icon_job_rx) = mpsc::channel::<(String, String)>();
         let (icon_done, icon_rx) = mpsc::channel::<(String, Vec<u8>)>();
         std::thread::spawn(move || {
@@ -333,8 +356,8 @@ impl App {
             root,
             rows: Vec::new(),
             selected: None,
-            username: "Player".into(),
-            memory: 4096,
+            username,
+            memory,
             java_ok,
             show_install: false,
             show_manage: false,
@@ -421,6 +444,7 @@ impl App {
             login_rx: None,
             login_busy: false,
             show_account: false,
+            show_settings: false,
             page_key: 255,
             page_enter_at: 0.0,
             modal_key: 0,
@@ -1108,6 +1132,295 @@ impl App {
             if close {
                 self.show_account = false;
             }
+        }
+    }
+
+    /// 设置不再是首页的一块卡片，也不是第五个一级页面；它只在这里出现。
+    fn settings_overlay(&mut self, ctx: &egui::Context) {
+        if !self.show_settings {
+            return;
+        }
+        let game_dir = self
+            .selected_row()
+            .map(|row| {
+                row.game_dir
+                    .clone()
+                    .unwrap_or_else(|| self.root.version_dir(&row.profile))
+            })
+            .unwrap_or_else(|| self.root.dir().to_path_buf());
+        let mut close = false;
+        let mut open_account = false;
+        let mut open_dir: Option<PathBuf> = None;
+        let mut refresh = false;
+        let veil = egui::Color32::from_rgba_unmultiplied(46, 36, 24, 72);
+        let modal = egui::Modal::new(egui::Id::unique("settings_modal"))
+            .backdrop_color(veil)
+            .frame(
+                egui::Frame::new()
+                    .fill(CARD)
+                    .stroke(egui::Stroke::new(1.0, LINE))
+                    .corner_radius(16)
+                    .shadow(motion::card_shadow())
+                    .inner_margin(egui::Margin::symmetric(26, 22)),
+            )
+            .show(ctx, |ui| {
+                ui.set_width(470.0);
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.label(egui::RichText::new("设置").size(20.0).family(bold_family()));
+                        ui.label(
+                            egui::RichText::new("账户、内存、Java 与本地目录")
+                                .size(10.0)
+                                .color(MUTED),
+                        );
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            egui::RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
+                                .size(9.0)
+                                .color(MUTED),
+                        );
+                    });
+                });
+                ui.add_space(14.0);
+
+                egui::Frame::new()
+                    .fill(PANEL)
+                    .stroke(egui::Stroke::new(1.0, LINE))
+                    .corner_radius(12)
+                    .inner_margin(egui::Margin::symmetric(14, 12))
+                    .show(ui, |ui| {
+                        ui.set_width(442.0);
+                        ui.horizontal(|ui| {
+                            if let Some(account) = &self.account {
+                                avatar_sized(ui, &account.name, 30.0);
+                                ui.add_space(8.0);
+                                ui.vertical(|ui| {
+                                    ui.label(
+                                        egui::RichText::new(&account.name)
+                                            .size(13.0)
+                                            .family(bold_family()),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new("Microsoft 账户 · 已登录")
+                                            .size(9.0)
+                                            .color(OK),
+                                    );
+                                });
+                            } else {
+                                avatar_sized(ui, &self.username, 30.0);
+                                ui.add_space(8.0);
+                                ui.vertical(|ui| {
+                                    ui.label(
+                                        egui::RichText::new(&self.username)
+                                            .size(13.0)
+                                            .family(bold_family()),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new("离线账户 · 单人 / 局域网")
+                                            .size(9.0)
+                                            .color(MUTED),
+                                    );
+                                });
+                            }
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    let label = if self.account.is_some() {
+                                        "管理账户"
+                                    } else {
+                                        "登录 Microsoft"
+                                    };
+                                    if motion::secondary_sized(ui, label, true, 112.0, 30.0, 10.5)
+                                        .clicked()
+                                    {
+                                        open_account = true;
+                                    }
+                                },
+                            );
+                        });
+                    });
+                ui.add_space(12.0);
+
+                egui::Frame::new()
+                    .fill(PANEL)
+                    .stroke(egui::Stroke::new(1.0, LINE))
+                    .corner_radius(12)
+                    .inner_margin(egui::Margin::symmetric(14, 12))
+                    .show(ui, |ui| {
+                        ui.set_width(442.0);
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("玩家名").size(10.5).color(MUTED));
+                            text_field(ui, &mut self.username, "", 150.0);
+                            ui.add_space(12.0);
+                            ui.label(egui::RichText::new("内存").size(10.5).color(MUTED));
+                            ui.add(
+                                egui::DragValue::new(&mut self.memory)
+                                    .range(1024..=16384)
+                                    .suffix(" MB"),
+                            );
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    status_dot(ui, self.java_ok);
+                                    ui.label(
+                                        egui::RichText::new(if self.java_ok {
+                                            "Java 21 已检测"
+                                        } else {
+                                            "缺少 Java 21"
+                                        })
+                                        .size(9.5)
+                                        .color(if self.java_ok { MUTED } else { WARN }),
+                                    );
+                                },
+                            );
+                        });
+                    });
+                ui.add_space(12.0);
+
+                egui::Frame::new()
+                    .fill(PANEL)
+                    .stroke(egui::Stroke::new(1.0, LINE))
+                    .corner_radius(12)
+                    .inner_margin(egui::Margin::symmetric(14, 12))
+                    .show(ui, |ui| {
+                        ui.set_width(442.0);
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("游戏目录").size(10.5).color(MUTED));
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if motion::secondary_sized(ui, "打开", true, 54.0, 24.0, 10.0)
+                                        .clicked()
+                                    {
+                                        open_dir = Some(game_dir.clone());
+                                    }
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(game_dir.display().to_string())
+                                                .size(9.0)
+                                                .color(MUTED),
+                                        )
+                                        .truncate(),
+                                    );
+                                },
+                            );
+                        });
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("数据目录").size(10.5).color(MUTED));
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if motion::secondary_sized(ui, "打开", true, 54.0, 24.0, 10.0)
+                                        .clicked()
+                                    {
+                                        open_dir = Some(self.root.dir().to_path_buf());
+                                    }
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(
+                                                self.root.dir().display().to_string(),
+                                            )
+                                            .size(9.0)
+                                            .color(MUTED),
+                                        )
+                                        .truncate(),
+                                    );
+                                },
+                            );
+                        });
+                    });
+                ui.add_space(12.0);
+
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new("诊断")
+                            .size(10.5)
+                            .family(bold_family())
+                            .color(MUTED),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if action_link(ui, "刷新版本列表").clicked() {
+                            refresh = true;
+                        }
+                    });
+                });
+                egui::CollapsingHeader::new(
+                    egui::RichText::new(format!("日志（最近 {} 条）", self.log.len().min(80)))
+                        .size(10.0)
+                        .color(MUTED),
+                )
+                .default_open(self.show_log)
+                .show(ui, |ui| {
+                    egui::Frame::new()
+                        .fill(PANEL)
+                        .stroke(egui::Stroke::new(1.0, LINE))
+                        .corner_radius(10)
+                        .inner_margin(egui::Margin::symmetric(10, 8))
+                        .show(ui, |ui| {
+                            ui.set_width(444.0);
+                            egui::ScrollArea::vertical()
+                                .max_height(110.0)
+                                .auto_shrink([false, false])
+                                .stick_to_bottom(true)
+                                .show(ui, |ui| {
+                                    for line in self.log.iter().rev().take(80).rev() {
+                                        ui.label(
+                                            egui::RichText::new(line)
+                                                .monospace()
+                                                .size(9.5)
+                                                .color(MUTED),
+                                        );
+                                    }
+                                });
+                        });
+                });
+                ui.add_space(14.0);
+                ui.horizontal(|ui| {
+                    if motion::secondary_sized(ui, "打开数据目录", true, 118.0, 32.0, 11.0)
+                        .clicked()
+                    {
+                        open_dir = Some(self.root.dir().to_path_buf());
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if motion::primary_sized(ui, "完成", true, 86.0, 32.0, 12.0) {
+                            close = true;
+                        }
+                    });
+                });
+            });
+        if modal.backdrop_response.clicked() {
+            close = true;
+        }
+        if open_account {
+            self.save_ui_config();
+            self.show_settings = false;
+            if self.account.is_some() {
+                self.show_account = true;
+            } else {
+                self.start_login();
+            }
+        }
+        if let Some(dir) = open_dir {
+            open_folder(&dir);
+        }
+        if refresh {
+            self.refresh();
+        }
+        if close {
+            self.save_ui_config();
+            self.show_settings = false;
+        }
+    }
+
+    fn save_ui_config(&self) {
+        let value = serde_json::json!({
+            "username": self.username,
+            "memory": self.memory,
+        });
+        if let Ok(bytes) = serde_json::to_vec_pretty(&value) {
+            let _ = std::fs::write(self.root.dir().join("ui.json"), bytes);
         }
     }
 
@@ -2527,6 +2840,7 @@ impl App {
         let enabled = !busy && !login_busy;
         let mut go: Option<Nav> = None;
         let mut account_clicked = false;
+        let mut settings_clicked = false;
 
         let panel = egui::Panel::left("shell_nav")
             .resizable(false)
@@ -2638,7 +2952,7 @@ impl App {
                 // Footer is placed with an explicit spacer: a nested
                 // bottom_up layout can shrink to its content and overlap the
                 // nav list in a side panel.
-                let footer = if wide { 84.0 } else { 62.0 };
+                let footer = if wide { 106.0 } else { 92.0 };
                 ui.add_space((ui.available_height() - footer).max(10.0));
                 if busy || login_busy {
                     ui.allocate_ui_with_layout(
@@ -2668,6 +2982,9 @@ impl App {
                     let response = sidebar_account(ui, &account_name, linked, wide);
                     if response.clicked() {
                         account_clicked = true;
+                    }
+                    if sidebar_settings(ui, wide, true).clicked() {
+                        settings_clicked = true;
                     }
                 }
                 ui.add_space(4.0);
@@ -2702,6 +3019,10 @@ impl App {
             } else {
                 self.start_login();
             }
+        }
+        if settings_clicked {
+            self.show_account = false;
+            self.show_settings = true;
         }
     }
 
@@ -2823,544 +3144,302 @@ impl App {
         };
         let width = (ui.available_width() - 48.0).clamp(320.0, 1000.0);
         let pad = ((ui.available_width() - width) / 2.0).max(0.0);
-        let gap = 20.0;
-        let left_w = if width >= 980.0 {
-            604.0
-        } else {
-            (width - gap - 300.0).max(480.0)
-        }
-        .min((width - gap - 280.0).max(320.0));
-        let right_w = width - left_w - gap;
-        let mut open_content = false;
-        let mut open_discover = false;
+        let game_dir = row
+            .game_dir
+            .clone()
+            .unwrap_or_else(|| self.root.version_dir(&row.profile));
+        let latest_world = saves::worlds(&game_dir).ok().and_then(|mut worlds| {
+            worlds.sort_by_key(|world| world.modified);
+            worlds.pop()
+        });
+        let (mods, packs, _shaders, world_count) = self.row_summary(&row);
+        let preview = self.content_preview(&row, 3);
+        let mut chosen: Option<String> = None;
+        let mut launch = false;
+        let mut repair = false;
+        let mut open_manage = false;
         let mut open_saves = false;
+        let mut open_content_installed = false;
+        let mut open_content_discover = false;
         let mut open_dir: Option<PathBuf> = None;
-        let mut login = false;
 
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.add_space(26.0);
-                let halo = ui.cursor().min + egui::vec2(left_w * 0.5, 140.0);
-                let pulse = ((ui.input(|input| input.time) as f32 * 0.8).sin() * 0.5 + 0.5) * 8.0;
-                motion::aura(
-                    ui,
-                    halo,
-                    430.0,
-                    egui::Color32::from_rgba_unmultiplied(245, 196, 81, (9.0 + pulse) as u8),
-                );
                 ui.horizontal(|ui| {
                     ui.add_space(pad);
                     ui.vertical(|ui| {
                         ui.set_width(width);
-                        ui.horizontal_top(|ui| {
-                            ui.allocate_ui_with_layout(
-                                egui::vec2(left_w, 318.0),
-                                egui::Layout::top_down(egui::Align::LEFT),
+                        ui.horizontal(|ui| {
+                            motion::accent_bar(ui, 24.0);
+                            ui.add_space(8.0);
+                            ui.label(
+                                egui::RichText::new("启动台")
+                                    .size(26.0)
+                                    .family(bold_family()),
+                            );
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
-                                    ui.set_width(left_w);
-                                    let hero = egui::Frame::new()
-                                        .fill(SURFACE)
-                                        .stroke(egui::Stroke::new(1.0, LINE))
-                                        .corner_radius(14)
-                                        .shadow(motion::card_shadow())
-                                        .inner_margin(egui::Margin::symmetric(20, 18))
-                                        .show(ui, |ui| {
-                                            ui.set_width(left_w - 40.0);
-                                            ui.set_min_height(240.0);
-                                            motion::hero_rule(ui, 20.0);
-                                            ui.horizontal(|ui| {
-                                                ui.label(
-                                                    egui::RichText::new("当前版本")
-                                                        .size(10.5)
-                                                        .color(MUTED),
-                                                );
-                                                ui.with_layout(
-                                                    egui::Layout::right_to_left(
-                                                        egui::Align::Center,
-                                                    ),
-                                                    |ui| {
-                                                        let mut chosen = row.id.clone();
-                                                        egui::ComboBox::from_id_salt(
-                                                            "installed_version",
-                                                        )
-                                                        .selected_text(
-                                                            egui::RichText::new("切换").size(10.5),
-                                                        )
-                                                        .width(64.0)
-                                                        .show_ui(ui, |ui| {
-                                                            for item in &rows {
-                                                                ui.selectable_value(
-                                                                    &mut chosen,
-                                                                    item.id.clone(),
-                                                                    item.label.clone(),
-                                                                );
-                                                            }
-                                                        });
-                                                        if chosen != row.id {
-                                                            self.selected = Some(chosen);
-                                                        }
-                                                    },
-                                                );
-                                            });
-                                            ui.add_space(4.0);
-                                            ui.label(
-                                                egui::RichText::new(&row.label)
-                                                    .size(26.0)
-                                                    .family(bold_family()),
-                                            );
-                                            ui.add_space(4.0);
-                                            ui.horizontal(|ui| {
-                                                status_dot(ui, row.health.missing == 0);
-                                                ui.label(
-                                                    egui::RichText::new(format!(
-                                                        "{} · {}",
-                                                        row.mc,
-                                                        row.loader.name()
-                                                    ))
-                                                    .size(11.0)
-                                                    .color(MUTED),
-                                                );
-                                                ui.label(
-                                                    egui::RichText::new("·")
-                                                        .size(11.0)
-                                                        .color(MUTED),
-                                                );
-                                                ui.label(
-                                                    egui::RichText::new(
-                                                        if row.health.missing == 0 {
-                                                            "安装完整".to_string()
-                                                        } else {
-                                                            format!(
-                                                                "缺 {} 个文件",
-                                                                row.health.missing
-                                                            )
-                                                        },
-                                                    )
-                                                    .size(11.0)
-                                                    .color(if row.health.missing == 0 {
-                                                        OK
-                                                    } else {
-                                                        WARN
-                                                    }),
-                                                );
-                                            });
-                                            ui.add_space(14.0);
-                                            ui.separator();
-                                            ui.add_space(12.0);
-                                            let (mods, packs, shaders, worlds) =
-                                                self.row_summary(&row);
-                                            ui.horizontal(|ui| {
-                                                inline_stat(ui, mods, "Mod");
-                                                inline_dot(ui);
-                                                inline_stat(ui, packs, "资源包");
-                                                inline_dot(ui);
-                                                inline_stat(ui, shaders, "光影");
-                                                inline_dot(ui);
-                                                inline_stat(ui, worlds, "存档");
-                                            });
-                                            ui.add_space(16.0);
-                                            ui.horizontal(|ui| {
-                                                if row.health.missing > 0 {
-                                                    if launch_button(ui, "补全资源", true) {
-                                                        self.start_repair(row.clone());
-                                                    }
-                                                } else {
-                                                    let launching =
-                                                        matches!(self.busy, Some(Task::Launch));
-                                                    if motion::primary_sized_glyph(
-                                                        ui,
-                                                        if launching {
-                                                            "正在启动…"
-                                                        } else {
-                                                            "启动游戏"
-                                                        },
-                                                        self.busy.is_none(),
-                                                        132.0,
-                                                        40.0,
-                                                        14.0,
-                                                        motion::PrimaryGlyph::Play,
-                                                    ) {
-                                                        self.start_launch();
-                                                    }
-                                                }
-                                                ui.add_space(8.0);
-                                                if motion::secondary_sized(
-                                                    ui,
-                                                    "内容管理",
-                                                    true,
-                                                    96.0,
-                                                    40.0,
-                                                    13.0,
-                                                )
-                                                .clicked()
-                                                {
-                                                    open_content = true;
-                                                }
-                                                ui.add_space(8.0);
-                                                if motion::secondary_sized(
-                                                    ui,
-                                                    "打开目录",
-                                                    true,
-                                                    96.0,
-                                                    40.0,
-                                                    13.0,
-                                                )
-                                                .clicked()
-                                                {
-                                                    let dir =
-                                                        row.game_dir.clone().unwrap_or_else(|| {
-                                                            self.root.version_dir(&row.profile)
-                                                        });
-                                                    open_dir = Some(dir);
-                                                }
-                                            });
-                                            if let Some(note) = &self.notice {
-                                                ui.add_space(10.0);
-                                                ui.label(
-                                                    egui::RichText::new(note).size(11.0).color(OK),
-                                                );
-                                            }
-                                            if let Some(err) = &self.error {
-                                                ui.add_space(10.0);
-                                                ui.add(
-                                                    egui::Label::new(
-                                                        egui::RichText::new(err)
-                                                            .size(11.0)
-                                                            .color(DANGER),
-                                                    )
-                                                    .wrap(),
-                                                );
-                                            }
-                                        });
-                                    let hero_rect = hero.response.rect;
-                                    let (ring_x, ring_y, ring_r) = if left_w >= 520.0 {
-                                        (hero_rect.right() - 38.0, hero_rect.bottom() - 62.0, 22.0)
-                                    } else {
-                                        (hero_rect.right() - 26.0, hero_rect.bottom() - 54.0, 15.0)
-                                    };
-                                    motion::status_ring(
-                                        ui.painter(),
-                                        egui::pos2(ring_x, ring_y),
-                                        ring_r,
-                                        row.health.missing == 0,
-                                        row.health.missing,
+                                    ui.label(
+                                        egui::RichText::new(format!("{} 个版本", rows.len()))
+                                            .size(9.0)
+                                            .color(MUTED),
                                     );
                                 },
                             );
-                            ui.add_space(gap);
-                            ui.allocate_ui_with_layout(
-                                egui::vec2(right_w, 318.0),
-                                egui::Layout::top_down(egui::Align::LEFT),
-                                |ui| {
-                                    ui.set_width(right_w);
-                                    egui::Frame::new()
-                                        .fill(SURFACE)
-                                        .stroke(egui::Stroke::new(1.0, LINE))
-                                        .corner_radius(14)
-                                        .shadow(motion::card_shadow())
-                                        .inner_margin(egui::Margin::symmetric(18, 18))
-                                        .show(ui, |ui| {
-                                            ui.set_width(right_w - 36.0);
-                                            ui.set_min_height(236.0);
+                        });
+                        ui.add_space(16.0);
+
+                        egui::Frame::new()
+                            .fill(SURFACE)
+                            .stroke(egui::Stroke::new(1.0, LINE))
+                            .corner_radius(18)
+                            .shadow(motion::card_shadow())
+                            .inner_margin(egui::Margin::symmetric(30, 26))
+                            .show(ui, |ui| {
+                                ui.set_width(width - 60.0);
+                                let right_w = if width >= 820.0 { 258.0 } else { 218.0 };
+                                let left_w = (width - 60.0 - right_w - 24.0).max(300.0);
+                                ui.horizontal_top(|ui| {
+                                    ui.vertical(|ui| {
+                                        ui.set_width(left_w);
+                                        ui.horizontal(|ui| {
                                             ui.label(
-                                                egui::RichText::new("账户").size(10.5).color(MUTED),
+                                                egui::RichText::new("当前版本")
+                                                    .size(10.0)
+                                                    .color(MUTED),
                                             );
+                                            ui.with_layout(
+                                                egui::Layout::right_to_left(
+                                                    egui::Align::Center,
+                                                ),
+                                                |ui| {
+                                                    let mut picked = row.id.clone();
+                                                    egui::ComboBox::from_id_salt(
+                                                        "home_version",
+                                                    )
+                                                    .selected_text(
+                                                        egui::RichText::new("切换")
+                                                            .size(10.5),
+                                                    )
+                                                    .width(124.0)
+                                                    .show_ui(ui, |ui| {
+                                                        for item in &rows {
+                                                            ui.selectable_value(
+                                                                &mut picked,
+                                                                item.id.clone(),
+                                                                &item.label,
+                                                            );
+                                                        }
+                                                    });
+                                                    if picked != row.id {
+                                                        chosen = Some(picked);
+                                                    }
+                                                },
+                                            );
+                                        });
+                                        ui.add_space(4.0);
+                                        ui.add(
+                                            egui::Label::new(
+                                                egui::RichText::new(&row.label)
+                                                    .size(31.0)
+                                                    .family(bold_family()),
+                                            )
+                                            .truncate(),
+                                        );
+                                        ui.add_space(6.0);
+                                        ui.horizontal(|ui| {
+                                            status_dot(ui, row.health.missing == 0);
+                                            ui.label(
+                                                egui::RichText::new(
+                                                    if row.health.missing == 0 {
+                                                        "安装完整".to_string()
+                                                    } else {
+                                                        format!(
+                                                            "缺 {} 个文件",
+                                                            row.health.missing
+                                                        )
+                                                    },
+                                                )
+                                                .size(10.5)
+                                                .color(if row.health.missing == 0 {
+                                                    OK
+                                                } else {
+                                                    WARN
+                                                }),
+                                            );
+                                            ui.label(
+                                                egui::RichText::new("·")
+                                                    .size(10.5)
+                                                    .color(MUTED),
+                                            );
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "{mods} Mod · {packs} 资源包 · {world_count} 世界"
+                                                ))
+                                                .size(10.5)
+                                                .color(MUTED),
+                                            );
+                                        });
+                                        ui.add_space(20.0);
+                                        ui.horizontal(|ui| {
+                                            if row.health.missing > 0 {
+                                                if motion::primary_sized_glyph(
+                                                    ui,
+                                                    "补全资源",
+                                                    self.busy.is_none(),
+                                                    176.0,
+                                                    46.0,
+                                                    14.0,
+                                                    motion::PrimaryGlyph::Download,
+                                                ) {
+                                                    repair = true;
+                                                }
+                                            } else if motion::primary_sized_glyph(
+                                                ui,
+                                                "开始游戏",
+                                                self.busy.is_none(),
+                                                176.0,
+                                                46.0,
+                                                14.5,
+                                                motion::PrimaryGlyph::Play,
+                                            ) {
+                                                launch = true;
+                                            }
                                             ui.add_space(8.0);
-                                            if let Some(account) = &self.account {
-                                                ui.horizontal(|ui| {
-                                                    avatar(ui, &account.name);
-                                                    ui.add_space(10.0);
-                                                    ui.vertical(|ui| {
-                                                        ui.label(
-                                                            egui::RichText::new(&account.name)
-                                                                .size(15.0)
-                                                                .family(bold_family()),
-                                                        );
-                                                        ui.label(
-                                                            egui::RichText::new("Microsoft 正版")
-                                                                .size(10.0)
-                                                                .color(OK),
-                                                        );
-                                                    });
-                                                });
-                                            } else {
-                                                ui.horizontal(|ui| {
-                                                    avatar(ui, &self.username);
-                                                    ui.add_space(10.0);
-                                                    ui.vertical(|ui| {
-                                                        ui.label(
-                                                            egui::RichText::new(&self.username)
-                                                                .size(15.0)
-                                                                .family(bold_family()),
-                                                        );
-                                                        ui.label(
-                                                            egui::RichText::new("离线账户")
-                                                                .size(10.0)
-                                                                .color(MUTED),
-                                                        );
-                                                    });
-                                                    ui.with_layout(
-                                                        egui::Layout::right_to_left(
-                                                            egui::Align::Center,
-                                                        ),
-                                                        |ui| {
-                                                            if ui
-                                                                .add(
-                                                                    egui::Button::new(
-                                                                        egui::RichText::new("登录")
-                                                                            .size(11.0),
-                                                                    )
-                                                                    .fill(PANEL)
-                                                                    .stroke(egui::Stroke::new(
-                                                                        1.0, LINE,
-                                                                    ))
-                                                                    .corner_radius(8)
-                                                                    .min_size(egui::vec2(
-                                                                        56.0, 26.0,
-                                                                    )),
-                                                                )
-                                                                .clicked()
-                                                            {
-                                                                login = true;
-                                                            }
-                                                        },
-                                                    );
-                                                });
-                                                ui.add_space(10.0);
-                                                ui.horizontal(|ui| {
+                                            if motion::secondary_sized(
+                                                ui,
+                                                "版本详情",
+                                                true,
+                                                112.0,
+                                                46.0,
+                                                12.5,
+                                            )
+                                            .clicked()
+                                            {
+                                                open_manage = true;
+                                            }
+                                        });
+                                        if let Some(note) = &self.notice {
+                                            ui.add_space(8.0);
+                                            ui.label(
+                                                egui::RichText::new(note).size(10.0).color(OK),
+                                            );
+                                        }
+                                        if let Some(err) = &self.error {
+                                            ui.add_space(8.0);
+                                            ui.add(
+                                                egui::Label::new(
+                                                    egui::RichText::new(err)
+                                                        .size(10.0)
+                                                        .color(DANGER),
+                                                )
+                                                .wrap(),
+                                            );
+                                        }
+                                    });
+                                    ui.add_space(24.0);
+                                    ui.vertical(|ui| {
+                                            ui.set_width(right_w);
+                                            egui::Frame::new()
+                                                .fill(SURFACE2)
+                                                .stroke(egui::Stroke::new(1.0, LINE))
+                                                .corner_radius(14)
+                                                .inner_margin(egui::Margin::symmetric(
+                                                    18, 16,
+                                                ))
+                                                .show(ui, |ui| {
+                                                    ui.set_width(right_w - 36.0);
+                                                    ui.set_min_height(150.0);
                                                     ui.label(
-                                                        egui::RichText::new("玩家名")
-                                                            .size(10.5)
+                                                        egui::RichText::new("最近世界")
+                                                            .size(9.5)
                                                             .color(MUTED),
                                                     );
-                                                    text_field(ui, &mut self.username, "", 150.0);
-                                                });
-                                            }
-                                            ui.add_space(10.0);
-                                            ui.separator();
-                                            ui.add_space(10.0);
-                                            ui.horizontal(|ui| {
-                                                ui.label(
-                                                    egui::RichText::new("内存")
-                                                        .size(10.5)
-                                                        .color(MUTED),
-                                                );
-                                                ui.add(
-                                                    egui::DragValue::new(&mut self.memory)
-                                                        .range(1024..=16384)
-                                                        .suffix(" MB"),
-                                                );
-                                                ui.with_layout(
-                                                    egui::Layout::right_to_left(
-                                                        egui::Align::Center,
-                                                    ),
-                                                    |ui| {
-                                                        ui.label(
-                                                            egui::RichText::new(if self.java_ok {
-                                                                "Java 21 已检测"
-                                                            } else {
-                                                                "缺少 Java 21"
-                                                            })
-                                                            .size(10.0)
-                                                            .color(if self.java_ok {
-                                                                MUTED
-                                                            } else {
-                                                                WARN
-                                                            }),
-                                                        );
-                                                    },
-                                                );
-                                            });
-                                            ui.add_space(10.0);
-                                            ui.separator();
-                                            ui.add_space(10.0);
-                                            let dir = row.game_dir.clone().unwrap_or_else(|| {
-                                                self.root.version_dir(&row.profile)
-                                            });
-                                            ui.horizontal(|ui| {
-                                                ui.label(
-                                                    egui::RichText::new("游戏目录")
-                                                        .size(10.5)
-                                                        .color(MUTED),
-                                                );
-                                                ui.with_layout(
-                                                    egui::Layout::right_to_left(
-                                                        egui::Align::Center,
-                                                    ),
-                                                    |ui| {
-                                                        if action_link(ui, "打开").clicked() {
-                                                            open_dir = Some(dir.clone());
-                                                        }
+                                                    ui.add_space(7.0);
+                                                    if let Some(world) = &latest_world {
                                                         ui.add(
                                                             egui::Label::new(
                                                                 egui::RichText::new(
-                                                                    dir.display().to_string(),
+                                                                    &world.name,
                                                                 )
-                                                                .size(9.5)
-                                                                .color(MUTED),
+                                                                .size(16.0)
+                                                                .family(bold_family()),
                                                             )
                                                             .truncate(),
                                                         );
-                                                    },
-                                                );
-                                            });
-                                        });
-                                },
-                            );
-                        });
-
-                        ui.add_space(18.0);
-                        ui.horizontal_top(|ui| {
-                            ui.allocate_ui_with_layout(
-                                egui::vec2(left_w, 210.0),
-                                egui::Layout::top_down(egui::Align::LEFT),
-                                |ui| {
-                                    ui.set_width(left_w);
-                                    egui::Frame::new()
-                                        .fill(SURFACE)
-                                        .stroke(egui::Stroke::new(1.0, LINE))
-                                        .corner_radius(14)
-                                        .shadow(motion::card_shadow())
-                                        .inner_margin(egui::Margin::symmetric(20, 16))
-                                        .show(ui, |ui| {
-                                            ui.set_width(left_w - 40.0);
-                                            ui.set_min_height(150.0);
-                                            ui.horizontal(|ui| {
-                                                ui.label(
-                                                    egui::RichText::new("最近内容")
-                                                        .size(12.0)
-                                                        .family(bold_family())
-                                                        .color(MUTED),
-                                                );
-                                                ui.with_layout(
-                                                    egui::Layout::right_to_left(
-                                                        egui::Align::Center,
-                                                    ),
-                                                    |ui| {
-                                                        if action_link(ui, "全部").clicked() {
-                                                            open_content = true;
-                                                        }
-                                                    },
-                                                );
-                                            });
-                                            ui.add_space(6.0);
-                                            let preview = self.content_preview(&row, 3);
-                                            if preview.is_empty() {
-                                                ui.label(
-                                                    egui::RichText::new("还没有安装内容")
-                                                        .size(11.0)
-                                                        .color(MUTED),
-                                                );
-                                                ui.add_space(4.0);
-                                                if action_link(ui, "去发现内容").clicked() {
-                                                    open_discover = true;
-                                                }
-                                            } else {
-                                                for (index, (kind, name, size)) in
-                                                    preview.iter().enumerate()
-                                                {
-                                                    if index > 0 {
-                                                        ui.add_space(4.0);
-                                                        ui.separator();
-                                                        ui.add_space(4.0);
-                                                    }
-                                                    ui.horizontal(|ui| {
-                                                        ui.allocate_ui_with_layout(
-                                                            egui::vec2(42.0, 16.0),
-                                                            egui::Layout::left_to_right(
-                                                                egui::Align::Center,
-                                                            ),
-                                                            |ui| {
-                                                                ui.label(
-                                                                    egui::RichText::new(kind)
-                                                                        .size(9.5)
-                                                                        .color(ACCENT_TEXT),
-                                                                );
-                                                            },
-                                                        );
+                                                        ui.add_space(3.0);
                                                         ui.label(
-                                                            egui::RichText::new(name).size(11.5),
+                                                            egui::RichText::new(format!(
+                                                                "{} · {}",
+                                                                human_size(world.size),
+                                                                human_age(world.modified)
+                                                            ))
+                                                            .size(9.0)
+                                                            .color(MUTED),
                                                         );
-                                                        ui.with_layout(
-                                                            egui::Layout::right_to_left(
-                                                                egui::Align::Center,
-                                                            ),
-                                                            |ui| {
-                                                                ui.label(
-                                                                    egui::RichText::new(
-                                                                        human_size(*size),
-                                                                    )
-                                                                    .size(10.0)
-                                                                    .color(MUTED),
-                                                                );
-                                                            },
-                                                        );
-                                                    });
-                                                }
-                                            }
-                                        });
-                                },
-                            );
-                            ui.add_space(gap);
-                            ui.allocate_ui_with_layout(
-                                egui::vec2(right_w, 210.0),
-                                egui::Layout::top_down(egui::Align::LEFT),
-                                |ui| {
-                                    ui.set_width(right_w);
-                                    egui::Frame::new()
-                                        .fill(SURFACE)
-                                        .stroke(egui::Stroke::new(1.0, LINE))
-                                        .corner_radius(14)
-                                        .shadow(motion::card_shadow())
-                                        .inner_margin(egui::Margin::symmetric(18, 16))
-                                        .show(ui, |ui| {
-                                            ui.set_width(right_w - 36.0);
-                                            ui.set_min_height(150.0);
-                                            let worlds = saves::worlds(
-                                                &row.game_dir.clone().unwrap_or_else(|| {
-                                                    self.root.dir().to_path_buf()
-                                                }),
-                                            )
-                                            .unwrap_or_default();
-                                            ui.horizontal(|ui| {
-                                                ui.label(
-                                                    egui::RichText::new("存档")
-                                                        .size(12.0)
-                                                        .family(bold_family())
-                                                        .color(MUTED),
-                                                );
-                                                ui.with_layout(
-                                                    egui::Layout::right_to_left(
-                                                        egui::Align::Center,
-                                                    ),
-                                                    |ui| {
-                                                        if action_link(ui, "管理").clicked() {
+                                                        ui.add_space(14.0);
+                                                        if motion::secondary_sized(
+                                                            ui,
+                                                            "打开存档",
+                                                            true,
+                                                            right_w - 36.0,
+                                                            30.0,
+                                                            10.5,
+                                                        )
+                                                        .clicked()
+                                                        {
                                                             open_saves = true;
                                                         }
-                                                    },
-                                                );
-                                            });
-                                            ui.add_space(6.0);
-                                            if worlds.is_empty() {
-                                                ui.label(
-                                                    egui::RichText::new("还没有存档")
-                                                        .size(11.0)
-                                                        .color(MUTED),
-                                                );
-                                                ui.add_space(4.0);
-                                                if action_link(ui, "打开游戏目录").clicked() {
-                                                    open_dir =
-                                                        Some(row.game_dir.clone().unwrap_or_else(
-                                                            || self.root.dir().to_path_buf(),
-                                                        ));
-                                                }
-                                            } else {
-                                                for world in worlds.iter().take(4) {
-                                                    ui.horizontal(|ui| {
+                                                    } else {
                                                         ui.label(
-                                                            egui::RichText::new(&world.name)
-                                                                .size(11.5),
+                                                            egui::RichText::new("还没有世界")
+                                                                .size(15.0)
+                                                                .family(bold_family()),
+                                                        );
+                                                        ui.add_space(3.0);
+                                                        ui.label(
+                                                            egui::RichText::new(
+                                                                "启动游戏会创建一个新世界",
+                                                            )
+                                                            .size(9.0)
+                                                            .color(MUTED),
+                                                        );
+                                                        ui.add_space(14.0);
+                                                        if motion::secondary_sized(
+                                                            ui,
+                                                            "打开游戏目录",
+                                                            true,
+                                                            right_w - 36.0,
+                                                            30.0,
+                                                            10.5,
+                                                        )
+                                                        .clicked()
+                                                        {
+                                                            open_dir =
+                                                                Some(game_dir.clone());
+                                                        }
+                                                    }
+                                                    ui.add_space(14.0);
+                                                    ui.separator();
+                                                    ui.add_space(8.0);
+                                                    ui.horizontal(|ui| {
+                                                        status_dot(
+                                                            ui,
+                                                            self.backup_cfg.enabled,
+                                                        );
+                                                        ui.label(
+                                                            egui::RichText::new(
+                                                                if self.backup_cfg.enabled {
+                                                                    "自动备份已开启"
+                                                                } else {
+                                                                    "自动备份已关闭"
+                                                                },
+                                                            )
+                                                            .size(8.5)
+                                                            .color(MUTED),
                                                         );
                                                         ui.with_layout(
                                                             egui::Layout::right_to_left(
@@ -3369,133 +3448,134 @@ impl App {
                                                             |ui| {
                                                                 ui.label(
                                                                     egui::RichText::new(format!(
-                                                                        "{} · {}",
-                                                                        human_size(world.size),
-                                                                        human_age(world.modified)
+                                                                        "每 {} 分钟",
+                                                                        self.backup_cfg
+                                                                            .interval_minutes
                                                                     ))
-                                                                    .size(9.5)
+                                                                    .size(8.0)
                                                                     .color(MUTED),
                                                                 );
                                                             },
                                                         );
                                                     });
-                                                }
-                                            }
-                                            ui.add_space(9.0);
-                                            ui.separator();
-                                            ui.add_space(7.0);
-                                            let game_dir = row
-                                                .game_dir
-                                                .clone()
-                                                .unwrap_or_else(|| self.root.dir().to_path_buf());
-                                            let (objects, bytes) = snapshots::repo_stats(&game_dir);
-                                            ui.horizontal(|ui| {
-                                                status_dot(ui, self.backup_cfg.enabled);
-                                                ui.label(
-                                                    egui::RichText::new(
-                                                        if self.backup_cfg.enabled {
-                                                            "自动备份已开启"
-                                                        } else {
-                                                            "自动备份已关闭"
-                                                        },
-                                                    )
-                                                    .size(9.5)
-                                                    .color(MUTED),
-                                                );
-                                                ui.with_layout(
-                                                    egui::Layout::right_to_left(
-                                                        egui::Align::Center,
-                                                    ),
-                                                    |ui| {
-                                                        ui.label(
-                                                            egui::RichText::new(format!(
-                                                                "每 {} 分钟",
-                                                                self.backup_cfg.interval_minutes
-                                                            ))
-                                                            .size(9.0)
-                                                            .color(MUTED),
-                                                        );
-                                                    },
-                                                );
-                                            });
-                                            ui.add_space(3.0);
-                                            let last = if self.backup_cfg.last_run == 0 {
-                                                "还没有自动备份".to_string()
-                                            } else {
-                                                format!(
-                                                    "上次备份 {}",
-                                                    human_age(self.backup_cfg.last_run)
-                                                )
-                                            };
-                                            ui.label(
-                                                egui::RichText::new(format!(
-                                                    "{last} · 仓库 {} · {objects} 块",
-                                                    human_size(bytes)
-                                                ))
-                                                .size(9.0)
-                                                .color(MUTED),
-                                            );
+                                                });
                                         });
-                                },
-                            );
-                        });
+                                    });
+                            });
 
                         ui.add_space(18.0);
-                        ui.horizontal(|ui| {
-                            if quick_action(ui, "导入整合包").clicked()
-                                && let Some(path) = pick_modpack()
-                            {
-                                self.start_modpack(path);
-                            }
-                            ui.add_space(8.0);
-                            if quick_action(ui, "打开数据目录").clicked() {
-                                open_dir = Some(self.root.dir().to_path_buf());
-                            }
-                            ui.add_space(8.0);
-                            if quick_action(ui, "刷新版本列表").clicked() {
-                                self.refresh();
-                            }
-                        });
-
-                        ui.add_space(14.0);
-                        egui::CollapsingHeader::new(
-                            egui::RichText::new("日志").size(11.0).color(MUTED),
-                        )
-                        .default_open(self.show_log)
-                        .show(ui, |ui| {
-                            egui::ScrollArea::vertical()
-                                .max_height(140.0)
-                                .auto_shrink([false, false])
-                                .show(ui, |ui| {
-                                    for line in &self.log {
+                        egui::Frame::new()
+                            .fill(SURFACE)
+                            .stroke(egui::Stroke::new(1.0, LINE))
+                            .corner_radius(14)
+                            .shadow(motion::card_shadow())
+                            .inner_margin(egui::Margin::symmetric(20, 16))
+                            .show(ui, |ui| {
+                                ui.set_width(width - 40.0);
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        egui::RichText::new("最近内容")
+                                            .size(12.5)
+                                            .family(bold_family()),
+                                    );
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            if action_link(ui, "全部内容 ›").clicked() {
+                                                open_content_installed = true;
+                                            }
+                                        },
+                                    );
+                                });
+                                ui.add_space(6.0);
+                                if preview.is_empty() {
+                                    ui.horizontal(|ui| {
                                         ui.label(
-                                            egui::RichText::new(line)
-                                                .monospace()
+                                            egui::RichText::new("还没有安装内容")
                                                 .size(10.5)
                                                 .color(MUTED),
                                         );
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(
+                                                egui::Align::Center,
+                                            ),
+                                            |ui| {
+                                                if action_link(ui, "去发现内容 ›").clicked() {
+                                                    open_content_discover = true;
+                                                }
+                                            },
+                                        );
+                                    });
+                                } else {
+                                    for (index, (kind, name, size)) in
+                                        preview.iter().enumerate()
+                                    {
+                                        if index > 0 {
+                                            ui.add_space(4.0);
+                                            ui.separator();
+                                            ui.add_space(4.0);
+                                        }
+                                        ui.horizontal(|ui| {
+                                            ui.allocate_ui_with_layout(
+                                                egui::vec2(46.0, 16.0),
+                                                egui::Layout::left_to_right(
+                                                    egui::Align::Center,
+                                                ),
+                                                |ui| {
+                                                    ui.label(
+                                                        egui::RichText::new(kind)
+                                                            .size(9.0)
+                                                            .color(ACCENT_TEXT),
+                                                    );
+                                                },
+                                            );
+                                            ui.label(
+                                                egui::RichText::new(name).size(11.5),
+                                            );
+                                            ui.with_layout(
+                                                egui::Layout::right_to_left(
+                                                    egui::Align::Center,
+                                                ),
+                                                |ui| {
+                                                    ui.label(
+                                                        egui::RichText::new(human_size(*size))
+                                                            .size(9.0)
+                                                            .color(MUTED),
+                                                    );
+                                                },
+                                            );
+                                        });
                                     }
-                                });
-                        });
-                        ui.add_space(24.0);
+                                }
+                            });
+                        ui.add_space(28.0);
                     });
                 });
             });
 
-        if let Some(dir) = open_dir {
-            open_folder(&dir);
+        if let Some(id) = chosen {
+            self.selected = Some(id);
         }
-        if open_content {
-            self.open_content(true);
+        if launch {
+            self.start_launch();
         }
-        if open_discover {
-            self.open_content(false);
+        if repair {
+            self.start_repair(row.clone());
+        }
+        if open_manage {
+            self.nav_go(Nav::Versions);
         }
         if open_saves {
             self.open_saves(row.clone());
         }
-        if login {
-            self.start_login();
+        if open_content_installed {
+            self.open_content(true);
+        }
+        if open_content_discover {
+            self.open_content(false);
+        }
+        if let Some(dir) = open_dir {
+            open_folder(&dir);
         }
     }
 
@@ -7189,6 +7269,7 @@ impl eframe::App for App {
             }
         });
         self.account_overlay(ui.ctx());
+        self.settings_overlay(ui.ctx());
     }
 }
 
@@ -7390,10 +7471,6 @@ fn project_color(project: &mods::Project) -> egui::Color32 {
     PALETTE[hash % PALETTE.len()]
 }
 
-fn launch_button(ui: &mut egui::Ui, text: &str, enabled: bool) -> bool {
-    motion::primary_sized(ui, text, enabled, 132.0, 40.0, 14.0)
-}
-
 fn feature(ui: &mut egui::Ui, title: &str, detail: &str) {
     ui.vertical(|ui| {
         ui.label(egui::RichText::new(title).size(11.5).family(bold_family()));
@@ -7478,10 +7555,6 @@ fn action_link(ui: &mut egui::Ui, text: &str) -> egui::Response {
     )
 }
 
-fn avatar(ui: &mut egui::Ui, name: &str) {
-    avatar_sized(ui, name, 34.0);
-}
-
 fn avatar_sized(ui: &mut egui::Ui, name: &str, size: f32) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
     let center = rect.center();
@@ -7514,16 +7587,6 @@ fn status_dot(ui: &mut egui::Ui, ok: bool) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
     ui.painter()
         .circle_filled(rect.center(), 3.5, if ok { SUCCESS } else { WARN });
-}
-
-fn inline_stat(ui: &mut egui::Ui, value: usize, label: &str) {
-    ui.label(
-        egui::RichText::new(value.to_string())
-            .size(13.5)
-            .family(bold_family()),
-    );
-    ui.add_space(3.0);
-    ui.label(egui::RichText::new(label).size(10.0).color(MUTED));
 }
 
 fn inline_dot(ui: &mut egui::Ui) {
@@ -7903,6 +7966,65 @@ fn sidebar_account(ui: &mut egui::Ui, name: &str, linked: bool, wide: bool) -> e
         } else {
             "登录 Microsoft 账户"
         })
+}
+
+/// 侧边栏底部的工具入口：设置不是一级页面，做成安静的滑杆图标。
+fn sidebar_settings(ui: &mut egui::Ui, wide: bool, enabled: bool) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), 28.0),
+        if enabled {
+            egui::Sense::click()
+        } else {
+            egui::Sense::hover()
+        },
+    );
+    if enabled && response.hovered() {
+        ui.painter()
+            .rect_filled(rect, 8, egui::Color32::from_rgb(255, 247, 234));
+    }
+    let color = if enabled {
+        egui::Color32::from_rgb(146, 127, 105)
+    } else {
+        egui::Color32::from_rgb(201, 183, 161)
+    };
+    let icon = if wide {
+        egui::Rect::from_center_size(
+            egui::pos2(rect.left() + 25.0, rect.center().y),
+            egui::vec2(14.0, 14.0),
+        )
+    } else {
+        egui::Rect::from_center_size(rect.center(), egui::vec2(15.0, 15.0))
+    };
+    let stroke = egui::Stroke::new(1.4, color);
+    for index in 0..3 {
+        let y = icon.top() + 3.0 + index as f32 * 4.0;
+        ui.painter().line_segment(
+            [egui::pos2(icon.left(), y), egui::pos2(icon.right(), y)],
+            stroke,
+        );
+        let x = match index {
+            0 => icon.left() + 4.0,
+            1 => icon.right() - 4.5,
+            _ => icon.left() + 7.5,
+        };
+        ui.painter().circle_filled(egui::pos2(x, y), 1.8, color);
+    }
+    if wide {
+        ui.painter().text(
+            egui::pos2(rect.left() + 44.0, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            "设置",
+            egui::FontId::proportional(10.5),
+            color,
+        );
+    }
+    if enabled {
+        response
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text("设置：内存、Java、目录与日志")
+    } else {
+        response.on_hover_text("任务进行中")
+    }
 }
 
 fn open_folder(path: &std::path::Path) {

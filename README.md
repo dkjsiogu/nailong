@@ -8,7 +8,7 @@
 
 **简体中文** | [English](README.en.md)
 
-> 当前版本：**0.18.1**（预览版）
+> 当前版本：**0.19.0**（预览版）
 >
 > 目标：小体积、少依赖、安装过程可见、中断可补。功能边界见 [实现状态](docs/design/14-implementation-status.md)。
 
@@ -27,6 +27,8 @@ nailong 的思路很直：
 
 ## 界面
 
+0.19 把启动台从“仪表盘”收成一个主行动：**当前版本、开始游戏、版本详情、最近世界、最近内容**。账户、玩家名、内存、Java、游戏目录、数据目录和日志全部收进侧边栏底部的「设置」，玩家名与内存会保存到数据目录，重启后还在。产品方向写在 [产品 brief](docs/product/00-brief.md)：**装得干净，坏了能救**；0.20 起做实例级内容/配置回滚。
+
 0.18 把界面按玩家的日常动线重新排了一遍：左边常驻四个入口——**启动台、版本、内容、存档**。内容库把「发现」和「已安装」合成一页，版本页只负责启动和维护，存档升为一级页面并自带版本选择器。视觉换成奶油白底、白卡片、橙黄强调的浅色主题；0.18.1 又补了字体与控制细节：真粗体、哑光琥珀主按钮、带播放/下载字形，次按钮也有独立的描边、悬停和接触阴影。
 
 ![动效演示：侧边栏切换、内容库、卡片悬停与详情返回](docs/screenshots/motion.gif)
@@ -37,7 +39,7 @@ nailong 的思路很直：
 | **内容 · 已安装** | **存档** |
 | ![内容 · 已安装](docs/screenshots/07-installed.png) | ![存档](docs/screenshots/11-saves.png) |
 
-更多截图（版本、安装、搜索、详情、更新、空状态、欢迎页、进度、账户弹窗）：[docs/screenshots](docs/screenshots)。动效约 15 秒，包含侧边栏切换、内容库、卡片悬停、详情返回和存档页。
+更多截图（版本、安装、搜索、详情、更新、空状态、欢迎页、进度、账户弹窗、设置）：[docs/screenshots](docs/screenshots)。动效约 19 秒，包含启动台、设置弹窗、内容库、卡片悬停、详情返回和存档页。
 
 ## 特性
 
@@ -94,6 +96,7 @@ nailong 的思路很直：
 - 微软正版账户登录：点左侧边栏底部的账户（离线时显示「点击登录」），走浏览器授权码 + PKCE（本地回环端口），成功后自动刷新令牌；启动时带 `--accessToken` / `--uuid` / `--xuid`。
 - 令牌存在数据目录的 `account.json`（Unix 0600），不写日志；退出登录会删除。
 - 离线账户启动（单人 / 局域网），没登录时就是原来的离线模式。
+- 设置：侧边栏底部「设置」集中玩家名、内存、Java 状态、游戏/数据目录和日志；玩家名与内存写入 `ui.json`，下次打开还在。
 - 版本：加载器依赖的原版自动隐藏；被依赖的版本不能误删；只负责启动、补全、打开目录和删除，内容与存档分别去左侧对应入口。
 - 存档：一级页面，顶部可直接切换版本；列出世界、显示大小和最近修改时间；备份是 **git 式快照**——按内容分块（CDC）只存改动过的块，第二次备份通常只增加几 MB；可恢复、删除、按份数自动清理。
 - 自动备份：可设每 15/30/60/120 分钟一次、每个世界保留 5/10/20/50 份；配置存数据目录的 `backups.json`，启动器开着就会按点跑。
@@ -106,7 +109,7 @@ nailong 的思路很直：
 | 平台 | 文件 | 大小 | 要求 |
 |---|---|---:|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | 约 8 MB | Windows 10/11，Java 21 |
-| Linux x64 (deb) | [nailong_0.18.1_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.18.1_amd64.deb) | 约 3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
+| Linux x64 (deb) | [nailong_0.19.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.19.0_amd64.deb) | 约 3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
 
 校验值：[SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS)。
 
@@ -123,7 +126,7 @@ nailong 的思路很直：
 ### Linux（Debian / Ubuntu）
 
 ```bash
-sudo apt install ./nailong_0.18.1_amd64.deb
+sudo apt install ./nailong_0.19.0_amd64.deb
 nailong
 ```
 
@@ -158,7 +161,7 @@ sudo apt remove nailong
 
 已经实际跑过的：
 
-- GUI：1120×720 与最小 900×620 下逐页走查，覆盖侧边栏四入口、内容发现/已安装、搜索、详情、更新横幅、删除确认、空状态、存档快照、进度页和账户/登录弹窗；18 张截图和 15 秒动效 GIF 在 `docs/screenshots/`。
+- GUI：1120×720 与最小 900×620 下逐页走查，覆盖侧边栏四入口、内容发现/已安装、搜索、详情、更新横幅、删除确认、空状态、存档快照、设置弹窗、进度页和账户/登录弹窗；19 张截图和 19 秒动效 GIF 在 `docs/screenshots/`。
 - Linux（Xvfb + Mesa）：Fabric 0.19.5、NeoForge 21.1.209、Forge 52.1.20 在 1.21.1 启动到主菜单。
 - Fabulously Optimized `.mrpack`：151 个模组加载并启动。
 - CurseForge：真实文件通过无 key 的官方下载页回退下载成功；官方 API key 实测返回文件名、大小、SHA1 和下载地址。
