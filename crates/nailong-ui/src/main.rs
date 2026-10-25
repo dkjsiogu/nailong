@@ -715,6 +715,47 @@ impl App {
         }
     }
 
+    /// 全局快捷键：只在不输入文字、没有弹窗时生效。
+    fn handle_shortcuts(&mut self, ctx: &egui::Context) {
+        if ctx.egui_wants_keyboard_input()
+            || self.show_settings
+            || self.show_account
+            || self.login_busy
+            || self.login_url.is_some()
+            || self.pending_install.is_some()
+            || self.show_rollback
+        {
+            return;
+        }
+        let mut nav = None;
+        let mut settings = false;
+        let mut refresh = false;
+        ctx.input_mut(|input| {
+            for (key, target) in [
+                (egui::Key::Num1, Nav::Home),
+                (egui::Key::Num2, Nav::Versions),
+                (egui::Key::Num3, Nav::Content),
+                (egui::Key::Num4, Nav::Saves),
+            ] {
+                if input.consume_key(egui::Modifiers::CTRL, key) {
+                    nav = Some(target);
+                }
+            }
+            settings = input.consume_key(egui::Modifiers::CTRL, egui::Key::Comma);
+            refresh = input.consume_key(egui::Modifiers::NONE, egui::Key::F5);
+        });
+        if settings {
+            self.show_account = false;
+            self.show_settings = true;
+        }
+        if refresh {
+            self.refresh();
+        }
+        if let Some(nav) = nav {
+            self.nav_go(nav);
+        }
+    }
+
     fn refresh_java(&mut self) {
         let runtimes = java::find_all();
         self.java_ok = runtimes.iter().any(|runtime| runtime.major >= 21);
@@ -1600,7 +1641,13 @@ impl App {
                                 });
                         });
                 });
-                ui.add_space(14.0);
+                ui.add_space(10.0);
+                ui.label(
+                    egui::RichText::new("快捷键：Ctrl+1–4 切换页面 · Ctrl+, 设置 · Esc 关闭弹窗")
+                        .size(9.0)
+                        .color(MUTED),
+                );
+                ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     if motion::secondary_sized(ui, "打开数据目录", true, 118.0, 32.0, 11.0)
                         .clicked()
@@ -8582,6 +8629,7 @@ impl App {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll();
+        self.handle_shortcuts(ui.ctx());
         self.drain_icons(ui.ctx());
         if self.backup_cfg.enabled {
             ui.ctx().request_repaint_after(Duration::from_secs(5));

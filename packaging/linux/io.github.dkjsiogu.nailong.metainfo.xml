@@ -25,6 +25,11 @@
   <url type="bugtracker">https://github.com/dkjsiogu/nailong/issues</url>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.28.0" date="2026-10-26">
+      <description>
+        <p>Keyboard paths: Ctrl+1–4 switch primary pages, Ctrl+, opens Settings, F5 refreshes versions. Shortcuts yield to text fields and open dialogs, with a discoverable hint in Settings.</p>
+      </description>
+    </release>
     <release version="0.27.0" date="2026-10-26">
       <description>
         <p>Settings polish: a 1 GB memory stepper replaces the raw DragValue, the Java row shows the actual runtime with Recheck and a download link when missing, and name/memory/Java no longer share one crowded line.</p>

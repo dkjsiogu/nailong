@@ -4,7 +4,7 @@ members = ["crates/nailong-core", "crates/nailong-cli", "crates/nailong-ui"]
 
 [workspace.package]
 edition = "2024"
-version = "0.27.0"
+version = "0.28.0"
 license = "GPL-3.0-or-later"
 rust-version = "1.95"
 
