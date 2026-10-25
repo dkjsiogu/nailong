@@ -259,6 +259,18 @@ struct PendingInstall {
     request: InstallRequest,
 }
 
+/// 启动台一帧只读一次磁盘；切页面或内容变化时再重建。
+#[derive(Clone)]
+struct HomeCache {
+    row_id: String,
+    mods: usize,
+    packs: usize,
+    shaders: usize,
+    worlds: usize,
+    latest_world: Option<saves::World>,
+    preview: Vec<(String, String, u64)>,
+}
+
 type CfCategoryFetch = (mods::ContentKind, Result<Vec<mods::CurseCategory>, String>);
 
 fn project_key(project: &mods::Project) -> String {
@@ -368,6 +380,8 @@ struct App {
     rollback_error: Option<String>,
     rollback_rx: Option<mpsc::Receiver<Msg>>,
     pending_install: Option<PendingInstall>,
+    home_cache: Option<HomeCache>,
+    version_cache: Option<(String, (usize, usize, usize, usize))>,
     page_key: u8,
     page_enter_at: f64,
     modal_key: u8,
@@ -518,6 +532,8 @@ impl App {
             rollback_error: None,
             rollback_rx: None,
             pending_install: None,
+            home_cache: None,
+            version_cache: None,
             page_key: 255,
             page_enter_at: 0.0,
             modal_key: 0,
@@ -683,6 +699,8 @@ impl App {
     }
 
     fn refresh(&mut self) {
+        self.home_cache = None;
+        self.version_cache = None;
         let required_by = profile_dependents(&self.root);
         let used_by = instance_usage(&self.root);
         let mut rows = Vec::new();
@@ -1122,7 +1140,9 @@ impl App {
                 open_url(&url);
             }
             if cancel_login {
-                cancel::cancel();
+                // 登录和安装共用的是一个“前台任务取消”标志；登录窗口的取消
+                // 只是关闭等待，不能让之后的内容浏览误判成“操作已取消”。
+                cancel::reset();
                 self.login_url = None;
                 self.login_rx = None;
                 self.login_busy = false;
@@ -2242,6 +2262,8 @@ impl App {
     }
 
     fn start_mods_scan(&mut self) {
+        self.home_cache = None;
+        self.version_cache = None;
         let Some(game_dir) = self.mods_game_dir.clone() else {
             return;
         };
@@ -2401,6 +2423,9 @@ impl App {
     }
 
     fn start_mods_search_at(&mut self, offset: usize) {
+        if self.busy.is_none() {
+            cancel::reset();
+        }
         let loader = self.mods_loader;
         let mc = self.mods_mc.clone();
         let query = self.mods_query.trim().to_string();
@@ -2466,6 +2491,9 @@ impl App {
 
     /// 按当前品类拉两排内容：热门 + 最新。
     fn start_browse(&mut self) {
+        if self.busy.is_none() {
+            cancel::reset();
+        }
         let kind = self.mods_kind;
         let loader = self.mods_loader;
         if self.mods_category.is_some()
@@ -2543,6 +2571,9 @@ impl App {
     }
 
     fn start_shelf_more(&mut self, offset: usize) {
+        if self.busy.is_none() {
+            cancel::reset();
+        }
         let Some(sort) = self.mods_shelf else {
             return;
         };
@@ -3122,6 +3153,7 @@ impl App {
                 Msg::InstallDone(id) => {
                     self.busy = None;
                     self.cancel_requested = false;
+                    cancel::reset();
                     self.progress = None;
                     self.rx = None;
                     self.show_install = false;
@@ -3136,6 +3168,7 @@ impl App {
                 Msg::InstallFailed(e) => {
                     self.busy = None;
                     self.cancel_requested = false;
+                    cancel::reset();
                     self.progress = None;
                     self.rx = None;
                     self.show_install = true;
@@ -3152,6 +3185,7 @@ impl App {
                 Msg::InstallCancelled => {
                     self.busy = None;
                     self.cancel_requested = false;
+                    cancel::reset();
                     self.progress = None;
                     self.rx = None;
                     self.show_install = true;
@@ -3237,6 +3271,7 @@ impl App {
                 Msg::ModsDone(note) => {
                     self.busy = None;
                     self.cancel_requested = false;
+                    cancel::reset();
                     self.progress = None;
                     self.rx = None;
                     self.mods_quick = None;
@@ -3250,6 +3285,7 @@ impl App {
                 Msg::ModsFailed(e) => {
                     self.busy = None;
                     self.cancel_requested = false;
+                    cancel::reset();
                     self.progress = None;
                     self.rx = None;
                     self.mods_quick = None;
@@ -3258,6 +3294,7 @@ impl App {
                 Msg::ModsCancelled => {
                     self.busy = None;
                     self.cancel_requested = false;
+                    cancel::reset();
                     self.progress = None;
                     self.rx = None;
                     self.mods_quick = None;
@@ -3410,7 +3447,8 @@ impl App {
                         }
                         Err(e) => {
                             self.login_url = None;
-                            self.error = Some(e);
+                            self.log.push(format!("登录失败: {e}"));
+                            self.error = Some(friendly_login_error(&e));
                         }
                     }
                 }
@@ -3475,7 +3513,8 @@ impl App {
                 self.repair_target = None;
                 self.error = None;
                 self.notice = None;
-                self.refresh();
+                // 首页只是切视图：版本列表已在安装/删除/内容变更后刷新过。
+                // 不再在这里同步 scan 每个版本的 health，否则点击会卡一下。
                 self.ensure_visible_selection();
             }
             Nav::Versions => {
@@ -4077,12 +4116,11 @@ impl App {
             .game_dir
             .clone()
             .unwrap_or_else(|| self.root.version_dir(&row.profile));
-        let latest_world = saves::worlds(&game_dir).ok().and_then(|mut worlds| {
-            worlds.sort_by_key(|world| world.modified);
-            worlds.pop()
-        });
-        let (mods, packs, _shaders, world_count) = self.row_summary(&row);
-        let preview = self.content_preview(&row, 3);
+        let cache = self.home_cache_for(&row, &game_dir);
+        let latest_world = cache.latest_world.clone();
+        let (mods, packs, _shaders, world_count) =
+            (cache.mods, cache.packs, cache.shaders, cache.worlds);
+        let preview = cache.preview.clone();
         let mut chosen: Option<String> = None;
         let mut launch = false;
         let mut repair = false;
@@ -4950,22 +4988,48 @@ impl App {
             ui.label(egui::RichText::new(error).size(12.0).color(WARN));
         }
         if self.mods_browse_loading && self.mods_browse.is_empty() {
-            ui.add_space(40.0);
-            ui.vertical_centered(|ui| {
-                ui.spinner();
-            });
+            ui.add_space(16.0);
+            egui::Frame::new()
+                .fill(CARD)
+                .stroke(egui::Stroke::new(1.0, LINE))
+                .corner_radius(14)
+                .shadow(motion::card_shadow())
+                .inner_margin(egui::Margin::symmetric(20, 18))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.add_space(5.0);
+                        ui.label(
+                            egui::RichText::new("正在加载热门与最新内容…")
+                                .size(13.0)
+                                .family(bold_family()),
+                        );
+                    });
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new("正在连接 Modrinth / CurseForge，第一次会慢一点")
+                            .size(9.5)
+                            .color(MUTED),
+                    );
+                    ui.add_space(16.0);
+                    for _ in 0..3 {
+                        skeleton_line(ui, 12.0);
+                        ui.add_space(8.0);
+                    }
+                });
             return;
         }
 
-        let per_row = if ui.available_width() >= 960.0 {
+        let per_row = if ui.available_width() >= 840.0 {
             4
-        } else if ui.available_width() >= 820.0 {
+        } else if ui.available_width() >= 620.0 {
             3
         } else {
             2
         };
         let card_width = ((ui.available_width() - 10.0 * (per_row as f32 - 1.0)) / per_row as f32)
-            .clamp(220.0, 300.0);
+            .clamp(200.0, 300.0);
         let shelves = std::mem::take(&mut self.mods_browse);
         if shelves.is_empty() {
             ui.add_space(40.0);
@@ -5088,15 +5152,15 @@ impl App {
                 ui.label(egui::RichText::new("正在加载…").size(11.0).color(MUTED));
             });
         }
-        let per_row = if ui.available_width() >= 960.0 {
+        let per_row = if ui.available_width() >= 840.0 {
             4
-        } else if ui.available_width() >= 820.0 {
+        } else if ui.available_width() >= 620.0 {
             3
         } else {
             2
         };
         let card_width = ((ui.available_width() - 10.0 * (per_row as f32 - 1.0)) / per_row as f32)
-            .clamp(220.0, 300.0);
+            .clamp(200.0, 300.0);
         let results = std::mem::take(&mut self.mods_results);
         let mut installs = Vec::new();
         let mut order = 0usize;
@@ -7287,7 +7351,7 @@ impl App {
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         ui.add_space(16.0);
-                        let (mods, packs, shaders, worlds) = self.row_summary(&row);
+                        let (mods, packs, shaders, worlds) = self.version_summary(&row);
                         ui.horizontal(|ui| {
                             stat_cell(ui, mods, "Mod");
                             stat_cell(ui, packs, "资源包");
@@ -7476,6 +7540,42 @@ impl App {
         }
     }
 
+    fn home_cache_for(&mut self, row: &Row, game_dir: &std::path::Path) -> HomeCache {
+        if let Some(cache) = self.home_cache.as_ref()
+            && cache.row_id == row.id
+        {
+            return cache.clone();
+        }
+        let dir = row
+            .game_dir
+            .clone()
+            .unwrap_or_else(|| self.root.version_dir(&row.profile));
+        let index = installed::load(&dir);
+        let count = |kind: mods::ContentKind| {
+            index
+                .entries
+                .iter()
+                .filter(|entry| entry.kind == kind)
+                .count()
+        };
+        let mut worlds = saves::worlds(game_dir).unwrap_or_default();
+        worlds.sort_by_key(|world| world.modified);
+        let world_count = worlds.len();
+        let latest_world = worlds.pop();
+        let preview = self.content_preview(row, 3);
+        let cache = HomeCache {
+            row_id: row.id.clone(),
+            mods: count(mods::ContentKind::Mod),
+            packs: count(mods::ContentKind::ResourcePack),
+            shaders: count(mods::ContentKind::Shader),
+            worlds: world_count,
+            latest_world,
+            preview,
+        };
+        self.home_cache = Some(cache.clone());
+        cache
+    }
+
     fn content_preview(&self, row: &Row, limit: usize) -> Vec<(String, String, u64)> {
         let dir = row
             .game_dir
@@ -7498,6 +7598,17 @@ impl App {
                 (entry.kind.label().to_string(), entry.name.clone(), size)
             })
             .collect()
+    }
+
+    fn version_summary(&mut self, row: &Row) -> (usize, usize, usize, usize) {
+        if let Some((id, summary)) = &self.version_cache
+            && id == &row.id
+        {
+            return *summary;
+        }
+        let summary = self.row_summary(row);
+        self.version_cache = Some((row.id.clone(), summary));
+        summary
     }
 
     fn row_summary(&self, row: &Row) -> (usize, usize, usize, usize) {
@@ -8174,7 +8285,7 @@ impl eframe::App for App {
             self.page_key = page;
             self.page_enter_at = now;
         }
-        let enter = (((now - self.page_enter_at) / 0.26) as f32).clamp(0.0, 1.0);
+        let enter = (((now - self.page_enter_at) / 0.18) as f32).clamp(0.0, 1.0);
         let eased = motion::ease_out_cubic(enter);
         if enter < 1.0 {
             ui.ctx().request_repaint_after(Duration::from_millis(16));
@@ -8695,6 +8806,13 @@ fn onboarding_badge(ui: &mut egui::Ui, number: &str, done: bool) {
         });
 }
 
+/// 加载骨架：不伪装成真实内容，只给一个稳定的占位高度。
+fn skeleton_line(ui: &mut egui::Ui, height: f32) {
+    let width = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+    ui.painter().rect_filled(rect, height / 2.0, SURFACE2);
+}
+
 /// 安装确认里的一行「标签 + 值」。长路径省略显示，悬停可看全。
 fn install_review_row(ui: &mut egui::Ui, label: &str, value: &str) {
     ui.horizontal(|ui| {
@@ -9052,11 +9170,36 @@ fn human_age(modified: u64) -> String {
     }
 }
 
+/// 登录失败给玩家一句能行动的话；原始 AADSTS 留在设置里的日志。
+fn friendly_login_error(raw: &str) -> String {
+    if raw.contains("AADSTS900144") {
+        "登录参数不完整，请更新到最新版本后重试".to_string()
+    } else if raw.contains("invalid_client") || raw.contains("AADSTS70002") {
+        "启动器的微软登录配置暂时不可用，请稍后重试".to_string()
+    } else if raw.contains("未拥有") || raw.contains("Game Pass") {
+        raw.to_string()
+    } else if raw.contains("已取消") {
+        "已取消登录".to_string()
+    } else {
+        "登录失败，请重试；详细信息已写入日志".to_string()
+    }
+}
+
+/// Windows 的浏览器启动参数：URL 必须整体作为一个参数，不能经过 shell。
+#[cfg(any(target_os = "windows", test))]
+fn browser_launch_args(url: &str) -> [String; 2] {
+    ["url.dll,FileProtocolHandler".to_string(), url.to_string()]
+}
+
 fn open_url(url: &str) {
+    // 不要用 `cmd /C start`：cmd 会把 URL 里的 `&` 当命令分隔符，登录链接
+    // 从第一个 `&` 就被截断，微软会报 AADSTS900144（scope 丢失）。
+    // rundll32 直接接收完整 URL，不经过 shell。
     #[cfg(target_os = "windows")]
-    let _ = std::process::Command::new("cmd")
-        .args(["/C", "start", "", url])
-        .spawn();
+    {
+        let args = browser_launch_args(url);
+        let _ = std::process::Command::new("rundll32").args(args).spawn();
+    }
     #[cfg(target_os = "macos")]
     let _ = std::process::Command::new("open").arg(url).spawn();
     #[cfg(all(unix, not(target_os = "macos")))]
@@ -9838,6 +9981,27 @@ mod tests {
         Root::new(
             std::env::temp_dir().join(format!("nailong-ui-{tag}-{}-{nanos}", std::process::id())),
         )
+    }
+
+    #[test]
+    fn windows_browser_arg_keeps_full_oauth_query() {
+        let url = "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize?client_id=x&scope=XboxLive.signin%20offline_access&state=abc";
+        let args = browser_launch_args(url);
+        assert_eq!(args[1], url);
+        assert!(args[1].contains("&scope=XboxLive.signin"));
+    }
+
+    #[test]
+    fn login_errors_are_actionable_not_raw_aadsts() {
+        let scope =
+            friendly_login_error("微软登录失败：invalid_request（AADSTS900144: scope is missing）");
+        assert!(scope.contains("更新"));
+        assert!(!scope.contains("AADSTS"));
+        assert_eq!(
+            friendly_login_error("微软登录失败：invalid_client"),
+            "启动器的微软登录配置暂时不可用，请稍后重试"
+        );
+        assert_eq!(friendly_login_error("已取消登录"), "已取消登录");
     }
 
     #[test]

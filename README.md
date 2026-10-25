@@ -8,7 +8,7 @@
 
 **简体中文** | [English](README.en.md)
 
-> 当前版本：**0.22.0**（预览版）
+> 当前版本：**0.23.0**（预览版）
 >
 > 目标：小体积、少依赖、安装过程可见、中断可补。功能边界见 [实现状态](docs/design/14-implementation-status.md)。
 
@@ -26,6 +26,8 @@ nailong 的思路很直：
 它不是“万能启动器”，也还不是 1.0。能做和不能做的，下文列清楚了。
 
 ## 界面
+
+0.23 先修玩家第一眼就会碰到的毛刺：Windows 打开登录链接不再经过 `cmd`，避免 URL 里的 `&` 被当成命令分隔符、登录参数被截断而报 AADSTS900144；登录窗口的“取消”不再污染内容浏览的取消状态，“发现”不会莫名其妙显示“操作已取消”。启动台/版本页的统计改成按页缓存，切页从 260 ms 收到 180 ms；内容首次加载换成带骨架的加载卡；1120 宽下发现/搜索结果从 3 列变 4 列。登录失败只显示一句能行动的话，原始 AADSTS 进日志。
 
 0.22 让恢复点也管加载器：内容写进版本目录时，版本 JSON 和补丁 jar 会跟 Mod/配置一起进恢复点；恢复时先删掉这两个文件再按清单还原，不会出现“退回原版但还留着旧补丁 jar”。重装或修复已有加载器前也会自动留一份。共享 `libraries/` 不复制，旧库仍在；世界存档继续走独立快照。自定义外部 `gameDir` 的实例只恢复内容。
 
@@ -117,7 +119,7 @@ nailong 的思路很直：
 | 平台 | 文件 | 大小 | 要求 |
 |---|---|---:|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | 约 8 MB | Windows 10/11，Java 21 |
-| Linux x64 (deb) | [nailong_0.22.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.22.0_amd64.deb) | 约 3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
+| Linux x64 (deb) | [nailong_0.23.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.23.0_amd64.deb) | 约 3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
 
 校验值：[SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS)。
 
@@ -134,7 +136,7 @@ nailong 的思路很直：
 ### Linux（Debian / Ubuntu）
 
 ```bash
-sudo apt install ./nailong_0.22.0_amd64.deb
+sudo apt install ./nailong_0.23.0_amd64.deb
 nailong
 ```
 
