@@ -8,7 +8,7 @@ A small, native Minecraft: Java Edition launcher written in Rust. Windows ships 
 
 [简体中文](README.md) | **English**
 
-> Current version: **0.23.0** (preview)
+> Current version: **0.24.0** (preview)
 >
 > Goals: small binaries, few dependencies, visible install progress, and a repair path after interruption. See [implementation status](docs/design/14-implementation-status.md) for exact boundaries.
 
@@ -26,6 +26,8 @@ nailong tries to do one thing simply:
 It is not a universal launcher, and it is not 1.0 yet. What works and what does not is laid out below.
 
 ## Interface
+
+0.24 treats failure and dismissal as part of the interface. A failed login gets its own “login did not finish” result card with Retry and Close instead of dropping a raw AADSTS line behind the main window. Escape now closes Settings, Account, Restore Points, the login wait and the login-error card; content errors no longer expose raw URLs: an empty result shows a centered “content did not load” card with Reload, while a failed refresh keeps the list and adds a retry bar. Raw errors stay in the Settings log.
 
 0.23 fixes the first rough edges players actually hit. On Windows the login URL is no longer opened through `cmd`, so a `&` in the query string can no longer truncate `scope` and trigger AADSTS900144. Cancelling the login dialog no longer poisons the content browser with a stale “operation cancelled”. Home/version statistics are cached per page instead of rescanned every frame, and the page transition is shortened from 260 ms to 180 ms. Content loading gets a skeleton card, browse/search results fit four columns at 1120 px, and login failures show one actionable sentence while raw AADSTS details go to the log.
 
@@ -47,7 +49,7 @@ It is not a universal launcher, and it is not 1.0 yet. What works and what does 
 | **Content · Installed** | **Saves** |
 | ![Content · Installed](docs/screenshots/07-installed.png) | ![Saves](docs/screenshots/11-saves.png) |
 
-More screenshots (versions, install, search, detail, updates, empty states, first launch, progress, account dialogs, settings, restore points, install confirmation): [docs/screenshots](docs/screenshots). The motion clip is about 18 seconds and covers first-launch onboarding, the install form, install confirmation, cancelling back, content detail and the settings dialog.
+More screenshots (versions, install, search, detail, updates, empty states, first launch, progress, account dialogs, settings, restore points, install confirmation, login failure, content load failure): [docs/screenshots](docs/screenshots). The motion clip is about 18 seconds and covers first-launch onboarding, the install form, install confirmation, cancelling back, content detail and the settings dialog.
 
 ## Features
 
@@ -118,7 +120,7 @@ Drag a `.mrpack` or `.zip` into the window to start an import. A single mod `.ja
 | Platform | File | Size | Requirements |
 |---|---|---:|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | ~8 MB | Windows 10/11, Java 21 |
-| Linux x64 (deb) | [nailong_0.23.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.23.0_amd64.deb) | ~3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
+| Linux x64 (deb) | [nailong_0.24.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.24.0_amd64.deb) | ~3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
 
 Checksums: [SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS).
 
@@ -170,7 +172,7 @@ Official releases include a project key, so CurseForge packs use the official AP
 
 Ran for real:
 
-- GUI: every page was walked at 1120×720 and the 900×620 minimum, including first launch, install confirmation, browse/search/detail, content manager, update banner, delete confirmation, empty states, save snapshots, the settings dialog, content restore points, progress, and the account/login dialogs; 21 screenshots and an 18-second motion GIF live in `docs/screenshots/`.
+- GUI: every page was walked at 1120×720 and the 900×620 minimum, including first launch, install confirmation, browse/search/detail, content manager, update banner, delete confirmation, empty states, save snapshots, the settings dialog, content restore points, progress, and the account/login dialogs; 23 screenshots and an 18-second motion GIF live in `docs/screenshots/`.
 - Linux (Xvfb + Mesa): Fabric 0.19.5, NeoForge 21.1.209, and Forge 52.1.20 on 1.21.1 reached the main menu.
 - Fabulously Optimized `.mrpack`: 151 mods loaded and launched.
 - CurseForge: a real file was downloaded through the no-key official-page fallback; the approved API key returned the official file name, size, SHA1, and download URL.

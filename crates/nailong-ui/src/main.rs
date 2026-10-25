@@ -370,6 +370,7 @@ struct App {
     login_url: Option<String>,
     login_rx: Option<mpsc::Receiver<Msg>>,
     login_busy: bool,
+    login_error: Option<String>,
     show_account: bool,
     show_settings: bool,
     show_rollback: bool,
@@ -522,6 +523,7 @@ impl App {
             login_url: None,
             login_rx: None,
             login_busy: false,
+            login_error: None,
             show_account: false,
             show_settings: false,
             show_rollback: false,
@@ -599,6 +601,10 @@ impl App {
                         "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize".into(),
                     );
                     app.login_busy = true;
+                }
+                "login_error" => {
+                    app.show_account = true;
+                    app.login_error = Some("登录参数不完整，请更新到最新版本后重试".into());
                 }
                 "progress" => {
                     app.busy = Some(Task::Install);
@@ -1029,7 +1035,9 @@ impl App {
 
     fn account_overlay(&mut self, ctx: &egui::Context) {
         let now = ctx.input(|input| input.time);
-        let kind = if self.login_url.is_some() {
+        let kind = if self.login_error.is_some() {
+            3
+        } else if self.login_url.is_some() {
             1
         } else if self.show_account && self.account.is_some() {
             2
@@ -1133,7 +1141,7 @@ impl App {
                         );
                     });
                 });
-            if modal.backdrop_response.clicked() {
+            if modal.backdrop_response.clicked() || escape_pressed(ctx) {
                 cancel_login = true;
             }
             if open {
@@ -1146,7 +1154,87 @@ impl App {
                 self.login_url = None;
                 self.login_rx = None;
                 self.login_busy = false;
+                self.login_error = None;
                 self.notice = Some("已取消登录".into());
+            }
+        } else if let Some(message) = self.login_error.clone() {
+            let mut close = false;
+            let mut retry = false;
+            let modal = egui::Modal::new(egui::Id::unique("login_error_modal"))
+                .backdrop_color(veil)
+                .frame(
+                    egui::Frame::new()
+                        .fill(frame_fill)
+                        .stroke(egui::Stroke::new(1.0, frame_stroke))
+                        .corner_radius(16)
+                        .shadow(motion::card_shadow())
+                        .inner_margin(egui::Margin::symmetric(26, 22)),
+                )
+                .show(ctx, |ui| {
+                    ui.set_width(380.0);
+                    ui.label(
+                        egui::RichText::new("登录没有完成")
+                            .size(19.0)
+                            .family(bold_family()),
+                    );
+                    ui.add_space(4.0);
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(
+                                "浏览器里的授权没有回到启动器。可以重试，或稍后再登录。",
+                            )
+                            .size(10.0)
+                            .color(MUTED),
+                        )
+                        .wrap(),
+                    );
+                    ui.add_space(12.0);
+                    egui::Frame::new()
+                        .fill(egui::Color32::from_rgb(255, 246, 232))
+                        .stroke(egui::Stroke::new(
+                            1.0,
+                            egui::Color32::from_rgb(242, 210, 166),
+                        ))
+                        .corner_radius(10)
+                        .inner_margin(egui::Margin::symmetric(12, 10))
+                        .show(ui, |ui| {
+                            ui.set_width(332.0);
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(&message).size(11.0).color(ACCENT_TEXT),
+                                )
+                                .wrap(),
+                            );
+                        });
+                    ui.add_space(14.0);
+                    ui.horizontal(|ui| {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if motion::primary_sized(ui, "重新登录", true, 104.0, 32.0, 11.5) {
+                                retry = true;
+                            }
+                            ui.add_space(6.0);
+                            if motion::secondary_sized(ui, "关闭", true, 72.0, 32.0, 11.0).clicked()
+                            {
+                                close = true;
+                            }
+                        });
+                    });
+                    ui.add_space(7.0);
+                    ui.label(
+                        egui::RichText::new("原始错误已写入「设置 › 诊断 › 日志」")
+                            .size(9.0)
+                            .color(MUTED),
+                    );
+                });
+            if modal.backdrop_response.clicked() || escape_pressed(ctx) {
+                close = true;
+            }
+            if retry {
+                self.login_error = None;
+                self.start_login();
+            } else if close {
+                self.login_error = None;
+                self.show_account = false;
             }
         } else if self.show_account
             && let Some(account) = &self.account
@@ -1231,7 +1319,7 @@ impl App {
                         });
                     });
                 });
-            if modal.backdrop_response.clicked() {
+            if modal.backdrop_response.clicked() || escape_pressed(ctx) {
                 close = true;
             }
             if logout {
@@ -1498,7 +1586,7 @@ impl App {
                     });
                 });
             });
-        if modal.backdrop_response.clicked() {
+        if modal.backdrop_response.clicked() || escape_pressed(ctx) {
             close = true;
         }
         if open_account {
@@ -1798,7 +1886,7 @@ impl App {
                         .color(MUTED),
                 );
             });
-        if modal.backdrop_response.clicked() {
+        if modal.backdrop_response.clicked() || escape_pressed(ctx) {
             close = true;
         }
         if create {
@@ -2042,6 +2130,7 @@ impl App {
         self.cancel_requested = false;
         self.login_busy = true;
         self.login_url = None;
+        self.login_error = None;
         self.error = None;
         let (tx, rx) = mpsc::channel();
         self.login_rx = Some(rx);
@@ -3228,7 +3317,7 @@ impl App {
                             let projects = self.mods_results.clone();
                             self.request_icons(projects);
                         }
-                        Err(e) => self.mods_error = Some(e),
+                        Err(e) => self.mods_error = Some(content_error(e)),
                     }
                 }
                 Msg::ModsVersions { project, result } => {
@@ -3248,7 +3337,7 @@ impl App {
                                 self.select_mods_version(first);
                             }
                         }
-                        Err(e) => self.mods_error = Some(e),
+                        Err(e) => self.mods_error = Some(content_error(e)),
                     }
                 }
                 Msg::ModsDeps { version, result } => {
@@ -3265,7 +3354,7 @@ impl App {
                             self.mods_choices = choices;
                             self.mods_error = None;
                         }
-                        Err(e) => self.mods_error = Some(e),
+                        Err(e) => self.mods_error = Some(content_error(e)),
                     }
                 }
                 Msg::ModsDone(note) => {
@@ -3289,7 +3378,7 @@ impl App {
                     self.progress = None;
                     self.rx = None;
                     self.mods_quick = None;
-                    self.mods_error = Some(e);
+                    self.mods_error = Some(content_error(e));
                 }
                 Msg::ModsCancelled => {
                     self.busy = None;
@@ -3320,7 +3409,7 @@ impl App {
                             self.mods_updates.clear();
                             self.mods_error = None;
                         }
-                        Err(e) => self.mods_error = Some(e),
+                        Err(e) => self.mods_error = Some(content_error(e)),
                     }
                 }
                 Msg::ModsUpdates(updates) => {
@@ -3333,7 +3422,7 @@ impl App {
                             self.mods_notice =
                                 Some(format!("检查完成，{} 个可更新", self.mods_updates.len()));
                         }
-                        Err(e) => self.mods_error = Some(e),
+                        Err(e) => self.mods_error = Some(content_error(e)),
                     }
                 }
                 Msg::BrowseMore {
@@ -3367,7 +3456,7 @@ impl App {
                             let projects = self.mods_results.clone();
                             self.request_icons(projects);
                         }
-                        Err(e) => self.mods_error = Some(e),
+                        Err(e) => self.mods_error = Some(content_error(e)),
                     }
                 }
                 Msg::Browse {
@@ -3392,7 +3481,7 @@ impl App {
                             self.mods_browse = shelves;
                             self.mods_error = None;
                         }
-                        Err(e) => self.mods_error = Some(e),
+                        Err(e) => self.mods_error = Some(content_error(e)),
                     }
                 }
                 Msg::SavesDone(result) => {
@@ -3443,12 +3532,14 @@ impl App {
                             self.username = account.name.clone();
                             self.account = Some(account);
                             self.login_url = None;
+                            self.login_error = None;
                             self.notice = Some("已登录 Microsoft 账户".into());
                         }
                         Err(e) => {
                             self.login_url = None;
                             self.log.push(format!("登录失败: {e}"));
-                            self.error = Some(friendly_login_error(&e));
+                            self.error = None;
+                            self.login_error = Some(friendly_login_error(&e));
                         }
                     }
                 }
@@ -4984,8 +5075,80 @@ impl App {
         }
 
         ui.add_space(8.0);
-        if let Some(error) = &self.mods_error {
-            ui.label(egui::RichText::new(error).size(12.0).color(WARN));
+        if let Some(error) = self.mods_error.clone() {
+            let mut reload = false;
+            let empty = self.mods_browse.is_empty() && !self.mods_browse_loading;
+            if empty {
+                ui.add_space(34.0);
+                ui.vertical_centered(|ui| {
+                    egui::Frame::new()
+                        .fill(CARD)
+                        .stroke(egui::Stroke::new(1.0, LINE))
+                        .corner_radius(14)
+                        .shadow(motion::card_shadow())
+                        .inner_margin(egui::Margin::symmetric(24, 22))
+                        .show(ui, |ui| {
+                            ui.set_width(420.0);
+                            ui.vertical_centered(|ui| {
+                                ui.label(
+                                    egui::RichText::new("内容没有加载出来")
+                                        .size(16.0)
+                                        .family(bold_family()),
+                                );
+                                ui.add_space(5.0);
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(&error).size(10.5).color(MUTED),
+                                    )
+                                    .wrap(),
+                                );
+                                ui.add_space(12.0);
+                                if motion::primary_sized(ui, "重新加载", true, 108.0, 32.0, 11.0)
+                                {
+                                    reload = true;
+                                }
+                            });
+                        });
+                });
+            } else {
+                egui::Frame::new()
+                    .fill(egui::Color32::from_rgb(255, 246, 232))
+                    .stroke(egui::Stroke::new(
+                        1.0,
+                        egui::Color32::from_rgb(242, 210, 166),
+                    ))
+                    .corner_radius(10)
+                    .inner_margin(egui::Margin::symmetric(12, 9))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.horizontal(|ui| {
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(&error).size(11.0).color(ACCENT_TEXT),
+                                )
+                                .wrap(),
+                            );
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if action_link(ui, "重新加载").clicked() {
+                                        reload = true;
+                                    }
+                                },
+                            );
+                        });
+                    });
+            }
+            if reload {
+                if self.mods_searching {
+                    self.start_mods_search();
+                } else {
+                    self.start_browse();
+                }
+            }
+            if empty {
+                return;
+            }
         }
         if self.mods_browse_loading && self.mods_browse.is_empty() {
             ui.add_space(16.0);
@@ -5031,7 +5194,7 @@ impl App {
         let card_width = ((ui.available_width() - 10.0 * (per_row as f32 - 1.0)) / per_row as f32)
             .clamp(200.0, 300.0);
         let shelves = std::mem::take(&mut self.mods_browse);
-        if shelves.is_empty() {
+        if shelves.is_empty() && self.mods_error.is_none() {
             ui.add_space(40.0);
             ui.vertical_centered(|ui| {
                 ui.label(
@@ -9168,6 +9331,31 @@ fn human_age(modified: u64) -> String {
         3600..=86399 => format!("{} 小时前", diff / 3600),
         _ => format!("{} 天前", diff / 86400),
     }
+}
+
+/// 内容接口的原始错误常带完整 URL；界面上只留一句可行动的话。
+fn content_error(message: String) -> String {
+    let text = message.trim();
+    if text.starts_with("网络错误")
+        || text.starts_with("请求失败")
+        || text.contains("error sending request")
+        || text.contains("dns error")
+        || text.contains("timed out")
+    {
+        "网络连接失败，请检查网络或代理后重试".to_string()
+    } else if text.starts_with("HTTP ") {
+        "内容服务暂时不可用，请稍后重试".to_string()
+    } else if text.contains("操作已取消") {
+        "加载被中断，请重试".to_string()
+    } else if text.chars().count() > 120 {
+        format!("{}…", text.chars().take(120).collect::<String>())
+    } else {
+        text.to_string()
+    }
+}
+
+fn escape_pressed(ctx: &egui::Context) -> bool {
+    ctx.input(|input| input.key_pressed(egui::Key::Escape))
 }
 
 /// 登录失败给玩家一句能行动的话；原始 AADSTS 留在设置里的日志。

@@ -25,6 +25,11 @@
   <url type="bugtracker">https://github.com/dkjsiogu/nailong/issues</url>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.24.0" date="2026-10-26">
+      <description>
+        <p>Failure states and dismissal polish: a failed login opens a dedicated result card with Retry and Close, Escape closes Settings, Account, Restore Points, login wait and login error, and content errors offer Reload. Raw OAuth details stay in the Settings log.</p>
+      </description>
+    </release>
     <release version="0.23.0" date="2026-10-25">
       <description>
         <p>Interaction fixes: Windows login links are opened without cmd so the full OAuth query survives, cancelling login no longer poisons content browsing, and Home/version summaries are cached per page with a shorter transition. Content shows a skeleton while loading, and login errors are short and actionable.</p>

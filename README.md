@@ -8,7 +8,7 @@
 
 **简体中文** | [English](README.en.md)
 
-> 当前版本：**0.23.0**（预览版）
+> 当前版本：**0.24.0**（预览版）
 >
 > 目标：小体积、少依赖、安装过程可见、中断可补。功能边界见 [实现状态](docs/design/14-implementation-status.md)。
 
@@ -26,6 +26,8 @@ nailong 的思路很直：
 它不是“万能启动器”，也还不是 1.0。能做和不能做的，下文列清楚了。
 
 ## 界面
+
+0.24 把失败和关闭也当成界面：登录失败弹独立的「登录没有完成」结果卡，给「重新登录 / 关闭」，不再把一句 AADSTS 丢在首页背景里；设置、账户、恢复点、登录等待、登录失败、安装确认都支持 Esc 关闭；内容错误不再显示带完整 URL 的裸错误：没有内容时给「内容没有加载出来」居中卡，已有列表刷新失败只在顶部给重载条。原始错误只进设置日志。
 
 0.23 先修玩家第一眼就会碰到的毛刺：Windows 打开登录链接不再经过 `cmd`，避免 URL 里的 `&` 被当成命令分隔符、登录参数被截断而报 AADSTS900144；登录窗口的“取消”不再污染内容浏览的取消状态，“发现”不会莫名其妙显示“操作已取消”。启动台/版本页的统计改成按页缓存，切页从 260 ms 收到 180 ms；内容首次加载换成带骨架的加载卡；1120 宽下发现/搜索结果从 3 列变 4 列。登录失败只显示一句能行动的话，原始 AADSTS 进日志。
 
@@ -47,7 +49,7 @@ nailong 的思路很直：
 | **内容 · 已安装** | **存档** |
 | ![内容 · 已安装](docs/screenshots/07-installed.png) | ![存档](docs/screenshots/11-saves.png) |
 
-更多截图（版本、安装、搜索、详情、更新、空状态、首次启动、进度、账户弹窗、设置、恢复点、安装确认）：[docs/screenshots](docs/screenshots)。动效约 18 秒，包含首次启动引导、安装表单、安装确认、取消返回、内容详情和设置弹窗。
+更多截图（版本、安装、搜索、详情、更新、空状态、首次启动、进度、账户弹窗、设置、恢复点、安装确认、登录失败、内容加载失败）：[docs/screenshots](docs/screenshots)。动效约 18 秒，包含首次启动引导、安装表单、安装确认、取消返回、内容详情和设置弹窗。
 
 ## 特性
 
@@ -119,7 +121,7 @@ nailong 的思路很直：
 | 平台 | 文件 | 大小 | 要求 |
 |---|---|---:|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | 约 8 MB | Windows 10/11，Java 21 |
-| Linux x64 (deb) | [nailong_0.23.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.23.0_amd64.deb) | 约 3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
+| Linux x64 (deb) | [nailong_0.24.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.24.0_amd64.deb) | 约 3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
 
 校验值：[SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS)。
 
@@ -136,7 +138,7 @@ nailong 的思路很直：
 ### Linux（Debian / Ubuntu）
 
 ```bash
-sudo apt install ./nailong_0.23.0_amd64.deb
+sudo apt install ./nailong_0.24.0_amd64.deb
 nailong
 ```
 
@@ -171,7 +173,7 @@ sudo apt remove nailong
 
 已经实际跑过的：
 
-- GUI：1120×720 与最小 900×620 下逐页走查，覆盖侧边栏四入口、首次启动引导、安装确认、内容发现/已安装、搜索、详情、更新横幅、删除确认、空状态、存档快照、设置弹窗、内容恢复点、进度页和账户/登录弹窗；21 张截图和 18 秒动效 GIF 在 `docs/screenshots/`。
+- GUI：1120×720 与最小 900×620 下逐页走查，覆盖侧边栏四入口、首次启动引导、安装确认、内容发现/已安装、搜索、详情、更新横幅、删除确认、空状态、存档快照、设置弹窗、内容恢复点、进度页和账户/登录弹窗；23 张截图和 18 秒动效 GIF 在 `docs/screenshots/`。
 - Linux（Xvfb + Mesa）：Fabric 0.19.5、NeoForge 21.1.209、Forge 52.1.20 在 1.21.1 启动到主菜单。
 - Fabulously Optimized `.mrpack`：151 个模组加载并启动。
 - CurseForge：真实文件通过无 key 的官方下载页回退下载成功；官方 API key 实测返回文件名、大小、SHA1 和下载地址。
