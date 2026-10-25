@@ -294,6 +294,7 @@ struct App {
     selected: Option<String>,
     username: String,
     memory: u32,
+    reduce_motion: bool,
     java_ok: bool,
     java_label: Option<String>,
     show_install: bool,
@@ -403,7 +404,7 @@ struct App {
 }
 
 /// 玩家名与内存存在数据目录的 `ui.json`，随设置弹窗关闭落盘。
-fn load_ui_prefs(root: &Root) -> (String, u32) {
+fn load_ui_prefs(root: &Root) -> (String, u32, bool) {
     let value = std::fs::read(root.dir().join("ui.json"))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
@@ -420,7 +421,12 @@ fn load_ui_prefs(root: &Root) -> (String, u32) {
         .and_then(|value| value.as_u64())
         .unwrap_or(4096)
         .clamp(1024, 16384) as u32;
-    (username, memory)
+    let reduce_motion = value
+        .as_ref()
+        .and_then(|value| value.get("reduce_motion"))
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    (username, memory, reduce_motion)
 }
 
 impl App {
@@ -430,7 +436,7 @@ impl App {
         let java_label = javas.iter().find(|j| j.major >= 21).map(|j| j.label());
         let account = auth::load(&root);
         let backup_cfg = snapshots::load_config(&root);
-        let (username, memory) = load_ui_prefs(&root);
+        let (username, memory, reduce_motion) = load_ui_prefs(&root);
         let (icon_jobs, icon_job_rx) = mpsc::channel::<(String, String)>();
         let (icon_done, icon_rx) = mpsc::channel::<(String, Vec<u8>)>();
         std::thread::spawn(move || {
@@ -448,6 +454,7 @@ impl App {
             selected: None,
             username,
             memory,
+            reduce_motion,
             java_ok,
             java_label,
             show_install: false,
@@ -1109,7 +1116,11 @@ impl App {
             self.modal_key = kind;
             self.modal_started = now;
         }
-        let raw = (((now - self.modal_started) / 0.20) as f32).clamp(0.0, 1.0);
+        let raw = if self.reduce_motion {
+            1.0
+        } else {
+            (((now - self.modal_started) / 0.20) as f32).clamp(0.0, 1.0)
+        };
         let open_e = motion::ease_out_cubic(raw);
         if kind != 0 && raw < 1.0 {
             ctx.request_repaint_after(Duration::from_millis(16));
@@ -1598,6 +1609,37 @@ impl App {
                     });
                 ui.add_space(12.0);
 
+                egui::Frame::new()
+                    .fill(PANEL)
+                    .stroke(egui::Stroke::new(1.0, LINE))
+                    .corner_radius(12)
+                    .inner_margin(egui::Margin::symmetric(14, 10))
+                    .show(ui, |ui| {
+                        ui.set_width(442.0);
+                        ui.horizontal(|ui| {
+                            if toggle_switch(ui, self.reduce_motion).clicked() {
+                                self.reduce_motion = !self.reduce_motion;
+                                motion::set_reduced(self.reduce_motion);
+                            }
+                            ui.label(
+                                egui::RichText::new("减少动效")
+                                    .size(10.5)
+                                    .color(if self.reduce_motion { INK } else { MUTED }),
+                            );
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    ui.label(
+                                        egui::RichText::new("关闭页面淡入、环境光与卡片抬升")
+                                            .size(9.0)
+                                            .color(MUTED),
+                                    );
+                                },
+                            );
+                        });
+                    });
+                ui.add_space(12.0);
+
                 ui.horizontal(|ui| {
                     ui.label(
                         egui::RichText::new("诊断")
@@ -1692,6 +1734,7 @@ impl App {
         let value = serde_json::json!({
             "username": self.username,
             "memory": self.memory,
+            "reduce_motion": self.reduce_motion,
         });
         if let Ok(bytes) = serde_json::to_vec_pretty(&value) {
             let _ = std::fs::write(self.root.dir().join("ui.json"), bytes);
@@ -5645,10 +5688,17 @@ impl App {
         } else {
             response.hovered()
         };
-        let hover_t =
+        let hover_t = if motion::reduced() {
+            if hovered { 1.0 } else { 0.0 }
+        } else {
             ui.ctx()
-                .animate_bool_with_time(response.id.with("card_hover"), hovered, 0.16);
-        let lift = hover_t * 3.0;
+                .animate_bool_with_time(response.id.with("card_hover"), hovered, 0.16)
+        };
+        let lift = if motion::reduced() {
+            0.0
+        } else {
+            hover_t * 3.0
+        };
         let paint = rect.translate(egui::vec2(0.0, -lift));
         let fill = motion::mix(CARD, egui::Color32::from_rgb(255, 245, 228), hover_t);
         let border = motion::mix(LINE, ACCENT, hover_t);
@@ -8629,6 +8679,7 @@ impl App {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll();
+        motion::set_reduced(self.reduce_motion);
         self.handle_shortcuts(ui.ctx());
         self.drain_icons(ui.ctx());
         if self.backup_cfg.enabled {
@@ -8679,14 +8730,18 @@ impl eframe::App for App {
             self.page_key = page;
             self.page_enter_at = now;
         }
-        let enter = (((now - self.page_enter_at) / 0.18) as f32).clamp(0.0, 1.0);
+        let enter = if self.reduce_motion {
+            1.0
+        } else {
+            (((now - self.page_enter_at) / 0.18) as f32).clamp(0.0, 1.0)
+        };
         let eased = motion::ease_out_cubic(enter);
         if enter < 1.0 {
             ui.ctx().request_repaint_after(Duration::from_millis(16));
         }
         // Ambient light is intentionally low-FPS: it keeps the window alive
         // without turning the launcher into a space heater.
-        if ui.ctx().input(|input| input.focused) {
+        if ui.ctx().input(|input| input.focused) && !self.reduce_motion {
             ui.ctx().request_repaint_after(Duration::from_millis(66));
         }
         #[cfg(debug_assertions)]
@@ -9698,7 +9753,11 @@ fn blend(from: egui::Color32, to: egui::Color32, t: f32) -> egui::Color32 {
 
 fn toggle_switch(ui: &mut egui::Ui, on: bool) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(36.0, 20.0), egui::Sense::click());
-    let t = ui.ctx().animate_bool_with_time(response.id, on, 0.12);
+    let t = if motion::reduced() {
+        if on { 1.0 } else { 0.0 }
+    } else {
+        ui.ctx().animate_bool_with_time(response.id, on, 0.12)
+    };
     ui.painter().rect(
         rect,
         10,

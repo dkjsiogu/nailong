@@ -8,7 +8,7 @@
 
 **简体中文** | [English](README.en.md)
 
-> 当前版本：**0.28.0**（预览版）
+> 当前版本：**0.29.0**（预览版）
 >
 > 目标：小体积、少依赖、安装过程可见、中断可补。功能边界见 [实现状态](docs/design/14-implementation-status.md)。
 
@@ -26,6 +26,8 @@ nailong 的思路很直：
 它不是“万能启动器”，也还不是 1.0。能做和不能做的，下文列清楚了。
 
 ## 界面
+
+0.29 加「减少动效」：设置里一个开关，写入 `ui.json`。开启后页面淡入直接完成、环境光粒子静止、卡片悬停不抬升、按钮不位移、进度条扫光关闭、开关立即到位；空闲时也不再为环境光重绘。颜色和描边反馈保留，不会“关掉动效就变呆”。
 
 0.28 补键盘路径：Ctrl+1–4 切启动台/版本/内容/存档，Ctrl+, 打开设置，F5 刷新版本列表；输入框聚焦或有弹窗时不抢键。快捷键提示放在设置弹窗诊断区下方，不占主界面。
 
@@ -129,7 +131,7 @@ nailong 的思路很直：
 | 平台 | 文件 | 大小 | 要求 |
 |---|---|---:|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | 约 8 MB | Windows 10/11，Java 21 |
-| Linux x64 (deb) | [nailong_0.28.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.28.0_amd64.deb) | 约 3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
+| Linux x64 (deb) | [nailong_0.29.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.29.0_amd64.deb) | 约 3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
 
 校验值：[SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS)。
 
@@ -146,7 +148,7 @@ nailong 的思路很直：
 ### Linux（Debian / Ubuntu）
 
 ```bash
-sudo apt install ./nailong_0.28.0_amd64.deb
+sudo apt install ./nailong_0.29.0_amd64.deb
 nailong
 ```
 

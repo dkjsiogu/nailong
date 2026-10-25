@@ -9,6 +9,7 @@
 
 use eframe::egui;
 use egui::epaint::{Mesh, Shadow, Vertex, WHITE_UV};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::{ACCENT_HI, ACCENT_LO, INK, LINE, MUTED, SURFACE2};
 
@@ -203,7 +204,19 @@ fn radial_glow(painter: &egui::Painter, center: egui::Pos2, radius: f32, color: 
     painter.add(egui::Shape::mesh(mesh));
 }
 /// Painted before page content; fixed while the page scrolls.
+static REDUCED: AtomicBool = AtomicBool::new(false);
+
+/// 玩家在设置里关闭动效后，所有"会动的位置"都走静态分支。
+pub fn set_reduced(value: bool) {
+    REDUCED.store(value, Ordering::Relaxed);
+}
+
+pub fn reduced() -> bool {
+    REDUCED.load(Ordering::Relaxed)
+}
+
 pub fn paint_ambient(ui: &egui::Ui, time: f64) {
+    let time = if reduced() { 0.0 } else { time };
     let rect = ui.max_rect();
     if rect.width() < 32.0 || rect.height() < 32.0 {
         return;
@@ -373,16 +386,28 @@ pub fn primary_sized_glyph(
         egui::Sense::hover()
     };
     let (rect, response) = ui.allocate_exact_size(desired, sense);
-    let hover = ui.ctx().animate_bool_with_time(
-        response.id.with("hover"),
-        response.hovered() && enabled,
-        0.16,
-    );
+    let hover = if reduced() {
+        if response.hovered() && enabled {
+            1.0
+        } else {
+            0.0
+        }
+    } else {
+        ui.ctx().animate_bool_with_time(
+            response.id.with("hover"),
+            response.hovered() && enabled,
+            0.16,
+        )
+    };
+    let lift = if reduced() { 0.0 } else { hover };
     let pressed = enabled && response.is_pointer_button_down_on();
     let radius = (height * 0.24).clamp(8.0, 10.0);
     let painter = ui.painter();
     let body = if enabled {
-        rect.translate(egui::vec2(0.0, -hover + if pressed { 1.0 } else { 0.0 }))
+        rect.translate(egui::vec2(
+            0.0,
+            -lift + if pressed && !reduced() { 1.0 } else { 0.0 },
+        ))
     } else {
         rect
     };
@@ -391,8 +416,8 @@ pub fn primary_sized_glyph(
         // wider warm one gives it depth without the old orange halo.
         painter.add(
             Shadow {
-                offset: [0, if pressed { 2 } else { 7 + (hover * 2.0) as i8 }],
-                blur: if pressed { 8 } else { 20 + (hover * 6.0) as u8 },
+                offset: [0, if pressed { 2 } else { 7 + (lift * 2.0) as i8 }],
+                blur: if pressed { 8 } else { 20 + (lift * 6.0) as u8 },
                 spread: 0,
                 color: egui::Color32::from_rgba_unmultiplied(
                     132,
@@ -647,17 +672,29 @@ pub fn secondary_sized(
         egui::Sense::hover()
     };
     let (rect, response) = ui.allocate_exact_size(desired, sense);
-    let hover = ui.ctx().animate_bool_with_time(
-        response.id.with("hover"),
-        response.hovered() && enabled,
-        0.14,
-    );
+    let hover = if reduced() {
+        if response.hovered() && enabled {
+            1.0
+        } else {
+            0.0
+        }
+    } else {
+        ui.ctx().animate_bool_with_time(
+            response.id.with("hover"),
+            response.hovered() && enabled,
+            0.14,
+        )
+    };
     let pressed = enabled && response.is_pointer_button_down_on();
     let radius = (height * 0.24).clamp(7.0, 10.0);
     let painter = ui.painter();
     let body = rect.translate(egui::vec2(
         0.0,
-        -hover * 0.5 + if pressed { 0.5 } else { 0.0 },
+        if reduced() {
+            0.0
+        } else {
+            -hover * 0.5 + if pressed { 0.5 } else { 0.0 }
+        },
     ));
     if enabled {
         painter.add(
@@ -767,18 +804,20 @@ pub fn progress_bar(ui: &mut egui::Ui, fraction: f32, indeterminate: bool, time:
         gradient_rrect(painter, fill_rect, 5.0, ACCENT_HI, ACCENT_LO);
         // Sheen sweeps across the filled part. Clipped to the fill so the track
         // never lights up ahead of progress.
-        let clip = painter.with_clip_rect(fill_rect.intersect(track));
-        let cycle = ((time as f32 * 0.45) % 1.0).clamp(0.0, 1.0);
-        let sheen_w = 64.0;
-        let x = fill_rect.left() - sheen_w + (fill_rect.width() + sheen_w * 2.0) * cycle;
-        clip.rect_filled(
-            egui::Rect::from_min_max(
-                egui::pos2(x, fill_rect.top()),
-                egui::pos2(x + sheen_w, fill_rect.bottom()),
-            ),
-            3,
-            egui::Color32::from_white_alpha(70),
-        );
+        if !reduced() {
+            let clip = painter.with_clip_rect(fill_rect.intersect(track));
+            let cycle = ((time as f32 * 0.45) % 1.0).clamp(0.0, 1.0);
+            let sheen_w = 64.0;
+            let x = fill_rect.left() - sheen_w + (fill_rect.width() + sheen_w * 2.0) * cycle;
+            clip.rect_filled(
+                egui::Rect::from_min_max(
+                    egui::pos2(x, fill_rect.top()),
+                    egui::pos2(x + sheen_w, fill_rect.bottom()),
+                ),
+                3,
+                egui::Color32::from_white_alpha(70),
+            );
+        }
     }
     if !indeterminate && fraction >= 0.995 {
         glow(
