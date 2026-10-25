@@ -450,6 +450,10 @@ impl App {
                     if row.is_some() {
                         app.mods_row = row.clone();
                         app.open_mods();
+                        // Preload the installed index so the tab count and
+                        // "已装" badges match what the player sees after
+                        // visiting the installed tab once.
+                        app.start_mods_scan();
                     }
                 }
                 "saves" => {
@@ -946,7 +950,7 @@ impl App {
                         ui.label(
                             egui::RichText::new("在浏览器中完成登录")
                                 .size(19.0)
-                                .strong(),
+                                .family(bold_family()),
                         );
                         ui.add_space(6.0);
                         ui.add(
@@ -1037,7 +1041,7 @@ impl App {
                         avatar_sized(ui, &name, 46.0);
                         ui.add_space(12.0);
                         ui.vertical(|ui| {
-                            ui.label(egui::RichText::new(&name).size(20.0).strong());
+                            ui.label(egui::RichText::new(&name).size(20.0).family(bold_family()));
                             ui.horizontal(|ui| {
                                 status_dot(ui, true);
                                 ui.label(
@@ -2544,7 +2548,7 @@ impl App {
                             ui.label(
                                 egui::RichText::new("nailong")
                                     .size(19.0)
-                                    .strong()
+                                    .family(bold_family())
                                     .color(ACCENT_TEXT),
                             );
                             ui.label(
@@ -2584,21 +2588,34 @@ impl App {
                             ui.add_space(1.0);
                             ui.label(egui::RichText::new("当前版本").size(8.5).color(MUTED));
                         });
-                        child.add(
-                            egui::Label::new(egui::RichText::new(&row.label).size(12.0).strong())
-                                .truncate(),
-                        );
+                        let headline = if row.instance.is_some() {
+                            row.label.clone()
+                        } else {
+                            row.mc.clone()
+                        };
+                        let detail = match &row.loader_version {
+                            Some(version) => format!("{} {version}", row.loader.name()),
+                            None => row.loader.name().to_string(),
+                        };
                         child.add(
                             egui::Label::new(
-                                egui::RichText::new(format!("{} · {}", row.mc, row.loader.name()))
-                                    .size(8.5)
-                                    .color(MUTED),
+                                egui::RichText::new(headline)
+                                    .size(13.5)
+                                    .family(bold_family()),
                             )
                             .truncate(),
                         );
+                        child.add(
+                            egui::Label::new(egui::RichText::new(detail).size(9.0).color(MUTED))
+                                .truncate(),
+                        );
                     } else {
                         child.add_space(2.0);
-                        child.label(egui::RichText::new("还没有版本").size(12.0).strong());
+                        child.label(
+                            egui::RichText::new("还没有版本")
+                                .size(12.0)
+                                .family(bold_family()),
+                        );
                         child.label(egui::RichText::new("点击安装").size(8.5).color(ACCENT_TEXT));
                     }
                     let response = response
@@ -2704,7 +2721,11 @@ impl App {
                         ui.horizontal(|ui| {
                             motion::accent_bar(ui, 36.0);
                             ui.add_space(11.0);
-                            ui.label(egui::RichText::new("欢迎使用 nailong").size(32.0).strong());
+                            ui.label(
+                                egui::RichText::new("欢迎使用 nailong")
+                                    .size(32.0)
+                                    .family(bold_family()),
+                            );
                         });
                         ui.add_space(7.0);
                         ui.label(
@@ -2725,7 +2746,9 @@ impl App {
                                 ui.set_width(width - 56.0);
                                 ui.vertical_centered(|ui| {
                                     ui.label(
-                                        egui::RichText::new("还没有安装版本").size(18.0).strong(),
+                                        egui::RichText::new("还没有安装版本")
+                                            .size(18.0)
+                                            .family(bold_family()),
                                     );
                                     ui.add_space(5.0);
                                     ui.label(
@@ -2736,7 +2759,15 @@ impl App {
                                         .color(MUTED),
                                     );
                                     ui.add_space(18.0);
-                                    if primary_wide(ui, "安装第一个版本", true, 210.0) {
+                                    if motion::primary_sized_glyph(
+                                        ui,
+                                        "安装第一个版本",
+                                        true,
+                                        210.0,
+                                        40.0,
+                                        13.5,
+                                        motion::PrimaryGlyph::Download,
+                                    ) {
                                         install = true;
                                     }
                                 });
@@ -2874,7 +2905,9 @@ impl App {
                                             });
                                             ui.add_space(4.0);
                                             ui.label(
-                                                egui::RichText::new(&row.label).size(26.0).strong(),
+                                                egui::RichText::new(&row.label)
+                                                    .size(26.0)
+                                                    .family(bold_family()),
                                             );
                                             ui.add_space(4.0);
                                             ui.horizontal(|ui| {
@@ -2935,7 +2968,7 @@ impl App {
                                                 } else {
                                                     let launching =
                                                         matches!(self.busy, Some(Task::Launch));
-                                                    if launch_button(
+                                                    if motion::primary_sized_glyph(
                                                         ui,
                                                         if launching {
                                                             "正在启动…"
@@ -2943,33 +2976,37 @@ impl App {
                                                             "启动游戏"
                                                         },
                                                         self.busy.is_none(),
+                                                        132.0,
+                                                        40.0,
+                                                        14.0,
+                                                        motion::PrimaryGlyph::Play,
                                                     ) {
                                                         self.start_launch();
                                                     }
                                                 }
                                                 ui.add_space(8.0);
-                                                if ui
-                                                    .add(
-                                                        egui::Button::new("内容管理")
-                                                            .fill(PANEL)
-                                                            .stroke(egui::Stroke::new(1.0, LINE))
-                                                            .corner_radius(9)
-                                                            .min_size(egui::vec2(96.0, 40.0)),
-                                                    )
-                                                    .clicked()
+                                                if motion::secondary_sized(
+                                                    ui,
+                                                    "内容管理",
+                                                    true,
+                                                    96.0,
+                                                    40.0,
+                                                    13.0,
+                                                )
+                                                .clicked()
                                                 {
                                                     open_content = true;
                                                 }
                                                 ui.add_space(8.0);
-                                                if ui
-                                                    .add(
-                                                        egui::Button::new("打开目录")
-                                                            .fill(PANEL)
-                                                            .stroke(egui::Stroke::new(1.0, LINE))
-                                                            .corner_radius(9)
-                                                            .min_size(egui::vec2(96.0, 40.0)),
-                                                    )
-                                                    .clicked()
+                                                if motion::secondary_sized(
+                                                    ui,
+                                                    "打开目录",
+                                                    true,
+                                                    96.0,
+                                                    40.0,
+                                                    13.0,
+                                                )
+                                                .clicked()
                                                 {
                                                     let dir =
                                                         row.game_dir.clone().unwrap_or_else(|| {
@@ -3038,7 +3075,7 @@ impl App {
                                                         ui.label(
                                                             egui::RichText::new(&account.name)
                                                                 .size(15.0)
-                                                                .strong(),
+                                                                .family(bold_family()),
                                                         );
                                                         ui.label(
                                                             egui::RichText::new("Microsoft 正版")
@@ -3055,7 +3092,7 @@ impl App {
                                                         ui.label(
                                                             egui::RichText::new(&self.username)
                                                                 .size(15.0)
-                                                                .strong(),
+                                                                .family(bold_family()),
                                                         );
                                                         ui.label(
                                                             egui::RichText::new("离线账户")
@@ -3193,7 +3230,7 @@ impl App {
                                                 ui.label(
                                                     egui::RichText::new("最近内容")
                                                         .size(12.0)
-                                                        .strong()
+                                                        .family(bold_family())
                                                         .color(MUTED),
                                                 );
                                                 ui.with_layout(
@@ -3290,7 +3327,7 @@ impl App {
                                                 ui.label(
                                                     egui::RichText::new("存档")
                                                         .size(12.0)
-                                                        .strong()
+                                                        .family(bold_family())
                                                         .color(MUTED),
                                                 );
                                                 ui.with_layout(
@@ -3546,7 +3583,7 @@ impl App {
             motion::accent_bar(ui, 22.0);
             ui.add_space(8.0);
             ui.vertical(|ui| {
-                ui.label(egui::RichText::new("内容").size(26.0).strong());
+                ui.label(egui::RichText::new("内容").size(26.0).family(bold_family()));
                 ui.label(
                     egui::RichText::new("Mod、资源包、光影 · 已安装与发现")
                         .size(10.0)
@@ -3640,7 +3677,7 @@ impl App {
                 let button = egui::Button::new(
                     egui::RichText::new(candidate.label())
                         .size(12.5)
-                        .strong()
+                        .family(bold_family())
                         .color(text),
                 )
                 .fill(fill)
@@ -3937,7 +3974,11 @@ impl App {
         for shelf in &shelves {
             ui.add_space(16.0);
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(shelf.title).size(15.0).strong());
+                ui.label(
+                    egui::RichText::new(shelf.title)
+                        .size(15.0)
+                        .family(bold_family()),
+                );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
                         .add(
@@ -3996,7 +4037,7 @@ impl App {
                         mods::Sort::Newest => "最新",
                         _ => "筛选结果",
                     };
-                    ui.label(egui::RichText::new(title).size(18.0).strong());
+                    ui.label(egui::RichText::new(title).size(18.0).family(bold_family()));
                     ui.add_space(6.0);
                     ui.label(
                         egui::RichText::new(format!("{} 个", self.mods_total))
@@ -4012,7 +4053,7 @@ impl App {
                             short_text(self.mods_query.trim(), 26)
                         ))
                         .size(16.0)
-                        .strong(),
+                        .family(bold_family()),
                     );
                     ui.add_space(6.0);
                     ui.label(
@@ -4079,7 +4120,7 @@ impl App {
                         ui.label(
                             egui::RichText::new("没有找到匹配的内容")
                                 .size(15.0)
-                                .strong(),
+                                .family(bold_family()),
                         );
                         ui.add_space(5.0);
                         ui.label(
@@ -4259,7 +4300,7 @@ impl App {
                 egui::Label::new(
                     egui::RichText::new(short_text(&project.name, 34))
                         .size(14.0)
-                        .strong(),
+                        .family(bold_family()),
                 )
                 .truncate(),
             );
@@ -4293,7 +4334,10 @@ impl App {
                     .add_enabled(
                         !busy,
                         egui::Button::new(
-                            egui::RichText::new("+").size(15.0).strong().color(ACCENT),
+                            egui::RichText::new("+")
+                                .size(15.0)
+                                .family(bold_family())
+                                .color(ACCENT),
                         )
                         .fill(egui::Color32::from_rgb(255, 244, 222))
                         .stroke(egui::Stroke::new(
@@ -4427,7 +4471,9 @@ impl App {
                             ui.vertical(|ui| {
                                 ui.horizontal(|ui| {
                                     ui.label(
-                                        egui::RichText::new(&project.name).size(22.0).strong(),
+                                        egui::RichText::new(&project.name)
+                                            .size(22.0)
+                                            .family(bold_family()),
                                     );
                                     if installed {
                                         ui.add_space(3.0);
@@ -4621,7 +4667,7 @@ impl App {
                                     && !missing_required
                                     && !busy;
                                 let button_width = ui.available_width();
-                                if primary_wide(
+                                if motion::primary_sized_glyph(
                                     ui,
                                     if deps_loading {
                                         "解析前置…"
@@ -4630,6 +4676,9 @@ impl App {
                                     },
                                     can_install,
                                     button_width,
+                                    40.0,
+                                    13.5,
+                                    motion::PrimaryGlyph::Download,
                                 ) {
                                     install = true;
                                 }
@@ -4701,7 +4750,11 @@ impl App {
                     card().show(ui, |ui| {
                         ui.set_width(left_w - 36.0);
                         ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("版本信息").size(13.0).strong());
+                            ui.label(
+                                egui::RichText::new("版本信息")
+                                    .size(13.0)
+                                    .family(bold_family()),
+                            );
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
@@ -4772,7 +4825,11 @@ impl App {
                         ui.separator();
                         ui.add_space(10.0);
                         ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("前置与依赖").size(13.0).strong());
+                            ui.label(
+                                egui::RichText::new("前置与依赖")
+                                    .size(13.0)
+                                    .family(bold_family()),
+                            );
                             ui.add_space(5.0);
                             if !choices.is_empty() {
                                 ui.label(
@@ -4893,7 +4950,11 @@ impl App {
                     card().show(ui, |ui| {
                         ui.set_width(320.0);
                         ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("版本记录").size(13.0).strong());
+                            ui.label(
+                                egui::RichText::new("版本记录")
+                                    .size(13.0)
+                                    .family(bold_family()),
+                            );
                             ui.add_space(5.0);
                             ui.label(
                                 egui::RichText::new(format!("{} 个", versions.len()))
@@ -5228,7 +5289,7 @@ impl App {
                         ui.horizontal(|ui| {
                             motion::accent_bar(ui, 22.0);
                             ui.add_space(7.0);
-                            ui.label(egui::RichText::new("存档").size(26.0).strong());
+                            ui.label(egui::RichText::new("存档").size(26.0).family(bold_family()));
                             ui.add_space(12.0);
                             egui::ComboBox::from_id_salt("saves_target")
                                 .selected_text(&row.label)
@@ -5313,7 +5374,12 @@ impl App {
             )
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("世界").size(12.0).strong().color(MUTED));
+                    ui.label(
+                        egui::RichText::new("世界")
+                            .size(12.0)
+                            .family(bold_family())
+                            .color(MUTED),
+                    );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
                             egui::RichText::new(format!("{}", self.saves_worlds.len()))
@@ -5367,7 +5433,7 @@ impl App {
                                 ui.label(
                                     egui::RichText::new("这个版本还没有存档")
                                         .size(17.0)
-                                        .strong(),
+                                        .family(bold_family()),
                                 );
                                 ui.add_space(6.0);
                                 ui.label(
@@ -5406,7 +5472,12 @@ impl App {
                     .cloned()
                     .unwrap_or_default();
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("快照").size(13.0).strong().color(MUTED));
+                    ui.label(
+                        egui::RichText::new("快照")
+                            .size(13.0)
+                            .family(bold_family())
+                            .color(MUTED),
+                    );
                     ui.label(
                         egui::RichText::new(format!("{} 份", snapshots.len()))
                             .size(10.5)
@@ -5587,7 +5658,7 @@ impl App {
                 .show(ui, |ui| {
                     ui.vertical_centered(|ui| {
                         ui.label(
-                            egui::RichText::new("先选一个安装目标").size(16.0).strong(),
+                            egui::RichText::new("先选一个安装目标").size(16.0).family(bold_family()),
                         );
                         ui.add_space(5.0);
                         ui.label(
@@ -5649,7 +5720,7 @@ impl App {
             ui.label(
                 egui::RichText::new(entries_all.len().to_string())
                     .size(16.0)
-                    .strong(),
+                    .family(bold_family()),
             );
             if disabled > 0 {
                 inline_dot(ui);
@@ -5734,7 +5805,7 @@ impl App {
                         ui.label(
                             egui::RichText::new(format!("还没有安装 {}", kind.label()))
                                 .size(16.0)
-                                .strong(),
+                                .family(bold_family()),
                         );
                         ui.add_space(5.0);
                         ui.label(
@@ -5774,7 +5845,7 @@ impl App {
                                 ui.label(
                                     egui::RichText::new(format!("{} 项有新版本", updates.len()))
                                         .size(12.5)
-                                        .strong(),
+                                        .family(bold_family()),
                                 );
                                 ui.label(
                                     egui::RichText::new("逐个更新，旧文件会一并清理")
@@ -5837,7 +5908,7 @@ impl App {
                                     self.mods_filter.trim()
                                 ))
                                 .size(14.0)
-                                .strong(),
+                                .family(bold_family()),
                             );
                             ui.add_space(8.0);
                             if action_link(ui, "清除筛选").clicked() {
@@ -5952,21 +6023,20 @@ impl App {
     }
 
     fn version_actions(&mut self, ui: &mut egui::Ui, row: &Row, open_dir: &mut Option<PathBuf>) {
-        if motion::primary_sized(ui, "启动", self.busy.is_none(), 92.0, 34.0, 13.0) {
+        if motion::primary_sized_glyph(
+            ui,
+            "启动",
+            self.busy.is_none(),
+            92.0,
+            34.0,
+            13.0,
+            motion::PrimaryGlyph::Play,
+        ) {
             self.selected = Some(row.id.clone());
             self.start_launch();
         }
         ui.add_space(6.0);
-        if ui
-            .add(
-                egui::Button::new("打开目录")
-                    .fill(PANEL)
-                    .stroke(egui::Stroke::new(1.0, LINE))
-                    .corner_radius(9)
-                    .min_size(egui::vec2(78.0, 34.0)),
-            )
-            .clicked()
-        {
+        if motion::secondary_sized(ui, "打开目录", true, 78.0, 34.0, 12.0).clicked() {
             *open_dir = Some(
                 row.game_dir
                     .clone()
@@ -6003,7 +6073,12 @@ impl App {
             )
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("版本").size(12.0).strong().color(MUTED));
+                    ui.label(
+                        egui::RichText::new("版本")
+                            .size(12.0)
+                            .family(bold_family())
+                            .color(MUTED),
+                    );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
                             .add(
@@ -6070,7 +6145,7 @@ impl App {
                         ui.label(
                             egui::RichText::new("还没有安装任何版本")
                                 .size(20.0)
-                                .strong(),
+                                .family(bold_family()),
                         );
                         ui.add_space(6.0);
                         ui.label(
@@ -6084,7 +6159,7 @@ impl App {
                                 egui::Button::new(
                                     egui::RichText::new("安装新版本")
                                         .size(13.0)
-                                        .strong()
+                                        .family(bold_family())
                                         .color(INK),
                                 )
                                 .fill(ACCENT)
@@ -6115,7 +6190,7 @@ impl App {
                                 ui.add_space(7.0);
                                 ui.add(
                                     egui::Label::new(
-                                        egui::RichText::new(&row.label).size(24.0).strong(),
+                                        egui::RichText::new(&row.label).size(24.0).family(bold_family()),
                                     )
                                     .truncate(),
                                 );
@@ -6204,7 +6279,7 @@ impl App {
                         ui.label(
                             egui::RichText::new("安装信息")
                                 .size(12.0)
-                                .strong()
+                                .family(bold_family())
                                 .color(MUTED),
                         );
                         ui.add_space(8.0);
@@ -6293,7 +6368,7 @@ impl App {
                                     ui.label(
                                         egui::RichText::new("内容与存档")
                                             .size(11.5)
-                                            .strong(),
+                                            .family(bold_family()),
                                     );
                                     ui.add_space(8.0);
                                     ui.label(
@@ -6460,7 +6535,11 @@ impl App {
                         ui.horizontal(|ui| {
                             motion::accent_bar(ui, 23.0);
                             ui.add_space(8.0);
-                            ui.label(egui::RichText::new("安装游戏").size(26.0).strong());
+                            ui.label(
+                                egui::RichText::new("安装游戏")
+                                    .size(26.0)
+                                    .family(bold_family()),
+                            );
                         });
                         ui.add_space(3.0);
                         ui.label(
@@ -6670,13 +6749,14 @@ impl App {
                                                 && available(&catalog, kind, &mc)
                                                 && (kind == LoaderKind::Vanilla
                                                     || !version.is_empty());
-                                            if motion::primary_sized(
+                                            if motion::primary_sized_glyph(
                                                 ui,
                                                 "安装",
                                                 can_install,
                                                 ui.available_width(),
                                                 40.0,
                                                 14.0,
+                                                motion::PrimaryGlyph::Download,
                                             ) {
                                                 go = true;
                                             }
@@ -6697,7 +6777,9 @@ impl App {
                                 ui.horizontal(|ui| {
                                     ui.vertical(|ui| {
                                         ui.label(
-                                            egui::RichText::new("导入整合包").size(12.0).strong(),
+                                            egui::RichText::new("导入整合包")
+                                                .size(12.0)
+                                                .family(bold_family()),
                                         );
                                         ui.label(
                                             egui::RichText::new(
@@ -6793,7 +6875,11 @@ impl App {
             ui.add_space(pad);
             ui.vertical(|ui| {
                 ui.set_width(width);
-                ui.label(egui::RichText::new("安装未完成").size(24.0).strong());
+                ui.label(
+                    egui::RichText::new("安装未完成")
+                        .size(24.0)
+                        .family(bold_family()),
+                );
                 ui.add_space(4.0);
                 ui.label(egui::RichText::new(target.label()).size(11.0).color(MUTED));
                 ui.add_space(16.0);
@@ -6825,7 +6911,7 @@ impl App {
                                     egui::Button::new(
                                         egui::RichText::new("继续安装")
                                             .size(13.0)
-                                            .strong()
+                                            .family(bold_family())
                                             .color(INK),
                                     )
                                     .fill(ACCENT)
@@ -6900,7 +6986,9 @@ impl App {
                         ui.set_width(width - 52.0);
                         ui.horizontal(|ui| {
                             ui.vertical(|ui| {
-                                ui.label(egui::RichText::new(title).size(22.0).strong());
+                                ui.label(
+                                    egui::RichText::new(title).size(22.0).family(bold_family()),
+                                );
                                 ui.add_space(2.0);
                                 ui.label(
                                     egui::RichText::new(&self.progress_label)
@@ -6915,7 +7003,7 @@ impl App {
                                         ui.label(
                                             egui::RichText::new(format!("{:.0}%", shown * 100.0))
                                                 .size(26.0)
-                                                .strong()
+                                                .family(bold_family())
                                                 .color(ACCENT),
                                         );
                                     }
@@ -7234,7 +7322,7 @@ fn content_tab(ui: &mut egui::Ui, label: &str, count: usize, active: bool) -> eg
         egui::Button::new(
             egui::RichText::new(text)
                 .size(12.5)
-                .strong()
+                .family(bold_family())
                 .color(if active { INK } else { MUTED }),
         )
         .fill(if active { ACCENT } else { CARD })
@@ -7308,7 +7396,7 @@ fn launch_button(ui: &mut egui::Ui, text: &str, enabled: bool) -> bool {
 
 fn feature(ui: &mut egui::Ui, title: &str, detail: &str) {
     ui.vertical(|ui| {
-        ui.label(egui::RichText::new(title).size(11.5).strong());
+        ui.label(egui::RichText::new(title).size(11.5).family(bold_family()));
         ui.label(egui::RichText::new(detail).size(9.5).color(MUTED));
     });
 }
@@ -7349,7 +7437,14 @@ fn loader_tile(
         rect.left_top() + egui::vec2(12.0, 14.0),
         egui::Align2::LEFT_TOP,
         kind.name(),
-        egui::FontId::proportional(12.5),
+        egui::FontId::new(
+            12.5,
+            if selected {
+                bold_family()
+            } else {
+                egui::FontFamily::Proportional
+            },
+        ),
         title_color,
     );
     ui.painter().text(
@@ -7372,13 +7467,7 @@ fn loader_tile(
 }
 
 fn quick_action(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    ui.add(
-        egui::Button::new(egui::RichText::new(text).size(11.0).color(MUTED))
-            .fill(PANEL)
-            .stroke(egui::Stroke::new(1.0, LINE))
-            .corner_radius(8)
-            .min_size(egui::vec2(94.0, 30.0)),
-    )
+    motion::secondary_sized(ui, text, true, 94.0, 30.0, 11.0)
 }
 
 fn action_link(ui: &mut egui::Ui, text: &str) -> egui::Response {
@@ -7416,7 +7505,7 @@ fn avatar_sized(ui: &mut egui::Ui, name: &str, size: f32) {
         rect.center(),
         egui::Align2::CENTER_CENTER,
         letter,
-        egui::FontId::proportional(size * 0.44),
+        egui::FontId::new(size * 0.44, bold_family()),
         ACCENT,
     );
 }
@@ -7428,7 +7517,11 @@ fn status_dot(ui: &mut egui::Ui, ok: bool) {
 }
 
 fn inline_stat(ui: &mut egui::Ui, value: usize, label: &str) {
-    ui.label(egui::RichText::new(value.to_string()).size(13.5).strong());
+    ui.label(
+        egui::RichText::new(value.to_string())
+            .size(13.5)
+            .family(bold_family()),
+    );
     ui.add_space(3.0);
     ui.label(egui::RichText::new(label).size(10.0).color(MUTED));
 }
@@ -7446,7 +7539,11 @@ fn stat_cell(ui: &mut egui::Ui, value: usize, label: &str) {
         |ui| {
             ui.label(egui::RichText::new(label).size(10.0).color(MUTED));
             ui.add_space(1.0);
-            ui.label(egui::RichText::new(value.to_string()).size(17.0).strong());
+            ui.label(
+                egui::RichText::new(value.to_string())
+                    .size(17.0)
+                    .family(bold_family()),
+            );
         },
     );
 }
@@ -7489,7 +7586,11 @@ fn save_world_row(
             .layout(egui::Layout::left_to_right(egui::Align::Center)),
     );
     child.vertical(|ui| {
-        ui.label(egui::RichText::new(&world.name).size(12.0).strong());
+        ui.label(
+            egui::RichText::new(&world.name)
+                .size(12.0)
+                .family(bold_family()),
+        );
         ui.label(
             egui::RichText::new(format!(
                 "{} · {} · {} 份快照",
@@ -7531,7 +7632,11 @@ fn version_row(ui: &mut egui::Ui, row: &Row, active: bool) -> egui::Response {
     status_dot(&mut child, row.health.missing == 0);
     child.vertical(|ui| {
         ui.add_space(1.0);
-        ui.label(egui::RichText::new(&row.label).size(12.5).strong());
+        ui.label(
+            egui::RichText::new(&row.label)
+                .size(12.5)
+                .family(bold_family()),
+        );
         ui.label(
             egui::RichText::new(format!("{} · {}", row.mc, row.loader.name()))
                 .size(10.0)
@@ -7594,7 +7699,7 @@ fn logo_mark(ui: &mut egui::Ui) {
         rect.center(),
         egui::Align2::CENTER_CENTER,
         "N",
-        egui::FontId::proportional(17.0),
+        egui::FontId::new(17.0, bold_family()),
         INK,
     );
 }
@@ -7654,7 +7759,14 @@ fn sidebar_item(
             egui::pos2(rect.left() + 44.0, rect.center().y),
             egui::Align2::LEFT_CENTER,
             nav.label(),
-            egui::FontId::proportional(if active { 13.5 } else { 13.0 }),
+            egui::FontId::new(
+                if active { 13.5 } else { 13.0 },
+                if active {
+                    bold_family()
+                } else {
+                    egui::FontFamily::Proportional
+                },
+            ),
             if !enabled {
                 egui::Color32::from_rgb(177, 159, 137)
             } else if active {
@@ -7764,7 +7876,10 @@ fn sidebar_account(ui: &mut egui::Ui, name: &str, linked: bool, wide: bool) -> e
         avatar_sized(&mut child, name, 26.0);
         child.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
-            ui.add(egui::Label::new(egui::RichText::new(name).size(11.5).strong()).truncate());
+            ui.add(
+                egui::Label::new(egui::RichText::new(name).size(11.5).family(bold_family()))
+                    .truncate(),
+            );
             ui.label(
                 egui::RichText::new(if linked {
                     "Microsoft 正版"
@@ -8000,7 +8115,7 @@ fn installed_row(
                 egui::Label::new(
                     egui::RichText::new(short_text(&entry.name, 60))
                         .size(13.0)
-                        .strong()
+                        .family(bold_family())
                         .color(name_color),
                 )
                 .truncate(),
@@ -8096,14 +8211,19 @@ fn primary_wide(ui: &mut egui::Ui, text: &str, enabled: bool, width: f32) -> boo
 
 fn accent_outline(ui: &mut egui::Ui, text: &str) -> egui::Response {
     ui.add(
-        egui::Button::new(egui::RichText::new(text).size(11.5).strong().color(ACCENT))
-            .fill(egui::Color32::from_rgb(255, 244, 222))
-            .stroke(egui::Stroke::new(
-                1.0,
-                egui::Color32::from_rgb(232, 178, 92),
-            ))
-            .corner_radius(8)
-            .min_size(egui::vec2(88.0, 30.0)),
+        egui::Button::new(
+            egui::RichText::new(text)
+                .size(11.5)
+                .family(bold_family())
+                .color(ACCENT),
+        )
+        .fill(egui::Color32::from_rgb(255, 244, 222))
+        .stroke(egui::Stroke::new(
+            1.0,
+            egui::Color32::from_rgb(232, 178, 92),
+        ))
+        .corner_radius(8)
+        .min_size(egui::vec2(88.0, 30.0)),
     )
 }
 
@@ -8150,7 +8270,7 @@ fn snapshot_row(
         ui.label(
             egui::RichText::new(human_age(snapshot.created_at))
                 .size(12.5)
-                .strong(),
+                .family(bold_family()),
         );
         ui.label(
             egui::RichText::new(format!(
@@ -8211,7 +8331,11 @@ fn saves_empty_card(
             let width = (ui.available_width() - 4.0).max(280.0);
             ui.set_width(width);
             let left = |ui: &mut egui::Ui| -> bool {
-                ui.label(egui::RichText::new("还没有快照").size(15.0).strong());
+                ui.label(
+                    egui::RichText::new("还没有快照")
+                        .size(15.0)
+                        .family(bold_family()),
+                );
                 ui.add_space(4.0);
                 ui.add(
                     egui::Label::new(
@@ -8444,7 +8568,7 @@ fn version_row_mini(ui: &mut egui::Ui, version: &mods::Version, active: bool) ->
     child.label(
         egui::RichText::new(short_text(&version.version_number, 34))
             .size(11.5)
-            .strong()
+            .family(bold_family())
             .color(INK),
     );
     let mut meta = Vec::new();
@@ -8465,17 +8589,30 @@ fn version_row_mini(ui: &mut egui::Ui, version: &mods::Version, active: bool) ->
     response.on_hover_text(format!("{} · {}", version.version_number, meta.join(" · ")))
 }
 
-fn install_cjk(ctx: &egui::Context) {
-    let candidates = [
+/// 中文正文与粗体分成两个字体族；`RichText::family(bold_family())` 才是真粗体。
+pub(crate) fn bold_family() -> egui::FontFamily {
+    egui::FontFamily::Name("bold".into())
+}
+
+fn install_fonts(ctx: &egui::Context) {
+    const REGULAR: [&str; 5] = [
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
         "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf",
         "C:\\Windows\\Fonts\\msyh.ttc",
         "C:\\Windows\\Fonts\\simhei.ttf",
         "/System/Library/Fonts/PingFang.ttc",
     ];
-    for path in candidates {
+    const BOLD: [&str; 6] = [
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Bold.otf",
+        "C:\\Windows\\Fonts\\msyhbd.ttc",
+        "C:\\Windows\\Fonts\\msyh.ttc",
+        "C:\\Windows\\Fonts\\simhei.ttf",
+        "/System/Library/Fonts/PingFang.ttc",
+    ];
+    let mut fonts = egui::FontDefinitions::default();
+    for path in REGULAR {
         if let Ok(bytes) = std::fs::read(path) {
-            let mut fonts = egui::FontDefinitions::default();
             fonts
                 .font_data
                 .insert("cjk".to_owned(), egui::FontData::from_owned(bytes).into());
@@ -8486,10 +8623,28 @@ fn install_cjk(ctx: &egui::Context) {
                     .or_default()
                     .push("cjk".to_owned());
             }
-            ctx.set_fonts(fonts);
             break;
         }
     }
+    let mut bold_family = fonts
+        .families
+        .get(&egui::FontFamily::Proportional)
+        .cloned()
+        .unwrap_or_default();
+    for path in BOLD {
+        if let Ok(bytes) = std::fs::read(path) {
+            fonts.font_data.insert(
+                "cjk_bold".to_owned(),
+                egui::FontData::from_owned(bytes).into(),
+            );
+            bold_family.insert(0, "cjk_bold".to_owned());
+            break;
+        }
+    }
+    fonts
+        .families
+        .insert(egui::FontFamily::Name("bold".into()), bold_family);
+    ctx.set_fonts(fonts);
 }
 
 fn main() -> eframe::Result<()> {
@@ -8553,7 +8708,7 @@ fn main() -> eframe::Result<()> {
             visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, INK);
             visuals.text_cursor.stroke = egui::Stroke::new(2.0, ACCENT_LO);
             cc.egui_ctx.set_visuals(visuals);
-            install_cjk(&cc.egui_ctx);
+            install_fonts(&cc.egui_ctx);
             Ok(Box::new(App::new(root)))
         }),
     )

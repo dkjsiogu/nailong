@@ -407,7 +407,18 @@ pub fn accent_bar(ui: &mut egui::Ui, height: f32) {
     );
 }
 
-/// Primary action: warm gradient, soft glow, hover lift and press feedback.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PrimaryGlyph {
+    None,
+    Play,
+    Download,
+}
+
+/// Primary action: matte amber, a fine top edge and a warm contact shadow.
+///
+/// The earlier version relied on a bright vertical gradient plus a white gloss
+/// line, which reads as a generic "web button". This one keeps the gradient
+/// narrow, adds a real border/contact shadow and only lifts on hover.
 pub fn primary_sized(
     ui: &mut egui::Ui,
     text: &str,
@@ -416,7 +427,301 @@ pub fn primary_sized(
     height: f32,
     font_size: f32,
 ) -> bool {
+    primary_sized_glyph(
+        ui,
+        text,
+        enabled,
+        width,
+        height,
+        font_size,
+        PrimaryGlyph::None,
+    )
+}
+
+pub fn primary_sized_glyph(
+    ui: &mut egui::Ui,
+    text: &str,
+    enabled: bool,
+    width: f32,
+    height: f32,
+    font_size: f32,
+    glyph: PrimaryGlyph,
+) -> bool {
     let desired = egui::vec2(width.max(72.0), height.max(28.0));
+    let sense = if enabled {
+        egui::Sense::click()
+    } else {
+        egui::Sense::hover()
+    };
+    let (rect, response) = ui.allocate_exact_size(desired, sense);
+    let hover = ui.ctx().animate_bool_with_time(
+        response.id.with("hover"),
+        response.hovered() && enabled,
+        0.16,
+    );
+    let pressed = enabled && response.is_pointer_button_down_on();
+    let radius = (height * 0.24).clamp(8.0, 10.0);
+    let painter = ui.painter();
+    let body = if enabled {
+        rect.translate(egui::vec2(0.0, -hover + if pressed { 1.0 } else { 0.0 }))
+    } else {
+        rect
+    };
+    if enabled {
+        // Two shadows: a tight contact shadow keeps the button grounded, the
+        // wider warm one gives it depth without the old orange halo.
+        painter.add(
+            Shadow {
+                offset: [0, if pressed { 2 } else { 7 + (hover * 2.0) as i8 }],
+                blur: if pressed { 8 } else { 20 + (hover * 6.0) as u8 },
+                spread: 0,
+                color: egui::Color32::from_rgba_unmultiplied(
+                    132,
+                    82,
+                    24,
+                    (20.0 + 8.0 * hover) as u8,
+                ),
+            }
+            .as_shape(body, radius),
+        );
+        painter.add(
+            Shadow {
+                offset: [0, 1],
+                blur: 2,
+                spread: 0,
+                color: egui::Color32::from_rgba_unmultiplied(92, 52, 12, 42),
+            }
+            .as_shape(body, radius),
+        );
+
+        let top = mix(
+            egui::Color32::from_rgb(247, 178, 58),
+            egui::Color32::WHITE,
+            hover * 0.04,
+        );
+        let bottom = mix(
+            egui::Color32::from_rgb(239, 155, 26),
+            egui::Color32::from_rgb(247, 178, 58),
+            hover * 0.05,
+        );
+        let top = if pressed { mix(top, bottom, 0.32) } else { top };
+        gradient_rrect(painter, body, radius, top, bottom);
+
+        // Just a hairline of inner light and a darker bottom seam. No wide
+        // glossy band: that was what made the old button feel like plastic.
+        let inner = body.shrink(1.0);
+        let inset = radius + 1.0;
+        painter.line_segment(
+            [
+                egui::pos2(inner.left() + inset, inner.top() + 0.5),
+                egui::pos2(inner.right() - inset, inner.top() + 0.5),
+            ],
+            egui::Stroke::new(
+                1.0,
+                egui::Color32::from_white_alpha(if pressed { 36 } else { 62 }),
+            ),
+        );
+        let lower = egui::Rect::from_min_max(
+            egui::pos2(inner.left() + inset, inner.bottom() - 2.0),
+            egui::pos2(inner.right() - inset, inner.bottom()),
+        );
+        gradient_rect(
+            painter,
+            lower,
+            egui::Color32::TRANSPARENT,
+            egui::Color32::from_rgba_unmultiplied(112, 56, 4, 18),
+        );
+
+        let border = if pressed {
+            egui::Color32::from_rgb(198, 116, 10)
+        } else {
+            mix(
+                egui::Color32::from_rgb(216, 133, 16),
+                egui::Color32::WHITE,
+                hover * 0.10,
+            )
+        };
+        painter.rect_stroke(
+            body,
+            radius,
+            egui::Stroke::new(1.0, border),
+            egui::StrokeKind::Inside,
+        );
+
+        // Only a whisper of amber light on hover; the contact shadow does the
+        // heavy lifting now.
+        if hover > 0.01 && !pressed {
+            glow(
+                painter,
+                body,
+                radius,
+                egui::Color32::from_rgba_unmultiplied(245, 158, 11, (9.0 * hover) as u8),
+                18,
+            );
+        }
+
+        paint_primary_label(painter, body, text, font_size, glyph, pressed);
+        if response.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+    } else {
+        painter.rect(
+            rect,
+            radius,
+            egui::Color32::from_rgb(248, 238, 224),
+            egui::Stroke::new(1.0, LINE),
+            egui::StrokeKind::Inside,
+        );
+        let inner = rect.shrink(1.0);
+        let inset = radius + 1.0;
+        painter.line_segment(
+            [
+                egui::pos2(inner.left() + inset, inner.top() + 0.5),
+                egui::pos2(inner.right() - inset, inner.top() + 0.5),
+            ],
+            egui::Stroke::new(1.0, egui::Color32::from_white_alpha(70)),
+        );
+        paint_primary_label_disabled(painter, rect, text, font_size, glyph);
+    }
+    response.clicked()
+}
+
+fn paint_primary_label(
+    painter: &egui::Painter,
+    body: egui::Rect,
+    text: &str,
+    font_size: f32,
+    glyph: PrimaryGlyph,
+    pressed: bool,
+) {
+    let font = egui::FontId::new(font_size, crate::bold_family());
+    let galley = painter.layout_no_wrap(text.to_owned(), font, INK);
+    let icon_w = if glyph == PrimaryGlyph::None {
+        0.0
+    } else {
+        15.0
+    };
+    let gap = if glyph == PrimaryGlyph::None {
+        0.0
+    } else {
+        8.0
+    };
+    let total = icon_w + gap + galley.size().x;
+    let left = body.center().x - total * 0.5;
+    if glyph != PrimaryGlyph::None {
+        let icon_rect = egui::Rect::from_center_size(
+            egui::pos2(left + icon_w * 0.5, body.center().y),
+            egui::vec2(icon_w, 16.0),
+        );
+        paint_primary_glyph(
+            painter,
+            icon_rect,
+            glyph,
+            egui::Color32::from_rgba_unmultiplied(46, 36, 24, 218),
+        );
+    }
+    let pos = egui::pos2(
+        left + icon_w + gap,
+        body.center().y - galley.size().y * 0.5 + 0.5 + if pressed { 0.5 } else { 0.0 },
+    );
+    painter.galley(pos, galley, INK);
+}
+
+fn paint_primary_label_disabled(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    text: &str,
+    font_size: f32,
+    glyph: PrimaryGlyph,
+) {
+    let color = egui::Color32::from_rgb(158, 137, 112);
+    let font = egui::FontId::new(font_size, crate::bold_family());
+    let galley = painter.layout_no_wrap(text.to_owned(), font, color);
+    let icon_w = if glyph == PrimaryGlyph::None {
+        0.0
+    } else {
+        15.0
+    };
+    let gap = if glyph == PrimaryGlyph::None {
+        0.0
+    } else {
+        8.0
+    };
+    let total = icon_w + gap + galley.size().x;
+    let left = rect.center().x - total * 0.5;
+    if glyph != PrimaryGlyph::None {
+        let icon_rect = egui::Rect::from_center_size(
+            egui::pos2(left + icon_w * 0.5, rect.center().y),
+            egui::vec2(icon_w, 16.0),
+        );
+        paint_primary_glyph(painter, icon_rect, glyph, color);
+    }
+    painter.galley(
+        egui::pos2(
+            left + icon_w + gap,
+            rect.center().y - galley.size().y * 0.5 + 0.5,
+        ),
+        galley,
+        color,
+    );
+}
+
+fn paint_primary_glyph(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    glyph: PrimaryGlyph,
+    color: egui::Color32,
+) {
+    let c = rect.center();
+    match glyph {
+        PrimaryGlyph::None => {}
+        PrimaryGlyph::Play => {
+            painter.add(egui::Shape::convex_polygon(
+                vec![
+                    egui::pos2(c.x - 2.8, c.y - 5.0),
+                    egui::pos2(c.x + 5.0, c.y),
+                    egui::pos2(c.x - 2.8, c.y + 5.0),
+                ],
+                color,
+                egui::Stroke::NONE,
+            ));
+        }
+        PrimaryGlyph::Download => {
+            let stroke = egui::Stroke::new(1.7, color);
+            painter.line_segment(
+                [egui::pos2(c.x, c.y - 5.0), egui::pos2(c.x, c.y + 2.8)],
+                stroke,
+            );
+            painter.line_segment(
+                [egui::pos2(c.x - 3.6, c.y - 0.8), egui::pos2(c.x, c.y + 2.8)],
+                stroke,
+            );
+            painter.line_segment(
+                [egui::pos2(c.x + 3.6, c.y - 0.8), egui::pos2(c.x, c.y + 2.8)],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(c.x - 5.0, c.y + 5.3),
+                    egui::pos2(c.x + 5.0, c.y + 5.3),
+                ],
+                stroke,
+            );
+        }
+    }
+}
+
+/// Secondary action: white surface, warm hairline border and a one-pixel
+/// contact shadow. Keeps the primary amber button clearly in front.
+pub fn secondary_sized(
+    ui: &mut egui::Ui,
+    text: &str,
+    enabled: bool,
+    width: f32,
+    height: f32,
+    font_size: f32,
+) -> egui::Response {
+    let desired = egui::vec2(width.max(48.0), height.max(24.0));
     let sense = if enabled {
         egui::Sense::click()
     } else {
@@ -429,57 +734,84 @@ pub fn primary_sized(
         0.14,
     );
     let pressed = enabled && response.is_pointer_button_down_on();
+    let radius = (height * 0.24).clamp(7.0, 10.0);
     let painter = ui.painter();
+    let body = rect.translate(egui::vec2(
+        0.0,
+        -hover * 0.5 + if pressed { 0.5 } else { 0.0 },
+    ));
     if enabled {
-        let time = ui.input(|input| input.time) as f32;
-        let pulse = (time * 1.25).sin() * 0.5 + 0.5;
-        let glow_alpha = 8.0 + 6.0 * pulse + 28.0 * hover;
         painter.add(
             Shadow {
-                offset: [0, 8],
-                blur: 24,
+                offset: [0, if pressed { 1 } else { 2 }],
+                blur: if pressed { 3 } else { 7 },
                 spread: 0,
-                color: egui::Color32::from_rgba_unmultiplied(245, 158, 11, glow_alpha as u8),
+                color: egui::Color32::from_rgba_unmultiplied(
+                    128,
+                    95,
+                    60,
+                    (14.0 + 6.0 * hover) as u8,
+                ),
             }
-            .as_shape(rect, 9),
+            .as_shape(body, radius),
         );
-        let inset = if pressed { 1.0 } else { 0.0 };
-        let body = rect.shrink(inset);
-        let top = mix(ACCENT_HI, egui::Color32::WHITE, hover * 0.10);
-        let bottom = mix(ACCENT_LO, ACCENT_HI, hover * 0.28);
-        gradient_rrect(painter, body, 9.0, top, bottom);
-        let gloss = egui::Rect::from_min_max(
-            egui::pos2(body.left() + 7.0, body.top() + 1.0),
-            egui::pos2(body.right() - 7.0, body.top() + 1.6),
+        let fill = if pressed {
+            crate::SURFACE2
+        } else {
+            mix(
+                egui::Color32::WHITE,
+                egui::Color32::from_rgb(255, 248, 236),
+                hover,
+            )
+        };
+        let border = mix(
+            egui::Color32::from_rgb(231, 211, 184),
+            crate::ACCENT_HI,
+            hover * 0.7,
         );
-        painter.rect_filled(gloss, 1, egui::Color32::from_white_alpha(78));
+        painter.rect(
+            body,
+            radius,
+            fill,
+            egui::Stroke::new(1.0, border),
+            egui::StrokeKind::Inside,
+        );
+        let inner = body.shrink(1.0);
+        let inset = radius + 1.0;
+        painter.line_segment(
+            [
+                egui::pos2(inner.left() + inset, inner.top() + 0.5),
+                egui::pos2(inner.right() - inset, inner.top() + 0.5),
+            ],
+            egui::Stroke::new(1.0, egui::Color32::from_white_alpha(84)),
+        );
         painter.text(
-            body.center() + egui::vec2(0.0, if pressed { 1.0 } else { 0.0 }),
+            body.center() + egui::vec2(0.0, 0.5),
             egui::Align2::CENTER_CENTER,
             text,
             egui::FontId::proportional(font_size),
             INK,
         );
-        if response.hovered() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        }
     } else {
         painter.rect(
-            rect,
-            9,
-            SURFACE2,
+            body,
+            radius,
+            egui::Color32::from_rgb(250, 243, 233),
             egui::Stroke::new(1.0, LINE),
             egui::StrokeKind::Inside,
         );
         painter.text(
-            rect.center(),
+            body.center() + egui::vec2(0.0, 0.5),
             egui::Align2::CENTER_CENTER,
             text,
             egui::FontId::proportional(font_size),
             MUTED,
         );
     }
-    response.clicked()
+    if enabled && response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    response
 }
 
 /// Custom progress track with a gradient fill and a slow sheen.

@@ -8,7 +8,7 @@ A small, native Minecraft: Java Edition launcher written in Rust. Windows ships 
 
 [简体中文](README.md) | **English**
 
-> Current version: **0.18.0** (preview)
+> Current version: **0.18.1** (preview)
 >
 > Goals: small binaries, few dependencies, visible install progress, and a repair path after interruption. See [implementation status](docs/design/14-implementation-status.md) for exact boundaries.
 
@@ -27,7 +27,7 @@ It is not a universal launcher, and it is not 1.0 yet. What works and what does 
 
 ## Interface
 
-0.18 rearranges the UI around a player's daily path. A persistent sidebar holds four places — **Home, Versions, Content, Saves**. Content merges discovery and installed items into one library; Versions is only launch and maintenance; Saves is a first-class page with its own version picker. The theme is now cream, white cards and orange/yellow accents, with the same quiet motion recalibrated for light surfaces.
+0.18 rearranges the UI around a player's daily path. A persistent sidebar holds four places — **Home, Versions, Content, Saves**. Content merges discovery and installed items into one library; Versions is only launch and maintenance; Saves is a first-class page with its own version picker. The theme is cream, white cards and orange/yellow accents. 0.18.1 adds a real bold CJK family, a matte amber primary action with optional play/download glyphs, and secondary buttons with warm borders and contact shadows.
 
 ![Motion demo: sidebar, content library, card hover and detail return](docs/screenshots/motion.gif)
 
@@ -105,7 +105,7 @@ Drag a `.mrpack` or `.zip` into the window to start an import. A single mod `.ja
 | Platform | File | Size | Requirements |
 |---|---|---:|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | ~8 MB | Windows 10/11, Java 21 |
-| Linux x64 (deb) | [nailong_0.18.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.18.0_amd64.deb) | ~3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
+| Linux x64 (deb) | [nailong_0.18.1_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.18.1_amd64.deb) | ~3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
 
 Checksums: [SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS).
 
