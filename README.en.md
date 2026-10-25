@@ -8,7 +8,7 @@ A small, native Minecraft: Java Edition launcher written in Rust. Windows ships 
 
 [简体中文](README.md) | **English**
 
-> Current version: **0.16.0** (preview)
+> Current version: **0.17.0** (preview)
 >
 > Goals: small binaries, few dependencies, visible install progress, and a repair path after interruption. See [implementation status](docs/design/14-implementation-status.md) for exact boundaries.
 
@@ -27,7 +27,9 @@ It is not a universal launcher, and it is not 1.0 yet. What works and what does 
 
 ## Interface
 
-0.16 rebuilds the UI around a [design system](docs/design/15-ui-design-system.md): dark neutral surfaces, one warm accent, a fixed page header, and a single scrolling content area. Each page has one primary action; deletes confirm inline; empty states point at the next step.
+0.17 builds on the 0.16 [design system](docs/design/15-ui-design-system.md) with light and motion: ambient glow and embers, hover lift and border glow on cards, page transitions, a breathing primary action, a sheen on progress, and modal entrances. Dark neutral surfaces, one warm accent, a fixed page header, and a single scrolling content area. Each page has one primary action; deletes confirm inline; empty states point at the next step.
+
+![Motion demo: page transitions, card hover, switches and modal entrance](docs/screenshots/motion.gif)
 
 | Home | Download center |
 |---|---|
@@ -35,7 +37,7 @@ It is not a universal launcher, and it is not 1.0 yet. What works and what does 
 | **Project page** | **Content manager** |
 | ![Project page](docs/screenshots/06-detail.png) | ![Content manager](docs/screenshots/07-installed.png) |
 
-More screenshots (version manager, install, search, updates, saves, progress, account dialogs): [docs/screenshots](docs/screenshots).
+More screenshots (version manager, install, search, updates, saves, progress, account dialogs): [docs/screenshots](docs/screenshots). The motion clip is about 11 seconds and covers hover, page transitions, a switch, progress and the account dialog.
 
 ## Features
 
@@ -101,7 +103,7 @@ Drag a `.mrpack` or `.zip` into the window to start an import. A single mod `.ja
 | Platform | File | Size | Requirements |
 |---|---|---:|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | ~8 MB | Windows 10/11, Java 21 |
-| Linux x64 (deb) | [nailong_0.16.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.16.0_amd64.deb) | ~3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
+| Linux x64 (deb) | [nailong_0.17.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.17.0_amd64.deb) | ~3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
 
 Checksums: [SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS).
 
@@ -153,7 +155,7 @@ Official releases include a project key, so CurseForge packs use the official AP
 
 Ran for real:
 
-- GUI: every page was walked at 1120×720 and the 900×620 minimum, including browse/search/detail, content manager, update banner, delete confirmation, empty states, save snapshots, progress, and the account/login dialogs; screenshots live in `docs/screenshots/`.
+- GUI: every page was walked at 1120×720 and the 900×620 minimum, including browse/search/detail, content manager, update banner, delete confirmation, empty states, save snapshots, progress, and the account/login dialogs; 18 screenshots and an 11-second motion GIF live in `docs/screenshots/`.
 - Linux (Xvfb + Mesa): Fabric 0.19.5, NeoForge 21.1.209, and Forge 52.1.20 on 1.21.1 reached the main menu.
 - Fabulously Optimized `.mrpack`: 151 mods loaded and launched.
 - CurseForge: a real file was downloaded through the no-key official-page fallback; the approved API key returned the official file name, size, SHA1, and download URL.

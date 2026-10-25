@@ -15,14 +15,16 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
-const BG: egui::Color32 = egui::Color32::from_rgb(15, 17, 22);
+mod motion;
+
+const BG: egui::Color32 = egui::Color32::from_rgb(11, 15, 22);
 const ACCENT: egui::Color32 = egui::Color32::from_rgb(245, 196, 81);
-const CARD: egui::Color32 = egui::Color32::from_rgb(27, 31, 39);
-const PANEL: egui::Color32 = egui::Color32::from_rgb(20, 23, 29);
-const SURFACE: egui::Color32 = egui::Color32::from_rgb(27, 31, 39);
-const SURFACE2: egui::Color32 = egui::Color32::from_rgb(36, 41, 51);
-const LINE: egui::Color32 = egui::Color32::from_rgb(44, 49, 60);
-const MUTED: egui::Color32 = egui::Color32::from_rgb(148, 155, 167);
+const CARD: egui::Color32 = egui::Color32::from_rgb(28, 35, 47);
+const PANEL: egui::Color32 = egui::Color32::from_rgb(17, 22, 32);
+const SURFACE: egui::Color32 = egui::Color32::from_rgb(28, 35, 47);
+const SURFACE2: egui::Color32 = egui::Color32::from_rgb(40, 49, 63);
+const LINE: egui::Color32 = egui::Color32::from_rgb(52, 64, 82);
+const MUTED: egui::Color32 = egui::Color32::from_rgb(150, 160, 177);
 const WARN: egui::Color32 = egui::Color32::from_rgb(232, 161, 92);
 const OK: egui::Color32 = egui::Color32::from_rgb(126, 198, 153);
 const SUCCESS: egui::Color32 = egui::Color32::from_rgb(126, 198, 153);
@@ -266,6 +268,10 @@ struct App {
     login_rx: Option<mpsc::Receiver<Msg>>,
     login_busy: bool,
     show_account: bool,
+    page_key: u8,
+    page_enter_at: f64,
+    modal_key: u8,
+    modal_started: f64,
     rx: Option<mpsc::Receiver<Msg>>,
     catalog_rx: Option<mpsc::Receiver<Msg>>,
 }
@@ -377,6 +383,10 @@ impl App {
             login_rx: None,
             login_busy: false,
             show_account: false,
+            page_key: 255,
+            page_enter_at: 0.0,
+            modal_key: 0,
+            modal_started: 0.0,
             rx: None,
             catalog_rx: None,
         };
@@ -496,6 +506,31 @@ impl App {
             }
         }
         app
+    }
+
+    fn page_id(&self) -> u8 {
+        if matches!(self.busy, Some(Task::Install) | Some(Task::Mods)) {
+            return 10;
+        }
+        if self.show_mods {
+            if self.mods_show_installed {
+                6
+            } else if self.mods_selected.is_some() {
+                5
+            } else if self.mods_searching {
+                4
+            } else {
+                3
+            }
+        } else if self.show_saves {
+            8
+        } else if self.show_manage {
+            2
+        } else if self.show_install {
+            1
+        } else {
+            0
+        }
     }
 
     fn refresh(&mut self) {
@@ -803,18 +838,52 @@ impl App {
     }
 
     fn account_overlay(&mut self, ctx: &egui::Context) {
+        let now = ctx.input(|input| input.time);
+        let kind = if self.login_url.is_some() {
+            1
+        } else if self.show_account && self.account.is_some() {
+            2
+        } else {
+            0
+        };
+        if kind != self.modal_key {
+            self.modal_key = kind;
+            self.modal_started = now;
+        }
+        let raw = (((now - self.modal_started) / 0.20) as f32).clamp(0.0, 1.0);
+        let open_e = motion::ease_out_cubic(raw);
+        if kind != 0 && raw < 1.0 {
+            ctx.request_repaint_after(Duration::from_millis(16));
+        }
+        let backdrop = (100.0 * open_e) as u8;
+        let frame_fill = egui::Color32::from_rgba_unmultiplied(
+            CARD.r(),
+            CARD.g(),
+            CARD.b(),
+            (255.0 * open_e) as u8,
+        );
+        let frame_stroke = egui::Color32::from_rgba_unmultiplied(
+            LINE.r(),
+            LINE.g(),
+            LINE.b(),
+            (255.0 * open_e) as u8,
+        );
         if let Some(url) = self.login_url.clone() {
             let mut open = false;
             let mut cancel_login = false;
             let modal = egui::Modal::new(egui::Id::unique("login_modal"))
+                .backdrop_color(egui::Color32::from_black_alpha(backdrop))
                 .frame(
                     egui::Frame::new()
-                        .fill(CARD)
-                        .stroke(egui::Stroke::new(1.0, LINE))
+                        .fill(frame_fill)
+                        .stroke(egui::Stroke::new(1.0, frame_stroke))
                         .corner_radius(16)
+                        .shadow(motion::card_shadow())
                         .inner_margin(egui::Margin::symmetric(26, 22)),
                 )
                 .show(ctx, |ui| {
+                    ui.multiply_opacity(0.35 + 0.65 * open_e);
+                    ui.add_space((1.0 - open_e) * 8.0);
                     ui.set_width(368.0);
                     ui.vertical_centered(|ui| {
                         ui.label(
@@ -894,14 +963,18 @@ impl App {
             let mut logout = false;
             let mut close = false;
             let modal = egui::Modal::new(egui::Id::unique("account_modal"))
+                .backdrop_color(egui::Color32::from_black_alpha(backdrop))
                 .frame(
                     egui::Frame::new()
-                        .fill(CARD)
-                        .stroke(egui::Stroke::new(1.0, LINE))
+                        .fill(frame_fill)
+                        .stroke(egui::Stroke::new(1.0, frame_stroke))
                         .corner_radius(16)
+                        .shadow(motion::card_shadow())
                         .inner_margin(egui::Margin::symmetric(24, 20)),
                 )
                 .show(ctx, |ui| {
+                    ui.multiply_opacity(0.35 + 0.65 * open_e);
+                    ui.add_space((1.0 - open_e) * 8.0);
                     ui.set_width(360.0);
                     ui.horizontal(|ui| {
                         avatar_sized(ui, &name, 46.0);
@@ -2361,6 +2434,17 @@ impl App {
                         }
                     });
                 });
+                let screen = ui.ctx().content_rect();
+                let y = 64.0 - 1.0;
+                motion::gradient_h(
+                    ui.painter(),
+                    egui::Rect::from_min_size(
+                        egui::pos2(screen.left(), y),
+                        egui::vec2(screen.width(), 1.0),
+                    ),
+                    egui::Color32::from_rgba_unmultiplied(245, 196, 81, 55),
+                    egui::Color32::from_rgba_unmultiplied(245, 196, 81, 0),
+                );
             });
     }
 
@@ -2392,6 +2476,14 @@ impl App {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.add_space(26.0);
+                let halo = ui.cursor().min + egui::vec2(left_w * 0.5, 140.0);
+                let pulse = ((ui.input(|input| input.time) as f32 * 0.8).sin() * 0.5 + 0.5) * 8.0;
+                motion::aura(
+                    ui,
+                    halo,
+                    430.0,
+                    egui::Color32::from_rgba_unmultiplied(245, 196, 81, (9.0 + pulse) as u8),
+                );
                 ui.horizontal(|ui| {
                     ui.add_space(pad);
                     ui.vertical(|ui| {
@@ -2406,10 +2498,23 @@ impl App {
                                         .fill(SURFACE)
                                         .stroke(egui::Stroke::new(1.0, LINE))
                                         .corner_radius(14)
+                                        .shadow(motion::card_shadow())
                                         .inner_margin(egui::Margin::symmetric(20, 18))
                                         .show(ui, |ui| {
                                             ui.set_width(left_w - 40.0);
                                             ui.set_min_height(240.0);
+                                            motion::hero_rule(ui, 20.0);
+                                            let content = ui.max_rect();
+                                            motion::status_ring(
+                                                ui.painter(),
+                                                egui::pos2(
+                                                    content.right() - 38.0,
+                                                    content.bottom() - 78.0,
+                                                ),
+                                                24.0,
+                                                row.health.missing == 0,
+                                                row.health.missing,
+                                            );
                                             ui.horizontal(|ui| {
                                                 ui.label(
                                                     egui::RichText::new("当前版本")
@@ -2580,6 +2685,7 @@ impl App {
                                         .fill(SURFACE)
                                         .stroke(egui::Stroke::new(1.0, LINE))
                                         .corner_radius(14)
+                                        .shadow(motion::card_shadow())
                                         .inner_margin(egui::Margin::symmetric(18, 18))
                                         .show(ui, |ui| {
                                             ui.set_width(right_w - 36.0);
@@ -2742,6 +2848,7 @@ impl App {
                                         .fill(SURFACE)
                                         .stroke(egui::Stroke::new(1.0, LINE))
                                         .corner_radius(14)
+                                        .shadow(motion::card_shadow())
                                         .inner_margin(egui::Margin::symmetric(20, 16))
                                         .show(ui, |ui| {
                                             ui.set_width(left_w - 40.0);
@@ -2832,6 +2939,7 @@ impl App {
                                         .fill(SURFACE)
                                         .stroke(egui::Stroke::new(1.0, LINE))
                                         .corner_radius(14)
+                                        .shadow(motion::card_shadow())
                                         .inner_margin(egui::Margin::symmetric(18, 16))
                                         .show(ui, |ui| {
                                             ui.set_width(right_w - 36.0);
@@ -3041,23 +3149,31 @@ impl App {
 
     fn mods_view(&mut self, ui: &mut egui::Ui) {
         egui::Panel::top("mods_header_panel")
-            .frame(egui::Frame::new().fill(BG).inner_margin(egui::Margin {
-                left: 28,
-                right: 28,
-                top: 16,
-                bottom: 10,
-            }))
+            .frame(
+                egui::Frame::new()
+                    .fill(egui::Color32::TRANSPARENT)
+                    .inner_margin(egui::Margin {
+                        left: 28,
+                        right: 28,
+                        top: 16,
+                        bottom: 10,
+                    }),
+            )
             .show(ui, |ui| {
                 mods_column(ui, 1000.0, |ui| self.mods_header(ui));
             });
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(BG).inner_margin(egui::Margin {
-                left: 28,
-                right: 28,
-                top: 2,
-                bottom: 0,
-            }))
+            .frame(
+                egui::Frame::new()
+                    .fill(egui::Color32::TRANSPARENT)
+                    .inner_margin(egui::Margin {
+                        left: 28,
+                        right: 28,
+                        top: 2,
+                        bottom: 0,
+                    }),
+            )
             .show(ui, |ui| {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
@@ -3081,7 +3197,9 @@ impl App {
 
     fn mods_header(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("下载中心").size(24.0).strong());
+            motion::accent_bar(ui, 20.0);
+            ui.add_space(7.0);
+            ui.label(egui::RichText::new("下载中心").size(26.0).strong());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let go = ui
                     .add(
@@ -3128,7 +3246,19 @@ impl App {
                 .stroke(egui::Stroke::new(1.0, stroke))
                 .corner_radius(9)
                 .min_size(egui::vec2(78.0, 32.0));
-                if ui.add(button).clicked() {
+                let tab = ui.add(button);
+                if selected {
+                    let pulse =
+                        ((ui.input(|input| input.time) as f32 * 1.1).sin() * 0.5 + 0.5) * 10.0;
+                    motion::glow(
+                        ui.painter(),
+                        tab.rect,
+                        9,
+                        egui::Color32::from_rgba_unmultiplied(245, 196, 81, (22.0 + pulse) as u8),
+                        14,
+                    );
+                }
+                if tab.clicked() {
                     let changed = self.mods_kind != candidate;
                     if !changed {
                         // 同一个品类再点一次没有副作用。
@@ -3457,6 +3587,7 @@ impl App {
         }
         let mut installs = Vec::new();
         let mut more: Option<mods::Sort> = None;
+        let mut order = 0usize;
         for shelf in &shelves {
             ui.add_space(16.0);
             ui.horizontal(|ui| {
@@ -3483,9 +3614,10 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 10.0;
                     for project in row {
-                        if let Some(chosen) = self.project_card(ui, project, card_width) {
+                        if let Some(chosen) = self.project_card(ui, project, card_width, order) {
                             installs.push(chosen);
                         }
+                        order += 1;
                     }
                 });
                 ui.add_space(10.0);
@@ -3571,14 +3703,16 @@ impl App {
             .clamp(220.0, 300.0);
         let results = std::mem::take(&mut self.mods_results);
         let mut installs = Vec::new();
+        let mut order = 0usize;
         for chunk in results.chunks(per_row) {
             ui.add_space(10.0);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 10.0;
                 for project in chunk {
-                    if let Some(chosen) = self.project_card(ui, project, card_width) {
+                    if let Some(chosen) = self.project_card(ui, project, card_width, order) {
                         installs.push(chosen);
                     }
+                    order += 1;
                 }
             });
         }
@@ -3592,6 +3726,7 @@ impl App {
                 .fill(CARD)
                 .stroke(egui::Stroke::new(1.0, LINE))
                 .corner_radius(14)
+                .shadow(motion::card_shadow())
                 .inner_margin(egui::Margin::symmetric(24, 28))
                 .show(ui, |ui| {
                     ui.vertical_centered(|ui| {
@@ -3643,6 +3778,7 @@ impl App {
         ui: &mut egui::Ui,
         project: &mods::Project,
         width: f32,
+        order: usize,
     ) -> Option<mods::Project> {
         let key = project_key(project);
         let summary_chars = ((width * 0.2) as usize).clamp(40, 62);
@@ -3651,22 +3787,78 @@ impl App {
         let busy = self.busy.is_some();
         let (rect, response) =
             ui.allocate_exact_size(egui::vec2(width, 112.0), egui::Sense::click());
-        let hovered = response.hovered();
-        let fill = if hovered {
-            egui::Color32::from_rgb(31, 35, 43)
+        #[cfg(debug_assertions)]
+        let forced_hover = std::env::var("NAILONG_DEBUG_HOVER")
+            .ok()
+            .is_some_and(|needle| project.name.to_lowercase().contains(&needle.to_lowercase()));
+        #[cfg(not(debug_assertions))]
+        let forced_hover = false;
+        #[cfg(debug_assertions)]
+        let cycle_hover = std::env::var("NAILONG_DEBUG_HOVER_CYCLE")
+            .ok()
+            .and_then(|count| count.parse::<usize>().ok())
+            .is_some_and(|count| {
+                let phase = ((ui.input(|input| input.time) / 1.35) as usize) % count.max(1);
+                order < count && order == phase
+            });
+        #[cfg(not(debug_assertions))]
+        let cycle_hover = false;
+        let hovered = if std::env::var_os("NAILONG_DEBUG_HOVER").is_some()
+            || std::env::var_os("NAILONG_DEBUG_HOVER_CYCLE").is_some()
+        {
+            forced_hover || cycle_hover
         } else {
-            CARD
+            response.hovered()
         };
-        let border = if hovered { ACCENT } else { LINE };
+        let hover_t =
+            ui.ctx()
+                .animate_bool_with_time(response.id.with("card_hover"), hovered, 0.16);
+        let lift = hover_t * 3.0;
+        let paint = rect.translate(egui::vec2(0.0, -lift));
+        let fill = motion::mix(CARD, egui::Color32::from_rgb(33, 38, 47), hover_t);
+        let border = motion::mix(LINE, ACCENT, hover_t);
+        ui.painter().add(
+            egui::epaint::Shadow {
+                offset: [0, 10],
+                blur: 26,
+                spread: 0,
+                color: egui::Color32::from_black_alpha((60.0 + 50.0 * hover_t) as u8),
+            }
+            .as_shape(paint, 12),
+        );
+        if hover_t > 0.01 {
+            ui.painter().add(
+                egui::epaint::Shadow {
+                    offset: [0, 2],
+                    blur: 22,
+                    spread: 0,
+                    color: egui::Color32::from_rgba_unmultiplied(
+                        245,
+                        196,
+                        81,
+                        (16.0 * hover_t) as u8,
+                    ),
+                }
+                .as_shape(paint, 12),
+            );
+        }
         ui.painter().rect(
-            rect,
+            paint,
             12,
             fill,
             egui::Stroke::new(1.0, border),
             egui::StrokeKind::Inside,
         );
+        ui.painter().rect_filled(
+            egui::Rect::from_min_max(
+                egui::pos2(paint.left() + 10.0, paint.top() + 1.0),
+                egui::pos2(paint.right() - 10.0, paint.top() + 1.6),
+            ),
+            1,
+            egui::Color32::from_white_alpha(14),
+        );
 
-        let inner = rect.shrink2(egui::vec2(12.0, 10.0));
+        let inner = paint.shrink2(egui::vec2(12.0, 10.0));
         let mut install = None;
         let mut child = ui.new_child(
             egui::UiBuilder::new()
@@ -3688,8 +3880,14 @@ impl App {
                 );
             } else {
                 let (icon_rect, _) = ui.allocate_exact_size(icon_size, egui::Sense::hover());
-                ui.painter()
-                    .rect_filled(icon_rect, 9, project_color(project));
+                let base = project_color(project);
+                motion::gradient_rrect(
+                    ui.painter(),
+                    icon_rect,
+                    9.0,
+                    motion::mix(base, egui::Color32::WHITE, 0.14),
+                    motion::mix(base, egui::Color32::BLACK, 0.32),
+                );
                 let letter = project
                     .name
                     .chars()
@@ -3855,7 +4053,14 @@ impl App {
                             } else {
                                 let (rect, _) =
                                     ui.allocate_exact_size(icon_size, egui::Sense::hover());
-                                ui.painter().rect_filled(rect, 12, project_color(&project));
+                                let base = project_color(&project);
+                                motion::gradient_rrect(
+                                    ui.painter(),
+                                    rect,
+                                    12.0,
+                                    motion::mix(base, egui::Color32::WHITE, 0.14),
+                                    motion::mix(base, egui::Color32::BLACK, 0.32),
+                                );
                                 let letter = project
                                     .name
                                     .chars()
@@ -4676,11 +4881,15 @@ impl App {
                 let wide = ui.available_width() >= 1000.0;
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
-                        ui.label(
-                            egui::RichText::new(format!("存档 · {}", row.label))
-                                .size(22.0)
-                                .strong(),
-                        );
+                        ui.horizontal(|ui| {
+                            motion::accent_bar(ui, 20.0);
+                            ui.add_space(7.0);
+                            ui.label(
+                                egui::RichText::new(format!("存档 · {}", row.label))
+                                    .size(22.0)
+                                    .strong(),
+                            );
+                        });
                         ui.label(
                             egui::RichText::new(if shared {
                                 "该版本未隔离，存档在共享目录"
@@ -4780,7 +4989,7 @@ impl App {
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::new()
-                    .fill(BG)
+                    .fill(egui::Color32::TRANSPARENT)
                     .inner_margin(egui::Margin::symmetric(24, 20)),
             )
             .show(ui, |ui| {
@@ -4808,19 +5017,7 @@ impl App {
                             .color(MUTED),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .add_enabled(
-                                !self.saves_busy,
-                                egui::Button::new(
-                                    egui::RichText::new("立即快照")
-                                        .size(11.5)
-                                        .color(egui::Color32::BLACK),
-                                )
-                                .fill(ACCENT)
-                                .corner_radius(8)
-                                .min_size(egui::vec2(86.0, 28.0)),
-                            )
-                            .clicked()
+                        if motion::primary_sized(ui, "立即快照", !self.saves_busy, 92.0, 30.0, 11.5)
                         {
                             new_snapshot = Some(world.clone());
                         }
@@ -4980,7 +5177,7 @@ impl App {
             egui::Frame::new()
                 .fill(CARD)
                 .stroke(egui::Stroke::new(1.0, LINE))
-                .corner_radius(14)
+                .corner_radius(14).shadow(motion::card_shadow())
                 .inner_margin(egui::Margin::symmetric(24, 28))
                 .show(ui, |ui| {
                     ui.vertical_centered(|ui| {
@@ -5126,6 +5323,7 @@ impl App {
                 .fill(CARD)
                 .stroke(egui::Stroke::new(1.0, LINE))
                 .corner_radius(14)
+                .shadow(motion::card_shadow())
                 .inner_margin(egui::Margin::symmetric(24, 30))
                 .show(ui, |ui| {
                     ui.vertical_centered(|ui| {
@@ -5222,6 +5420,7 @@ impl App {
                     .fill(CARD)
                     .stroke(egui::Stroke::new(1.0, LINE))
                     .corner_radius(14)
+                    .shadow(motion::card_shadow())
                     .inner_margin(egui::Margin::symmetric(24, 26))
                     .show(ui, |ui| {
                         ui.vertical_centered(|ui| {
@@ -5246,6 +5445,7 @@ impl App {
                     .fill(CARD)
                     .stroke(egui::Stroke::new(1.0, LINE))
                     .corner_radius(14)
+                    .shadow(motion::card_shadow())
                     .inner_margin(egui::Margin::symmetric(6, 4))
                     .show(ui, |ui| {
                         for (index, entry) in entries.iter().enumerate() {
@@ -5423,7 +5623,7 @@ impl App {
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::new()
-                    .fill(BG)
+                    .fill(egui::Color32::TRANSPARENT)
                     .inner_margin(egui::Margin::symmetric(30, 26)),
             )
             .show(ui, |ui| {
@@ -5464,7 +5664,11 @@ impl App {
 
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
-                        ui.label(egui::RichText::new(&row.label).size(24.0).strong());
+                        ui.horizontal(|ui| {
+                            motion::accent_bar(ui, 21.0);
+                            ui.add_space(7.0);
+                            ui.label(egui::RichText::new(&row.label).size(24.0).strong());
+                        });
                         ui.add_space(3.0);
                         ui.horizontal(|ui| {
                             status_dot(ui, row.health.missing == 0);
@@ -5501,20 +5705,7 @@ impl App {
                         });
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .add_enabled(
-                                self.busy.is_none(),
-                                egui::Button::new(
-                                    egui::RichText::new("启动")
-                                        .size(13.0)
-                                        .strong()
-                                        .color(egui::Color32::BLACK),
-                                )
-                                .fill(ACCENT)
-                                .corner_radius(9)
-                                .min_size(egui::vec2(88.0, 34.0)),
-                            )
-                            .clicked()
+                        if motion::primary_sized(ui, "启动", self.busy.is_none(), 92.0, 34.0, 13.0)
                         {
                             self.selected = Some(row.id.clone());
                             self.show_manage = false;
@@ -5898,7 +6089,11 @@ impl App {
                     ui.add_space(pad);
                     ui.vertical(|ui| {
                         ui.set_width(width);
-                        ui.label(egui::RichText::new("安装游戏").size(26.0).strong());
+                        ui.horizontal(|ui| {
+                            motion::accent_bar(ui, 23.0);
+                            ui.add_space(8.0);
+                            ui.label(egui::RichText::new("安装游戏").size(26.0).strong());
+                        });
                         ui.add_space(3.0);
                         ui.label(
                             egui::RichText::new("选择 Minecraft 版本和加载器，下载完整客户端")
@@ -5917,6 +6112,7 @@ impl App {
                                         .fill(SURFACE)
                                         .stroke(egui::Stroke::new(1.0, LINE))
                                         .corner_radius(14)
+                                        .shadow(motion::card_shadow())
                                         .inner_margin(egui::Margin::symmetric(20, 18))
                                         .show(ui, |ui| {
                                             ui.set_width(left_w - 40.0);
@@ -6065,6 +6261,7 @@ impl App {
                                         .fill(SURFACE)
                                         .stroke(egui::Stroke::new(1.0, LINE))
                                         .corner_radius(14)
+                                        .shadow(motion::card_shadow())
                                         .inner_margin(egui::Margin::symmetric(18, 18))
                                         .show(ui, |ui| {
                                             ui.set_width(right_w - 36.0);
@@ -6235,6 +6432,7 @@ impl App {
                     .fill(SURFACE)
                     .stroke(egui::Stroke::new(1.0, LINE))
                     .corner_radius(14)
+                    .shadow(motion::card_shadow())
                     .inner_margin(egui::Margin::symmetric(20, 18))
                     .show(ui, |ui| {
                         if let Some(note) = &self.notice {
@@ -6309,6 +6507,12 @@ impl App {
         };
         let width = ui.available_width().min(680.0);
         let pad = ((ui.available_width() - width) / 2.0).max(24.0);
+        let now = ui.input(|input| input.time);
+        let shown = ui.ctx().animate_value_with_time(
+            egui::Id::unique("progress_value"),
+            p.fraction(),
+            0.30,
+        );
         let mut cancel_clicked = false;
         ui.add_space(150.0);
         ui.horizontal(|ui| {
@@ -6319,6 +6523,7 @@ impl App {
                     .fill(SURFACE)
                     .stroke(egui::Stroke::new(1.0, LINE))
                     .corner_radius(16)
+                    .shadow(motion::card_shadow())
                     .inner_margin(egui::Margin::symmetric(26, 22))
                     .show(ui, |ui| {
                         ui.set_width(width - 52.0);
@@ -6337,13 +6542,10 @@ impl App {
                                 |ui| {
                                     if !p.indeterminate {
                                         ui.label(
-                                            egui::RichText::new(format!(
-                                                "{:.0}%",
-                                                p.fraction() * 100.0
-                                            ))
-                                            .size(26.0)
-                                            .strong()
-                                            .color(ACCENT),
+                                            egui::RichText::new(format!("{:.0}%", shown * 100.0))
+                                                .size(26.0)
+                                                .strong()
+                                                .color(ACCENT),
                                         );
                                     }
                                 },
@@ -6357,22 +6559,7 @@ impl App {
                             ui.label(egui::RichText::new(&p.stage).size(12.5));
                         });
                         ui.add_space(10.0);
-                        if p.indeterminate {
-                            ui.add(
-                                egui::ProgressBar::new(0.0)
-                                    .desired_width(ui.available_width())
-                                    .desired_height(10.0)
-                                    .fill(ACCENT)
-                                    .animate(true),
-                            );
-                        } else {
-                            ui.add(
-                                egui::ProgressBar::new(p.fraction())
-                                    .desired_width(ui.available_width())
-                                    .desired_height(10.0)
-                                    .fill(ACCENT),
-                            );
-                        }
+                        motion::progress_bar(ui, shown, p.indeterminate, now);
                         ui.add_space(12.0);
                         ui.horizontal(|ui| {
                             let files = if p.files_total > 0 {
@@ -6487,8 +6674,30 @@ impl eframe::App for App {
         {
             ui.ctx().request_repaint_after(Duration::from_millis(100));
         }
+        let now = ui.ctx().input(|input| input.time);
+        let page = self.page_id();
+        if page != self.page_key {
+            self.page_key = page;
+            self.page_enter_at = now;
+        }
+        let enter = (((now - self.page_enter_at) / 0.26) as f32).clamp(0.0, 1.0);
+        let eased = motion::ease_out_cubic(enter);
+        if enter < 1.0 {
+            ui.ctx().request_repaint_after(Duration::from_millis(16));
+        }
+        // Ambient light is intentionally low-FPS: it keeps the window alive
+        // without turning the launcher into a space heater.
+        if ui.ctx().input(|input| input.focused) {
+            ui.ctx().request_repaint_after(Duration::from_millis(66));
+        }
+        #[cfg(debug_assertions)]
+        if std::env::var_os("NAILONG_DEBUG_HOVER_CYCLE").is_some() {
+            ui.ctx().request_repaint_after(Duration::from_millis(33));
+        }
         self.top_bar(ui);
         egui::CentralPanel::default_margins().show(ui, |ui| {
+            motion::paint_ambient(ui, now);
+            ui.add_space((1.0 - eased) * 10.0);
             if matches!(self.busy, Some(Task::Install) | Some(Task::Mods)) {
                 self.progress_view(ui);
             } else if self.show_mods {
@@ -6501,6 +6710,22 @@ impl eframe::App for App {
                 self.install_view(ui);
             } else {
                 self.main_view(ui);
+            }
+            // A veil is more reliable than per-widget opacity here: nested
+            // panels and scroll areas keep their own painters, so fading the
+            // whole central area at once reads as one page transition.
+            let veil = 1.0 - eased;
+            if veil > 0.001 {
+                ui.painter().rect_filled(
+                    ui.max_rect(),
+                    0.0,
+                    egui::Color32::from_rgba_unmultiplied(
+                        BG.r(),
+                        BG.g(),
+                        BG.b(),
+                        (veil * 245.0) as u8,
+                    ),
+                );
             }
         });
         self.account_overlay(ui.ctx());
@@ -6682,19 +6907,7 @@ fn project_color(project: &mods::Project) -> egui::Color32 {
 }
 
 fn launch_button(ui: &mut egui::Ui, text: &str, enabled: bool) -> bool {
-    ui.add_enabled(
-        enabled,
-        egui::Button::new(
-            egui::RichText::new(text)
-                .size(14.0)
-                .strong()
-                .color(egui::Color32::BLACK),
-        )
-        .fill(ACCENT)
-        .corner_radius(10)
-        .min_size(egui::vec2(132.0, 40.0)),
-    )
-    .clicked()
+    motion::primary_sized(ui, text, enabled, 132.0, 40.0, 14.0)
 }
 
 fn feature(ui: &mut egui::Ui, title: &str, detail: &str) {
@@ -6750,6 +6963,15 @@ fn loader_tile(
         egui::FontId::proportional(9.5),
         MUTED,
     );
+    if selected && enabled {
+        motion::glow(
+            ui.painter(),
+            rect,
+            10,
+            egui::Color32::from_rgba_unmultiplied(245, 196, 81, 32),
+            14,
+        );
+    }
     response
 }
 
@@ -6777,10 +6999,18 @@ fn avatar(ui: &mut egui::Ui, name: &str) {
 
 fn avatar_sized(ui: &mut egui::Ui, name: &str, size: f32) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
+    let center = rect.center();
     ui.painter().circle_filled(
-        rect.center(),
-        size / 2.0,
-        egui::Color32::from_rgb(52, 57, 69),
+        center,
+        size / 2.0 + 3.0,
+        egui::Color32::from_rgba_unmultiplied(245, 196, 81, 14),
+    );
+    ui.painter()
+        .circle_filled(center, size / 2.0, egui::Color32::from_rgb(52, 57, 69));
+    ui.painter().circle_stroke(
+        center,
+        size / 2.0 - 0.5,
+        egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(245, 196, 81, 70)),
     );
     let letter = name
         .chars()
@@ -6921,7 +7151,9 @@ fn card() -> egui::Frame {
         .fill(CARD)
         .stroke(egui::Stroke::new(1.0, LINE))
         .corner_radius(14)
+        .shadow(motion::card_shadow())
         .inner_margin(egui::Margin::same(18))
+        .shadow(motion::card_shadow())
 }
 
 fn ghost_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
@@ -6953,8 +7185,22 @@ fn pick_modpack() -> Option<PathBuf> {
 
 fn logo_mark(ui: &mut egui::Ui) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::hover());
-    ui.painter()
-        .rect_filled(rect, egui::CornerRadius::same(8), ACCENT);
+    let time = ui.input(|input| input.time) as f32;
+    let pulse = (time * 1.4).sin() * 0.5 + 0.5;
+    motion::glow(
+        ui.painter(),
+        rect,
+        8,
+        egui::Color32::from_rgba_unmultiplied(245, 196, 81, (26.0 + 20.0 * pulse) as u8),
+        16,
+    );
+    motion::gradient_rrect(
+        ui.painter(),
+        rect,
+        8.0,
+        motion::ACCENT_HI,
+        motion::ACCENT_LO,
+    );
     ui.painter().text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
@@ -7265,19 +7511,7 @@ fn installed_row(
 }
 
 fn primary_wide(ui: &mut egui::Ui, text: &str, enabled: bool, width: f32) -> bool {
-    ui.add_enabled(
-        enabled,
-        egui::Button::new(
-            egui::RichText::new(text)
-                .size(13.5)
-                .strong()
-                .color(egui::Color32::BLACK),
-        )
-        .fill(ACCENT)
-        .corner_radius(9)
-        .min_size(egui::vec2(width, 40.0)),
-    )
-    .clicked()
+    motion::primary_sized(ui, text, enabled, width, 40.0, 13.5)
 }
 
 fn accent_outline(ui: &mut egui::Ui, text: &str) -> egui::Response {
@@ -7391,6 +7625,7 @@ fn saves_empty_card(
         .fill(SURFACE)
         .stroke(egui::Stroke::new(1.0, LINE))
         .corner_radius(14)
+        .shadow(motion::card_shadow())
         .inner_margin(egui::Margin::symmetric(22, 20))
         .show(ui, |ui| {
             let width = (ui.available_width() - 4.0).max(280.0);

@@ -25,6 +25,11 @@
   <url type="bugtracker">https://github.com/dkjsiogu/nailong/issues</url>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.17.0" date="2026-10-25">
+      <description>
+        <p>The design system gained light and motion: ambient glows and drifting embers, card hover lift with accent borders, a page-transition veil, a breathing gradient primary action, an animated progress bar with a moving sheen, and modal fade-ins. The launcher also gained a health ring on the current-version card, accent rules on page titles, gradient icon tiles, animated switches and a stronger blue-ink palette.</p>
+      </description>
+    </release>
     <release version="0.16.0" date="2026-10-25">
       <description>
         <p>The launcher UI was rebuilt around one design system: a warm accent on a dark neutral palette, a fixed page header with a single scrolling content area, consistent cards, list rows, switches, popovers and empty states. The download center gained a redesigned browsing grid, a project page with install/version panels, and a real content manager with filtering, update banners, per-row updates and inline delete confirmation. Main, install, version manager, saves, progress and the account/login dialogs were rebuilt as well, and the whole app is responsive down to 900×620.</p>

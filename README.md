@@ -8,7 +8,7 @@
 
 **简体中文** | [English](README.en.md)
 
-> 当前版本：**0.16.0**（预览版）
+> 当前版本：**0.17.0**（预览版）
 >
 > 目标：小体积、少依赖、安装过程可见、中断可补。功能边界见 [实现状态](docs/design/14-implementation-status.md)。
 
@@ -27,7 +27,9 @@ nailong 的思路很直：
 
 ## 界面
 
-0.16 的界面按 [设计系统](docs/design/15-ui-design-system.md) 重做：深色中性底、暖黄强调色、固定的页面头部、单一滚动区。每个页面只有一个主操作，删除走行内确认，空状态直接给出下一步。
+0.17 在 0.16 的设计系统上补上光感与动效：环境光与微光粒子、卡片悬停抬升和描边发光、页面切换、主按钮呼吸光、进度条扫光、弹窗入场。深色中性底 + 暖黄强调色，固定页面头部 + 单一滚动区；每个页面只有一个主操作，删除走行内确认，空状态直接给出下一步。
+
+![动效演示：页面切换、卡片悬停、开关和弹窗入场](docs/screenshots/motion.gif)
 
 | 启动台 | 下载中心 |
 |---|---|
@@ -35,7 +37,7 @@ nailong 的思路很直：
 | **项目详情** | **内容管理** |
 | ![项目详情](docs/screenshots/06-detail.png) | ![内容管理](docs/screenshots/07-installed.png) |
 
-更多截图（版本管理、安装、搜索、更新、存档、进度、账户弹窗）：[docs/screenshots](docs/screenshots)。
+更多截图（版本管理、安装、搜索、更新、存档、进度、账户弹窗）：[docs/screenshots](docs/screenshots)。动效约 11 秒，包含悬停、页面切换、开关、进度和账户弹窗。
 
 ## 特性
 
@@ -102,7 +104,7 @@ nailong 的思路很直：
 | 平台 | 文件 | 大小 | 要求 |
 |---|---|---:|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | 约 8 MB | Windows 10/11，Java 21 |
-| Linux x64 (deb) | [nailong_0.16.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.16.0_amd64.deb) | 约 3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
+| Linux x64 (deb) | [nailong_0.17.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.17.0_amd64.deb) | 约 3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
 
 校验值：[SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS)。
 
@@ -119,7 +121,7 @@ nailong 的思路很直：
 ### Linux（Debian / Ubuntu）
 
 ```bash
-sudo apt install ./nailong_0.16.0_amd64.deb
+sudo apt install ./nailong_0.17.0_amd64.deb
 nailong
 ```
 
@@ -154,7 +156,7 @@ sudo apt remove nailong
 
 已经实际跑过的：
 
-- GUI：1120×720 与最小 900×620 下逐页走查，覆盖浏览、搜索、详情、内容管理、更新横幅、删除确认、空状态、存档快照、进度页和账户/登录弹窗；截图在 `docs/screenshots/`。
+- GUI：1120×720 与最小 900×620 下逐页走查，覆盖浏览、搜索、详情、内容管理、更新横幅、删除确认、空状态、存档快照、进度页和账户/登录弹窗；18 张截图和 11 秒动效 GIF 在 `docs/screenshots/`。
 - Linux（Xvfb + Mesa）：Fabric 0.19.5、NeoForge 21.1.209、Forge 52.1.20 在 1.21.1 启动到主菜单。
 - Fabulously Optimized `.mrpack`：151 个模组加载并启动。
 - CurseForge：真实文件通过无 key 的官方下载页回退下载成功；官方 API key 实测返回文件名、大小、SHA1 和下载地址。
