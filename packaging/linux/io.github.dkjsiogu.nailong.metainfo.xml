@@ -25,6 +25,11 @@
   <url type="bugtracker">https://github.com/dkjsiogu/nailong/issues</url>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.30.0" date="2026-10-26">
+      <description>
+        <p>Static ambient background: the gradients, dot grid and embers remain, but the window no longer redraws the whole page every 66 ms. Focused idle CPU under Xvfb/llvmpipe dropped from about 162% to 0%.</p>
+      </description>
+    </release>
     <release version="0.29.0" date="2026-10-26">
       <description>
         <p>Reduce Motion: a persisted setting disables page fades, ambient animation, card lift, button movement and progress sheen while keeping colour and border feedback, and stops idle ambient repaints.</p>

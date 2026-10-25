@@ -8741,9 +8741,6 @@ impl eframe::App for App {
         }
         // Ambient light is intentionally low-FPS: it keeps the window alive
         // without turning the launcher into a space heater.
-        if ui.ctx().input(|input| input.focused) && !self.reduce_motion {
-            ui.ctx().request_repaint_after(Duration::from_millis(66));
-        }
         #[cfg(debug_assertions)]
         if std::env::var_os("NAILONG_DEBUG_HOVER_CYCLE").is_some() {
             ui.ctx().request_repaint_after(Duration::from_millis(33));

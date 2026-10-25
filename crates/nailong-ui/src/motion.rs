@@ -215,8 +215,12 @@ pub fn reduced() -> bool {
     REDUCED.load(Ordering::Relaxed)
 }
 
-pub fn paint_ambient(ui: &egui::Ui, time: f64) {
-    let time = if reduced() { 0.0 } else { time };
+pub fn paint_ambient(ui: &egui::Ui, _time: f64) {
+    // Deliberately static: the old 15 fps ambient repaint kept the whole
+    // window redrawing and cost ~160% CPU under llvmpipe. The gradients,
+    // dots and embers still give the page texture, but only when some other
+    // interaction asks for a frame.
+    let time: f64 = 0.0;
     let rect = ui.max_rect();
     if rect.width() < 32.0 || rect.height() < 32.0 {
         return;

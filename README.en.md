@@ -8,7 +8,7 @@ A small, native Minecraft: Java Edition launcher written in Rust. Windows ships 
 
 [简体中文](README.md) | **English**
 
-> Current version: **0.29.0** (preview)
+> Current version: **0.30.0** (preview)
 >
 > Goals: small binaries, few dependencies, visible install progress, and a repair path after interruption. See [implementation status](docs/design/14-implementation-status.md) for exact boundaries.
 
@@ -26,6 +26,8 @@ nailong tries to do one thing simply:
 It is not a universal launcher, and it is not 1.0 yet. What works and what does not is laid out below.
 
 ## Interface
+
+0.30 makes the ambient background static: gradients, dots and embers stay, but the window no longer redraws every 66 ms. On Xvfb + llvmpipe with the window focused, a five-second idle sample dropped from about 162% CPU for the process to 0%. This was the root cause of the “Home/page switch feels hot” reports.
 
 0.29 adds Reduce Motion, persisted in `ui.json`: page fades complete immediately, ambient embers freeze, cards stop lifting, buttons stop shifting, progress sheen is disabled, switches snap, and idle ambient repaints stop. Colour and border feedback remain, so the UI does not feel broken when motion is off.
 
@@ -130,7 +132,7 @@ Drag a `.mrpack` or `.zip` into the window to start an import. A single mod `.ja
 | Platform | File | Size | Requirements |
 |---|---|---:|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | ~8 MB | Windows 10/11, Java 21 |
-| Linux x64 (deb) | [nailong_0.29.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.29.0_amd64.deb) | ~3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
+| Linux x64 (deb) | [nailong_0.30.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.30.0_amd64.deb) | ~3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
 
 Checksums: [SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS).
 
