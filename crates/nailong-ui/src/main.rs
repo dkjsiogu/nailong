@@ -235,6 +235,14 @@ struct ReviewDependency {
     missing: bool,
 }
 
+/// 更新确认里的一个项目。
+#[derive(Clone)]
+struct ReviewUpdate {
+    name: String,
+    from: String,
+    to: String,
+}
+
 /// 写入磁盘之前给玩家看的最后一张清单。
 #[derive(Clone)]
 struct InstallReview {
@@ -245,13 +253,16 @@ struct InstallReview {
     version: String,
     size: Option<u64>,
     dependencies: Vec<ReviewDependency>,
+    updates: Vec<ReviewUpdate>,
     quick: bool,
+    update: bool,
 }
 
 #[derive(Clone)]
 enum InstallRequest {
     Quick(mods::Project),
     Detail,
+    Update(Vec<installed::UpdateCandidate>),
 }
 
 struct PendingInstall {
@@ -1935,17 +1946,29 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
                         ui.label(
-                            egui::RichText::new("确认安装")
-                                .size(20.0)
-                                .family(bold_family()),
+                            egui::RichText::new(if review.update {
+                                "确认更新"
+                            } else {
+                                "确认安装"
+                            })
+                            .size(20.0)
+                            .family(bold_family()),
                         );
                         ui.label(
-                            egui::RichText::new("先确认写入位置，再开始下载")
-                                .size(10.0)
-                                .color(MUTED),
+                            egui::RichText::new(if review.update {
+                                "先确认版本变化，再覆盖旧文件"
+                            } else {
+                                "先确认写入位置，再开始下载"
+                            })
+                            .size(10.0)
+                            .color(MUTED),
                         );
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if review.update {
+                            tag_fill(ui, "更新", ACCENT_TEXT, SURFACE2);
+                            ui.add_space(4.0);
+                        }
                         tag_fill(ui, review.kind.label(), MUTED, SURFACE2);
                     });
                 });
@@ -1972,11 +1995,19 @@ impl App {
                     .inner_margin(egui::Margin::symmetric(12, 10))
                     .show(ui, |ui| {
                         ui.set_width(476.0);
-                        install_review_row(ui, "安装到", &review.target);
+                        install_review_row(
+                            ui,
+                            if review.update { "更新到" } else { "安装到" },
+                            &review.target,
+                        );
                         ui.add_space(5.0);
                         install_review_row(ui, "写入目录", &review.path);
                         ui.add_space(5.0);
-                        install_review_row(ui, "版本", &review.version);
+                        install_review_row(
+                            ui,
+                            if review.update { "更新" } else { "版本" },
+                            &review.version,
+                        );
                         if let Some(size) = review.size {
                             ui.add_space(5.0);
                             install_review_row(ui, "预计大小", &human_size(size));
@@ -1985,7 +2016,62 @@ impl App {
                         install_review_row(ui, "影响范围", "只写这个版本的内容目录，不动世界存档");
                     });
                 ui.add_space(12.0);
-                if review.quick {
+                if review.update {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "将更新 {} 个项目",
+                                review.updates.len()
+                            ))
+                            .size(11.5)
+                            .family(bold_family()),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new("旧文件会一并清理")
+                                    .size(9.0)
+                                    .color(MUTED),
+                            );
+                        });
+                    });
+                    ui.add_space(6.0);
+                    egui::ScrollArea::vertical()
+                        .id_salt("update_review_list")
+                        .max_height(132.0)
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            for item in &review.updates {
+                                ui.horizontal(|ui| {
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(short_text(&item.name, 34))
+                                                .size(11.0),
+                                        )
+                                        .truncate(),
+                                    );
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            ui.label(
+                                                egui::RichText::new(&item.to)
+                                                    .size(10.0)
+                                                    .color(ACCENT_TEXT),
+                                            );
+                                            ui.label(
+                                                egui::RichText::new("→").size(9.0).color(MUTED),
+                                            );
+                                            ui.label(
+                                                egui::RichText::new(short_text(&item.from, 18))
+                                                    .size(9.0)
+                                                    .color(MUTED),
+                                            );
+                                        },
+                                    );
+                                });
+                                ui.add_space(6.0);
+                            }
+                        });
+                } else if review.quick {
                     ui.label(
                         egui::RichText::new(
                             "点「确认安装」后才会解析最新兼容版本与必需前置；解析失败不会改动现有文件。",
@@ -2070,15 +2156,21 @@ impl App {
                     .show(ui, |ui| {
                         ui.set_width(476.0);
                         ui.label(
-                            egui::RichText::new("安装前自动创建恢复点")
-                                .size(11.0)
-                                .family(bold_family())
-                                .color(ACCENT_TEXT),
+                            egui::RichText::new(if review.update {
+                                "更新前自动创建恢复点"
+                            } else {
+                                "安装前自动创建恢复点"
+                            })
+                            .size(11.0)
+                            .family(bold_family())
+                            .color(ACCENT_TEXT),
                         );
                         ui.label(
-                            egui::RichText::new(
-                                "装完发现不对，在「内容 › 恢复点」一键回到现在。",
-                            )
+                            egui::RichText::new(if review.update {
+                                "更新后进不去，在「内容 › 恢复点」一键回到更新前。"
+                            } else {
+                                "装完发现不对，在「内容 › 恢复点」一键回到现在。"
+                            })
                             .size(9.5)
                             .color(MUTED),
                         );
@@ -2088,7 +2180,7 @@ impl App {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if motion::primary_sized_glyph(
                             ui,
-                            "确认安装",
+                            if review.update { "确认更新" } else { "确认安装" },
                             true,
                             118.0,
                             34.0,
@@ -2118,6 +2210,7 @@ impl App {
             match pending.request {
                 InstallRequest::Quick(project) => self.quick_install(project),
                 InstallRequest::Detail => self.start_mods_download(),
+                InstallRequest::Update(candidates) => self.start_mods_update(candidates),
             }
         }
     }
@@ -2831,7 +2924,9 @@ impl App {
                 version: "最新兼容版本 · 自动解析前置".into(),
                 size: None,
                 dependencies: Vec::new(),
+                updates: Vec::new(),
                 quick: true,
+                update: false,
             },
             request: InstallRequest::Quick(project),
         });
@@ -2896,9 +2991,62 @@ impl App {
                 ),
                 size: (size > 0).then_some(size),
                 dependencies,
+                updates: Vec::new(),
                 quick: false,
+                update: false,
             },
             request: InstallRequest::Detail,
+        });
+    }
+
+    /// 更新同样先确认：列出从哪个版本到哪个版本，别让“全部更新”变成盲盒。
+    fn review_update(&mut self, candidates: Vec<installed::UpdateCandidate>) {
+        if self.busy.is_some() || candidates.is_empty() {
+            return;
+        }
+        let Some(row) = self.mods_row.clone() else {
+            self.mods_error = Some("先在「安装到」选一个版本".into());
+            return;
+        };
+        let Some(path) = self.mods_game_dir.clone() else {
+            self.mods_error = Some("目标目录无效".into());
+            return;
+        };
+        let mut updates = Vec::new();
+        let mut size = 0u64;
+        for candidate in &candidates {
+            let from = candidate
+                .entry
+                .version_number
+                .clone()
+                .unwrap_or_else(|| "已装版本".to_string());
+            let to = candidate.latest.version_number.clone();
+            size += candidate.latest.size.unwrap_or(0);
+            updates.push(ReviewUpdate {
+                name: candidate.entry.name.clone(),
+                from,
+                to,
+            });
+        }
+        let name = if updates.len() == 1 {
+            updates[0].name.clone()
+        } else {
+            "内容更新".to_string()
+        };
+        self.pending_install = Some(PendingInstall {
+            review: InstallReview {
+                name,
+                kind: self.mods_kind,
+                target: target_label(&row),
+                path: path.display().to_string(),
+                version: format!("{} 个项目", updates.len()),
+                size: (size > 0).then_some(size),
+                dependencies: Vec::new(),
+                updates,
+                quick: false,
+                update: true,
+            },
+            request: InstallRequest::Update(candidates),
         });
     }
 
@@ -7280,9 +7428,9 @@ impl App {
             }
         }
         if let Some(candidates) = update_all {
-            self.start_mods_update(candidates);
+            self.review_update(candidates);
         } else if let Some(candidate) = update_one {
-            self.start_mods_update(vec![candidate]);
+            self.review_update(vec![candidate]);
         }
         if go_browse {
             self.show_browse();
