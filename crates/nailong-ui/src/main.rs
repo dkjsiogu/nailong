@@ -3275,7 +3275,7 @@ impl App {
                                                                 ui.label(
                                                                     egui::RichText::new(kind)
                                                                         .size(9.5)
-                                                                        .color(ACCENT),
+                                                                        .color(ACCENT_TEXT),
                                                                 );
                                                             },
                                                         );
@@ -4337,7 +4337,7 @@ impl App {
                             egui::RichText::new("+")
                                 .size(15.0)
                                 .family(bold_family())
-                                .color(ACCENT),
+                                .color(ACCENT_TEXT),
                         )
                         .fill(egui::Color32::from_rgb(255, 244, 222))
                         .stroke(egui::Stroke::new(
@@ -5839,7 +5839,7 @@ impl App {
                     .inner_margin(egui::Margin::symmetric(14, 10))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("↑").size(15.0).color(ACCENT));
+                            ui.label(egui::RichText::new("↑").size(15.0).color(ACCENT_TEXT));
                             ui.add_space(2.0);
                             ui.vertical(|ui| {
                                 ui.label(
@@ -6083,7 +6083,7 @@ impl App {
                         if ui
                             .add(
                                 egui::Button::new(
-                                    egui::RichText::new("＋").size(13.0).color(ACCENT),
+                                    egui::RichText::new("＋").size(13.0).color(ACCENT_TEXT),
                                 )
                                 .fill(PANEL)
                                 .stroke(egui::Stroke::new(1.0, LINE))
@@ -7004,7 +7004,7 @@ impl App {
                                             egui::RichText::new(format!("{:.0}%", shown * 100.0))
                                                 .size(26.0)
                                                 .family(bold_family())
-                                                .color(ACCENT),
+                                                .color(ACCENT_TEXT),
                                         );
                                     }
                                 },
@@ -7338,7 +7338,7 @@ fn content_tab(ui: &mut egui::Ui, label: &str, count: usize, active: bool) -> eg
 /// 品类胶囊 / 已安装切换用的小按钮。
 fn chip(ui: &mut egui::Ui, text: &str, selected: bool) -> egui::Response {
     let (fill, color, border) = if selected {
-        (egui::Color32::from_rgb(255, 241, 214), ACCENT, ACCENT)
+        (egui::Color32::from_rgb(255, 241, 214), ACCENT_TEXT, ACCENT)
     } else {
         (CARD, MUTED, LINE)
     };
@@ -8177,14 +8177,16 @@ fn installed_row(
             if let Some(version) = update
                 && ui
                     .add(
-                        egui::Button::new(egui::RichText::new("可更新").size(10.0).color(ACCENT))
-                            .fill(egui::Color32::from_rgb(255, 243, 214))
-                            .stroke(egui::Stroke::new(
-                                1.0,
-                                egui::Color32::from_rgb(120, 100, 52),
-                            ))
-                            .corner_radius(7)
-                            .min_size(egui::vec2(52.0, 24.0)),
+                        egui::Button::new(
+                            egui::RichText::new("可更新").size(10.0).color(ACCENT_TEXT),
+                        )
+                        .fill(egui::Color32::from_rgb(255, 243, 214))
+                        .stroke(egui::Stroke::new(
+                            1.0,
+                            egui::Color32::from_rgb(232, 178, 92),
+                        ))
+                        .corner_radius(7)
+                        .min_size(egui::vec2(52.0, 24.0)),
                     )
                     .on_hover_text(format!("更新到 {version}"))
                     .clicked()
@@ -8215,7 +8217,7 @@ fn accent_outline(ui: &mut egui::Ui, text: &str) -> egui::Response {
             egui::RichText::new(text)
                 .size(11.5)
                 .family(bold_family())
-                .color(ACCENT),
+                .color(ACCENT_TEXT),
         )
         .fill(egui::Color32::from_rgb(255, 244, 222))
         .stroke(egui::Stroke::new(
@@ -8496,7 +8498,7 @@ fn tag_fill(ui: &mut egui::Ui, text: &str, color: egui::Color32, fill: egui::Col
 
 fn small_accent(ui: &mut egui::Ui, text: &str) -> egui::Response {
     ui.add(
-        egui::Button::new(egui::RichText::new(text).size(10.0).color(ACCENT))
+        egui::Button::new(egui::RichText::new(text).size(10.0).color(ACCENT_TEXT))
             .fill(egui::Color32::from_rgb(255, 244, 222))
             .stroke(egui::Stroke::new(
                 1.0,

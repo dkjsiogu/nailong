@@ -109,7 +109,7 @@
   无显示器环境用 Xvfb；音频设备缺失只产生 ALSA 警告，不影响进入游戏。
 - **GUI**：打包后的 `nailong` 在 Xvfb 中持续运行；通过 xdotool 点击“启动”后游戏进程到达主菜单。
 - **体积**：Linux GUI 9.0 MB / CLI 3.3 MB；Windows GUI 7.82 MB（CI 原生 MSVC 构建，无 VCRUNTIME/MSVCP 依赖）。opt-level=z + fat LTO + panic=abort，保留静态 CRT 与系统字体。
-- **内存**：Linux + Xvfb + llvmpipe 下 GUI 空闲 RSS 约 **135 MB**。这是软件渲染上界，未达到 120 MB 目标；Windows 真实 GPU 待测。
+- **内存**：Linux + Xvfb + llvmpipe 下 GUI 空闲 RSS 约 **157 MB**（0.18.1 加载真粗体中文字体后增加约 22 MB）。这是软件渲染上界，未达到 120 MB 目标；Windows 真实 GPU 待测。
 
 ### 2.2 关键实现细节
 
@@ -148,7 +148,7 @@
 2. **processor 安装**依赖 `install_profile` 结构和 processor 工具；上游改格式时需要跟进。精简读取还依赖官方 ZIP 结构；不支持 Range 或结构异常时会回退完整包。
 3. **离线账户会触发 401**：游戏向 Mojang 请求 user properties 被拒，日志有 `InvalidCredentialsException`，但不阻塞单人游戏；后续可关闭该请求或接正版登录。
 4. **取消安装有边界**：下载循环、解压和 processor 会尽快停止；已经在途的单个 HTTP 请求无法立即 abort，最多等到请求超时。processor 会被 kill，已下载的分段/文件保留，下次安装检查补全。
-5. **GUI 内存 135 MB**（软件渲染）高于 120 MB 目标；需要真实 GPU 复测，或减少字体/纹理占用。
+5. **GUI 内存 157 MB**（软件渲染，含约 22 MB 粗体中文字体）高于 120 MB 目标；需要真实 GPU 复测，或改用字体子集/按需加载粗体。
 6. **续传范围有限**：普通文件是“已存在且哈希正确则跳过”，不保留半成品；单个大文件有稳定的 `.dlpart-N` 段文件，可续传。安装器核心数据用 HTTP Range 只取所需条目，中断后重跑会重新读取约 3 MB。
 7. **无安装锁**：并发启动两个安装可能写同一目录；原型未处理。
 8. **资产下载没有虚拟资源映射**（legacy virtual assets）验证；1.21.1 不需要，旧版本可能需要。
