@@ -11,7 +11,11 @@ use eframe::egui;
 use egui::epaint::{Mesh, Shadow, Vertex, WHITE_UV};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::{ACCENT_HI, ACCENT_LO, INK, LINE, MUTED, SURFACE2};
+use crate::backdrop::{Backdrop, Scene};
+use crate::{ACCENT_HI, ACCENT_LO, INK, LINE, LINE_HI, MUTED};
+
+/// Text and glyphs that sit on top of the amber primary button.
+const ON_ACCENT: egui::Color32 = egui::Color32::from_rgb(30, 19, 5);
 
 pub fn ease_out_cubic(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
@@ -124,10 +128,10 @@ pub fn gradient_rrect(
 /// Soft, colourless depth under cards. Cheap enough to use on every card.
 pub fn card_shadow() -> Shadow {
     Shadow {
-        offset: [0, 16],
-        blur: 38,
+        offset: [0, 22],
+        blur: 52,
         spread: 0,
-        color: egui::Color32::from_rgba_unmultiplied(120, 90, 55, 46),
+        color: egui::Color32::from_rgba_unmultiplied(0, 0, 0, 150),
     }
 }
 
@@ -152,57 +156,6 @@ pub fn glow(
     );
 }
 
-fn radial_glow(painter: &egui::Painter, center: egui::Pos2, radius: f32, color: egui::Color32) {
-    if radius <= 1.0 || color.a() == 0 {
-        return;
-    }
-    let edge = egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 0);
-    let segments = 72usize;
-    let rings = 6usize;
-    let mut mesh = Mesh::default();
-    // Center + `rings` concentric rings; alpha falls off quadratically.
-    mesh.vertices.push(Vertex {
-        pos: center,
-        uv: WHITE_UV,
-        color,
-    });
-    for ring in 1..=rings {
-        let r = radius * ring as f32 / rings as f32;
-        let falloff = 1.0 - (ring as f32 / rings as f32);
-        let c = egui::Color32::from_rgba_unmultiplied(
-            color.r(),
-            color.g(),
-            color.b(),
-            (color.a() as f32 * falloff * falloff) as u8,
-        );
-        for i in 0..segments {
-            let a = i as f32 / segments as f32 * std::f32::consts::TAU;
-            mesh.vertices.push(Vertex {
-                pos: center + egui::vec2(a.cos(), a.sin()) * r,
-                uv: WHITE_UV,
-                color: if ring == rings { edge } else { c },
-            });
-        }
-    }
-    for i in 0..segments {
-        let next = (i + 1) % segments;
-        mesh.add_triangle(0, 1 + i as u32, 1 + next as u32);
-    }
-    for ring in 0..(rings - 1) {
-        let base = 1 + ring * segments;
-        let next_base = base + segments;
-        for i in 0..segments {
-            let next = (i + 1) % segments;
-            let a = (base + i) as u32;
-            let b = (base + next) as u32;
-            let c = (next_base + i) as u32;
-            let d = (next_base + next) as u32;
-            mesh.add_triangle(a, c, b);
-            mesh.add_triangle(b, c, d);
-        }
-    }
-    painter.add(egui::Shape::mesh(mesh));
-}
 /// Painted before page content; fixed while the page scrolls.
 static REDUCED: AtomicBool = AtomicBool::new(false);
 
@@ -215,119 +168,61 @@ pub fn reduced() -> bool {
     REDUCED.load(Ordering::Relaxed)
 }
 
-pub fn paint_ambient(ui: &egui::Ui, _time: f64) {
-    // Deliberately static: the old 15 fps ambient repaint kept the whole
-    // window redrawing and cost ~160% CPU under llvmpipe. The gradients,
-    // dots and embers still give the page texture, but only when some other
-    // interaction asks for a frame.
-    let time: f64 = 0.0;
+pub fn paint_ambient(ui: &egui::Ui, _time: f64, cache: &mut Option<Backdrop>, dim: f32) {
+    // The scene is painted once per size into a texture. Nothing here asks
+    // for a repaint, so the 0.30 idle-CPU guarantee survives the richer art.
     let rect = ui.max_rect();
     if rect.width() < 32.0 || rect.height() < 32.0 {
         return;
     }
     let painter = ui.painter();
-    gradient_rect(
-        painter,
-        rect,
-        egui::Color32::from_rgb(255, 250, 242),
-        egui::Color32::from_rgb(255, 243, 229),
-    );
-    // A very quiet dot grid gives the large empty areas some texture.
-    let step = 44.0;
-    let dot = egui::Color32::from_rgba_unmultiplied(203, 178, 146, 42);
-    let mut y = rect.top() + 22.0;
-    while y < rect.bottom() {
-        let mut x = rect.left() + 30.0;
-        while x < rect.right() {
-            painter.circle_filled(egui::pos2(x, y), 0.65, dot);
-            x += step;
-        }
-        y += step;
-    }
-    let breathe = ((time * 0.45).sin() as f32 * 0.5 + 0.5).clamp(0.0, 1.0);
-    radial_glow(
-        painter,
-        egui::pos2(
-            rect.left() + rect.width() * 0.20,
-            rect.top() + rect.height() * 0.20,
-        ),
-        rect.width() * 0.68,
-        egui::Color32::from_rgba_unmultiplied(255, 178, 72, (10.0 + 8.0 * breathe) as u8),
-    );
-    radial_glow(
-        painter,
-        egui::pos2(
-            rect.right() - rect.width() * 0.08,
-            rect.bottom() + rect.height() * 0.06,
-        ),
-        rect.width() * 0.55,
-        egui::Color32::from_rgba_unmultiplied(255, 168, 74, 7),
-    );
-
-    if let Some(pointer) = ui.ctx().pointer_hover_pos()
-        && rect.contains(pointer)
-    {
-        radial_glow(
+    if cache.is_none() {
+        gradient_rect(
             painter,
-            pointer,
-            300.0,
-            egui::Color32::from_rgba_unmultiplied(255, 170, 55, 14),
+            rect,
+            egui::Color32::from_rgb(6, 10, 18),
+            egui::Color32::from_rgb(9, 15, 26),
         );
     }
-
-    // A handful of almost-invisible embers drifting upwards. They are painted
-    // behind cards, so only the gutters/empty space show them.
-    let t = time as f32;
-    for i in 0..12 {
-        let seed = i as f32 * 0.618_034;
-        let speed = 5.0 + (i % 4) as f32 * 2.2;
-        let traveled = (t * speed + seed * 97.0) % (rect.height() + 90.0);
-        let y = rect.bottom() + 30.0 - traveled;
-        let x = rect.left()
-            + ((seed * 91.7).sin() * 0.5 + 0.5) * rect.width()
-            + (t * 0.35 + seed * std::f32::consts::TAU).sin() * 14.0;
-        let alpha = (7.0 + (i % 3) as f32 * 6.0) as u8;
-        let radius = 0.8 + (i % 3) as f32 * 0.45;
-        painter.circle_filled(
-            egui::pos2(x, y),
-            radius,
-            egui::Color32::from_rgba_unmultiplied(226, 138, 40, alpha),
+    Backdrop::ensure(ui.ctx(), cache, rect.size(), Scene::Window);
+    if let Some(backdrop) = cache {
+        backdrop.paint(painter, rect);
+    }
+    let dim = dim.clamp(0.0, 0.85);
+    if dim > 0.001 {
+        painter.rect_filled(
+            rect,
+            0.0,
+            egui::Color32::from_rgba_unmultiplied(6, 10, 18, (dim * 255.0) as u8),
         );
     }
-
-    // A thin warm line at the very bottom closes the page softly.
-    let line = egui::Rect::from_min_size(
-        egui::pos2(rect.left(), rect.bottom() - 1.0),
-        egui::vec2(rect.width(), 1.0),
-    );
-    painter.add(egui::Shape::mesh({
-        let mut mesh = Mesh::default();
-        let c0 = egui::Color32::from_rgba_unmultiplied(245, 158, 11, 38);
-        let c1 = egui::Color32::from_rgba_unmultiplied(245, 158, 11, 0);
-        mesh.vertices.push(Vertex {
-            pos: line.left_top(),
-            uv: WHITE_UV,
-            color: c0,
-        });
-        mesh.vertices.push(Vertex {
-            pos: line.right_top(),
-            uv: WHITE_UV,
-            color: c1,
-        });
-        mesh.vertices.push(Vertex {
-            pos: line.right_bottom(),
-            uv: WHITE_UV,
-            color: c1,
-        });
-        mesh.vertices.push(Vertex {
-            pos: line.left_bottom(),
-            uv: WHITE_UV,
-            color: c0,
-        });
-        mesh.add_triangle(0, 1, 2);
-        mesh.add_triangle(0, 2, 3);
-        mesh
-    }));
+    // A cool hairline at the very top separates the shell from the window
+    // chrome without adding another heavy border.
+    let line = egui::Rect::from_min_size(rect.left_top(), egui::vec2(rect.width(), 1.0));
+    let mut mesh = Mesh::default();
+    mesh.vertices.push(Vertex {
+        pos: line.left_top(),
+        uv: WHITE_UV,
+        color: egui::Color32::from_rgba_unmultiplied(255, 179, 64, 54),
+    });
+    mesh.vertices.push(Vertex {
+        pos: line.right_top(),
+        uv: WHITE_UV,
+        color: egui::Color32::from_rgba_unmultiplied(63, 224, 197, 20),
+    });
+    mesh.vertices.push(Vertex {
+        pos: line.right_bottom(),
+        uv: WHITE_UV,
+        color: egui::Color32::TRANSPARENT,
+    });
+    mesh.vertices.push(Vertex {
+        pos: line.left_bottom(),
+        uv: WHITE_UV,
+        color: egui::Color32::TRANSPARENT,
+    });
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(0, 2, 3);
+    painter.add(egui::Shape::mesh(mesh));
 }
 
 /// Small vertical accent rule used before page titles.
@@ -338,7 +233,7 @@ pub fn accent_bar(ui: &mut egui::Ui, height: f32) {
         ui.painter(),
         rect,
         2,
-        egui::Color32::from_rgba_unmultiplied(245, 158, 11, 65),
+        egui::Color32::from_rgba_unmultiplied(255, 179, 64, 90),
         10,
     );
 }
@@ -423,12 +318,7 @@ pub fn primary_sized_glyph(
                 offset: [0, if pressed { 2 } else { 7 + (lift * 2.0) as i8 }],
                 blur: if pressed { 8 } else { 20 + (lift * 6.0) as u8 },
                 spread: 0,
-                color: egui::Color32::from_rgba_unmultiplied(
-                    132,
-                    82,
-                    24,
-                    (20.0 + 8.0 * hover) as u8,
-                ),
+                color: egui::Color32::from_rgba_unmultiplied(0, 0, 0, (90.0 + 40.0 * hover) as u8),
             }
             .as_shape(body, radius),
         );
@@ -437,20 +327,20 @@ pub fn primary_sized_glyph(
                 offset: [0, 1],
                 blur: 2,
                 spread: 0,
-                color: egui::Color32::from_rgba_unmultiplied(92, 52, 12, 42),
+                color: egui::Color32::from_rgba_unmultiplied(0, 0, 0, 90),
             }
             .as_shape(body, radius),
         );
 
         let top = mix(
-            egui::Color32::from_rgb(247, 178, 58),
+            egui::Color32::from_rgb(255, 201, 99),
             egui::Color32::WHITE,
-            hover * 0.04,
+            hover * 0.06,
         );
         let bottom = mix(
-            egui::Color32::from_rgb(239, 155, 26),
-            egui::Color32::from_rgb(247, 178, 58),
-            hover * 0.05,
+            egui::Color32::from_rgb(255, 132, 36),
+            egui::Color32::from_rgb(255, 164, 56),
+            hover * 0.18,
         );
         let top = if pressed { mix(top, bottom, 0.32) } else { top };
         gradient_rrect(painter, body, radius, top, bottom);
@@ -481,12 +371,12 @@ pub fn primary_sized_glyph(
         );
 
         let border = if pressed {
-            egui::Color32::from_rgb(198, 116, 10)
+            egui::Color32::from_rgb(210, 117, 28)
         } else {
             mix(
-                egui::Color32::from_rgb(216, 133, 16),
+                egui::Color32::from_rgb(255, 166, 66),
                 egui::Color32::WHITE,
-                hover * 0.10,
+                hover * 0.18,
             )
         };
         painter.rect_stroke(
@@ -503,7 +393,7 @@ pub fn primary_sized_glyph(
                 painter,
                 body,
                 radius,
-                egui::Color32::from_rgba_unmultiplied(245, 158, 11, (9.0 * hover) as u8),
+                egui::Color32::from_rgba_unmultiplied(255, 150, 40, (26.0 * hover) as u8),
                 18,
             );
         }
@@ -516,7 +406,7 @@ pub fn primary_sized_glyph(
         painter.rect(
             rect,
             radius,
-            egui::Color32::from_rgb(248, 238, 224),
+            egui::Color32::from_rgb(18, 26, 41),
             egui::Stroke::new(1.0, LINE),
             egui::StrokeKind::Inside,
         );
@@ -543,7 +433,7 @@ fn paint_primary_label(
     pressed: bool,
 ) {
     let font = egui::FontId::new(font_size, crate::bold_family());
-    let galley = painter.layout_no_wrap(text.to_owned(), font, INK);
+    let galley = painter.layout_no_wrap(text.to_owned(), font, ON_ACCENT);
     let icon_w = if glyph == PrimaryGlyph::None {
         0.0
     } else {
@@ -561,18 +451,13 @@ fn paint_primary_label(
             egui::pos2(left + icon_w * 0.5, body.center().y),
             egui::vec2(icon_w, 16.0),
         );
-        paint_primary_glyph(
-            painter,
-            icon_rect,
-            glyph,
-            egui::Color32::from_rgba_unmultiplied(46, 36, 24, 218),
-        );
+        paint_primary_glyph(painter, icon_rect, glyph, ON_ACCENT);
     }
     let pos = egui::pos2(
         left + icon_w + gap,
         body.center().y - galley.size().y * 0.5 + 0.5 + if pressed { 0.5 } else { 0.0 },
     );
-    painter.galley(pos, galley, INK);
+    painter.galley(pos, galley, ON_ACCENT);
 }
 
 fn paint_primary_label_disabled(
@@ -582,7 +467,7 @@ fn paint_primary_label_disabled(
     font_size: f32,
     glyph: PrimaryGlyph,
 ) {
-    let color = egui::Color32::from_rgb(158, 137, 112);
+    let color = egui::Color32::from_rgb(113, 128, 151);
     let font = egui::FontId::new(font_size, crate::bold_family());
     let galley = painter.layout_no_wrap(text.to_owned(), font, color);
     let icon_w = if glyph == PrimaryGlyph::None {
@@ -706,12 +591,7 @@ pub fn secondary_sized(
                 offset: [0, if pressed { 1 } else { 2 }],
                 blur: if pressed { 3 } else { 7 },
                 spread: 0,
-                color: egui::Color32::from_rgba_unmultiplied(
-                    128,
-                    95,
-                    60,
-                    (14.0 + 6.0 * hover) as u8,
-                ),
+                color: egui::Color32::from_rgba_unmultiplied(0, 0, 0, (50.0 + 25.0 * hover) as u8),
             }
             .as_shape(body, radius),
         );
@@ -719,16 +599,12 @@ pub fn secondary_sized(
             crate::SURFACE2
         } else {
             mix(
-                egui::Color32::WHITE,
-                egui::Color32::from_rgb(255, 248, 236),
+                egui::Color32::from_rgb(17, 27, 44),
+                egui::Color32::from_rgb(27, 42, 66),
                 hover,
             )
         };
-        let border = mix(
-            egui::Color32::from_rgb(231, 211, 184),
-            crate::ACCENT_HI,
-            hover * 0.7,
-        );
+        let border = mix(LINE_HI, crate::ACCENT_HI, hover * 0.8);
         painter.rect(
             body,
             radius,
@@ -743,7 +619,7 @@ pub fn secondary_sized(
                 egui::pos2(inner.left() + inset, inner.top() + 0.5),
                 egui::pos2(inner.right() - inset, inner.top() + 0.5),
             ],
-            egui::Stroke::new(1.0, egui::Color32::from_white_alpha(84)),
+            egui::Stroke::new(1.0, egui::Color32::from_white_alpha(18)),
         );
         painter.text(
             body.center() + egui::vec2(0.0, 0.5),
@@ -756,7 +632,7 @@ pub fn secondary_sized(
         painter.rect(
             body,
             radius,
-            egui::Color32::from_rgb(250, 243, 233),
+            egui::Color32::from_rgb(16, 24, 38),
             egui::Stroke::new(1.0, LINE),
             egui::StrokeKind::Inside,
         );
@@ -782,7 +658,7 @@ pub fn progress_bar(ui: &mut egui::Ui, fraction: f32, indeterminate: bool, time:
     painter.rect(
         rect,
         5,
-        SURFACE2,
+        egui::Color32::from_rgb(8, 14, 24),
         egui::Stroke::new(1.0, LINE),
         egui::StrokeKind::Inside,
     );
@@ -828,8 +704,8 @@ pub fn progress_bar(ui: &mut egui::Ui, fraction: f32, indeterminate: bool, time:
             painter,
             fill_rect,
             5,
-            egui::Color32::from_rgba_unmultiplied(245, 158, 11, 28),
-            10,
+            egui::Color32::from_rgba_unmultiplied(255, 150, 40, 60),
+            12,
         );
     }
     // Tiny baseline pin so the empty track still reads as a component.

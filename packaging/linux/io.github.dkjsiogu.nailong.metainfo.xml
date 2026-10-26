@@ -25,6 +25,11 @@
   <url type="bugtracker">https://github.com/dkjsiogu/nailong/issues</url>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.31.0" date="2026-10-26">
+      <description>
+        <p>Aurora interface: a deep ink-blue glass shell, serif display type, procedural aurora/star/moon/dragon-constellation artwork generated in Rust and cached as textures, a poster-like Home with a hero and bento layout, restored four-column content grid, and a scrollable Settings dialog at 900×620. Idle CPU remains 0%.</p>
+      </description>
+    </release>
     <release version="0.30.0" date="2026-10-26">
       <description>
         <p>Static ambient background: the gradients, dot grid and embers remain, but the window no longer redraws the whole page every 66 ms. Focused idle CPU under Xvfb/llvmpipe dropped from about 162% to 0%.</p>

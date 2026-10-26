@@ -8,7 +8,7 @@ A small, native Minecraft: Java Edition launcher written in Rust. Windows ships 
 
 [简体中文](README.md) | **English**
 
-> Current version: **0.30.0** (preview)
+> Current version: **0.31.0** (preview)
 >
 > Goals: small binaries, few dependencies, visible install progress, and a repair path after interruption. See [implementation status](docs/design/14-implementation-status.md) for exact boundaries.
 
@@ -26,6 +26,8 @@ nailong tries to do one thing simply:
 It is not a universal launcher, and it is not 1.0 yet. What works and what does not is laid out below.
 
 ## Interface
+
+0.31 replaces the whole interface with an aurora / dragon-ridge night sky: deep ink-blue glass, serif display type, and a Home that reads as one poster — the current version and Play on the left, the latest world floating on the right, recent content and shortcuts below. The backdrop and hero are not bundled images: they are generated in Rust once per size (aurora ribbons, star field, moon, dragon constellation, stepped ridges) and cached as textures, so the 0.30 idle-CPU result holds. The four-column content grid is back at 1120 px, and Settings becomes scrollable at the 900×620 minimum instead of clipping its content and Done button.
 
 0.30 makes the ambient background static: gradients, dots and embers stay, but the window no longer redraws every 66 ms. On Xvfb + llvmpipe with the window focused, a five-second idle sample dropped from about 162% CPU for the process to 0%. This was the root cause of the “Home/page switch feels hot” reports.
 
@@ -57,11 +59,11 @@ It is not a universal launcher, and it is not 1.0 yet. What works and what does 
 
 | Home | Content · Discover |
 |---|---|
-| ![Home](docs/screenshots/01-main.png) | ![Content · Discover](docs/screenshots/04-browse.png) |
+| ![Home](docs/screenshots/01-home.png) | ![Content · Discover](docs/screenshots/05-discover.png) |
 | **Content · Installed** | **Saves** |
-| ![Content · Installed](docs/screenshots/07-installed.png) | ![Saves](docs/screenshots/11-saves.png) |
+| ![Content · Installed](docs/screenshots/04-library.png) | ![Saves](docs/screenshots/08-saves.png) |
 
-More screenshots (versions, install, search, detail, updates, empty states, first launch, progress, account dialogs, settings, restore points, install confirmation, login failure, content load failure, update confirmation): [docs/screenshots](docs/screenshots). The motion clip is about 18 seconds and covers first-launch onboarding, the install form, install confirmation, cancelling back, content detail and the settings dialog.
+More screenshots (versions, install, search, detail, progress, first launch, settings, account and login, login failure, restore points, install confirmation, empty library, empty saves, plus six 900×620 narrow pages): [docs/screenshots](docs/screenshots). The 16-second clip covers sidebar navigation, Discover, detail and back, and Home.
 
 ## Features
 
@@ -132,7 +134,7 @@ Drag a `.mrpack` or `.zip` into the window to start an import. A single mod `.ja
 | Platform | File | Size | Requirements |
 |---|---|---:|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | ~8 MB | Windows 10/11, Java 21 |
-| Linux x64 (deb) | [nailong_0.30.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.30.0_amd64.deb) | ~3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
+| Linux x64 (deb) | [nailong_0.31.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.31.0_amd64.deb) | ~3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
 
 Checksums: [SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS).
 
@@ -184,7 +186,7 @@ Official releases include a project key, so CurseForge packs use the official AP
 
 Ran for real:
 
-- GUI: every page was walked at 1120×720 and the 900×620 minimum, including first launch, install confirmation, browse/search/detail, content manager, update banner, delete confirmation, empty states, save snapshots, the settings dialog, content restore points, progress, and the account/login dialogs; 24 screenshots and an 18-second motion GIF live in `docs/screenshots/`.
+- GUI: every page was walked at 1120×720 and the 900×620 minimum, including first launch, install confirmation, browse/search/detail, content manager, empty states, save snapshots, the settings dialog, content restore points, progress, and the account/login dialogs; 24 screenshots (18 at 1120×720 and 6 at 900×620) and a 17-second motion GIF live in `docs/screenshots/`. The 0.31 pass re-measured idle CPU at 0.0% with the window focused and the pointer parked.
 - Linux (Xvfb + Mesa): Fabric 0.19.5, NeoForge 21.1.209, and Forge 52.1.20 on 1.21.1 reached the main menu.
 - Fabulously Optimized `.mrpack`: 151 mods loaded and launched.
 - CurseForge: a real file was downloaded through the no-key official-page fallback; the approved API key returned the official file name, size, SHA1, and download URL.

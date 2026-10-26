@@ -1,6 +1,6 @@
-# 15 · 界面设计系统（0.30.0）
+# 15 · 界面设计系统（0.18–0.30，历史）
 
-> 适用于 `crates/nailong-ui` 的实际实现。目标：**玩家视角的信息架构、黄橙白浅色主题、每件事只有一个入口、每个页面只有一个主操作**。
+> **0.31 起视觉基线改为 [16 · 极光界面](16-ui-aurora.md)。** 本文保留 0.18–0.30 的浅色主题设计记录，信息架构和“一个地方管一件事”的原则仍然有效；颜色、字体、圆角和背景以 16 为准。
 
 ## 1. 原则
 
@@ -115,7 +115,7 @@
 - 尺寸：高 40（紧凑 30–34），圆角 `height × 0.24`（8–10）；宽度至少 72，内容居中并至少留 12 px 呼吸。
 - 禁用：`#F8EEE0` 底 + `LINE` 描边 + 暖灰粗体字，尺寸不变，避免布局跳动。
 
-![主按钮细节：左为 0.18.0，右为 0.18.1](../screenshots/button-detail.png)
+> 主按钮在 0.31 改为深色玻璃 + 琥珀渐变，细节以 [16 · 极光界面](16-ui-aurora.md) 为准。
 
 ### 环境光与减少动效
 环境光默认就是静态的：渐变、点阵和微粒常驻，但不再按 15 fps 重绘整窗；只有页面切换、悬停、进度更新等交互才出帧。设置里的「减少动效」写入 `ui.json`，开启后页面淡入到 100%、卡片悬停不抬升、按钮不位移、进度条扫光关闭、开关滑块立即到位；颜色、描边和悬停高亮仍然保留。
@@ -238,38 +238,7 @@
 
 ## 10. 截图
 
-全部截图在 Xvfb 1120×720 下截取，900×620 单独一张；窗口偏移分别为 140,90 与 250,140。调试入口见第 11 节。
-
-![动效演示](../screenshots/motion.gif)
-
-| 页面 | 截图 |
-|---|---|
-| 启动台 | ![](../screenshots/01-main.png) |
-| 版本 | ![](../screenshots/02-manage.png) |
-| 安装游戏 | ![](../screenshots/03-install.png) |
-| 内容 · 发现 | ![](../screenshots/04-browse.png) |
-| 内容 · 搜索 | ![](../screenshots/05-search.png) |
-| 内容详情 | ![](../screenshots/06-detail.png) |
-| 内容 · 已安装 | ![](../screenshots/07-installed.png) |
-| 更新横幅 | ![](../screenshots/08-updates.png) |
-| 空内容 | ![](../screenshots/09-empty-installed.png) |
-| 空存档 | ![](../screenshots/10-saves-empty.png) |
-| 快照列表 | ![](../screenshots/11-saves.png) |
-| 安装进度 | ![](../screenshots/12-progress.png) |
-| 账户弹窗 | ![](../screenshots/13-account.png) |
-| 登录弹窗 | ![](../screenshots/14-login.png) |
-| 登录失败 | ![](../screenshots/22-login-error.png) |
-| 内容加载失败 | ![](../screenshots/23-content-error.png) |
-| 首次启动引导 | ![](../screenshots/15-welcome.png) |
-| 设置弹窗 | ![](../screenshots/19-settings.png) |
-| 内容恢复点 | ![](../screenshots/20-restore-points.png) |
-| 安装确认 | ![](../screenshots/21-install-confirm.png) |
-| 更新确认 | ![](../screenshots/24-update-confirm.png) |
-| 删除确认 | ![](../screenshots/16-delete-confirm.png) |
-| 内容 · 资源包 | ![](../screenshots/17-resourcepacks.png) |
-| 900×620 最小窗口 | ![](../screenshots/18-narrow-900.png) |
-
-按钮细节前后对比：[button-detail.png](../screenshots/button-detail.png)。
+0.31 起 `docs/screenshots/` 已整体替换为深色极光版截图；本文件不再内嵌旧图。当前 24 张截图与 17 秒动效见 [16 · 极光界面](16-ui-aurora.md) 和 `docs/screenshots/`。0.18–0.30 的浅色截图可从 git 历史（`v0.30.0` 标签）查看。
 
 ## 11. 调试入口（仅 debug 构建）
 
