@@ -45,6 +45,10 @@ install -Dm644 packaging/linux/io.github.dkjsiogu.nailong.svg \
 install -Dm644 packaging/linux/copyright "$stage/usr/share/doc/nailong/copyright"
 install -Dm644 README.md "$stage/usr/share/doc/nailong/README.md"
 install -Dm644 LICENSE "$stage/usr/share/doc/nailong/LICENSE"
+install -Dm644 crates/nailong-ui/assets/OFL.txt \
+  "$stage/usr/share/doc/nailong/OFL-fusion-pixel.txt"
+install -Dm644 THIRD_PARTY_NOTICES.md \
+  "$stage/usr/share/doc/nailong/THIRD_PARTY_NOTICES.md"
 
 for size in 16 24 32 48 64 128 256 512; do
   install -Dm644 "packaging/linux/icons/io.github.dkjsiogu.nailong-${size}.png" \

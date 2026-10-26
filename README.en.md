@@ -8,7 +8,7 @@ A small, native Minecraft: Java Edition launcher written in Rust. Windows ships 
 
 [简体中文](README.md) | **English**
 
-> Current version: **0.31.0** (preview)
+> Current version: **0.32.0** (preview)
 >
 > Goals: small binaries, few dependencies, visible install progress, and a repair path after interruption. See [implementation status](docs/design/14-implementation-status.md) for exact boundaries.
 
@@ -26,6 +26,8 @@ nailong tries to do one thing simply:
 It is not a universal launcher, and it is not 1.0 yet. What works and what does not is laid out below.
 
 ## Interface
+
+0.32 tears out the 0.31 aurora glass and rebuilds the launcher in a Minecraft-native **Deepslate** pixel language: the bundled Fusion Pixel 12 px CJK face, zero rounded corners, two-pixel hard borders, beveled block buttons, pixel icons and a deepslate brick shell. Home's centrepiece is an isometric voxel island assembled block by block in Rust: grass, a tree, a pond, ore, a tiny explorer on the edge, four stepped dirt/stone layers and floating gold blocks. Every page and dialog uses the same block components; the four-column content grid is back at 1120 px, while 900×620 hides the latest-world slot and status strip and makes Settings scroll. The backdrop and island are generated per size and cached; idle CPU is still 0.0%.
 
 0.31 replaces the whole interface with an aurora / dragon-ridge night sky: deep ink-blue glass, serif display type, and a Home that reads as one poster — the current version and Play on the left, the latest world floating on the right, recent content and shortcuts below. The backdrop and hero are not bundled images: they are generated in Rust once per size (aurora ribbons, star field, moon, dragon constellation, stepped ridges) and cached as textures, so the 0.30 idle-CPU result holds. The four-column content grid is back at 1120 px, and Settings becomes scrollable at the 900×620 minimum instead of clipping its content and Done button.
 
@@ -133,8 +135,8 @@ Drag a `.mrpack` or `.zip` into the window to start an import. A single mod `.ja
 
 | Platform | File | Size | Requirements |
 |---|---|---:|---|
-| Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | ~8 MB | Windows 10/11, Java 21 |
-| Linux x64 (deb) | [nailong_0.31.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.31.0_amd64.deb) | ~3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
+| Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | ~16 MB | Windows 10/11, Java 21 |
+| Linux x64 (deb) | [nailong_0.32.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.32.0_amd64.deb) | ~4.8 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
 
 Checksums: [SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS).
 
@@ -151,7 +153,7 @@ Java 21 must be installed. nailong searches for it automatically and shows a war
 ### Linux (Debian / Ubuntu)
 
 ```bash
-sudo apt install ./nailong_0.10.0_amd64.deb
+sudo apt install ./nailong_0.32.0_amd64.deb
 nailong
 ```
 
@@ -186,7 +188,7 @@ Official releases include a project key, so CurseForge packs use the official AP
 
 Ran for real:
 
-- GUI: every page was walked at 1120×720 and the 900×620 minimum, including first launch, install confirmation, browse/search/detail, content manager, empty states, save snapshots, the settings dialog, content restore points, progress, and the account/login dialogs; 24 screenshots (18 at 1120×720 and 6 at 900×620) and a 17-second motion GIF live in `docs/screenshots/`. The 0.31 pass re-measured idle CPU at 0.0% with the window focused and the pointer parked.
+- GUI: every page was walked at 1120×720 and the 900×620 minimum, including first launch, install confirmation, browse/search/detail, content manager, empty states, save snapshots, the settings dialog, content restore points, progress, and the account/login dialogs; 24 screenshots (18 at 1120×720 and 6 at 900×620) and a 16-second motion GIF live in `docs/screenshots/`. The 0.32 pass re-measured idle CPU at 0.0% with the window focused and the pointer parked.
 - Linux (Xvfb + Mesa): Fabric 0.19.5, NeoForge 21.1.209, and Forge 52.1.20 on 1.21.1 reached the main menu.
 - Fabulously Optimized `.mrpack`: 151 mods loaded and launched.
 - CurseForge: a real file was downloaded through the no-key official-page fallback; the approved API key returned the official file name, size, SHA1, and download URL.

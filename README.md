@@ -8,7 +8,7 @@
 
 **简体中文** | [English](README.en.md)
 
-> 当前版本：**0.31.0**（预览版）
+> 当前版本：**0.32.0**（预览版）
 >
 > 目标：小体积、少依赖、安装过程可见、中断可补。功能边界见 [实现状态](docs/design/14-implementation-status.md)。
 
@@ -26,6 +26,8 @@ nailong 的思路很直：
 它不是“万能启动器”，也还不是 1.0。能做和不能做的，下文列清楚了。
 
 ## 界面
+
+0.32 把 0.31 的极光玻璃整体推倒，换成 Minecraft 原生的「深岩」像素语言：内置 Fusion Pixel 12px 中文字体，零圆角、2px 硬边、方块浮雕按钮、像素图标和深板岩砖背景；启动台主视觉是一块在 Rust 里逐块拼出的等距体素岛（草方块、树、水池、矿脉、站在边缘的小人、四层石/土裙边、悬浮金块）。所有页面与弹窗共用同一套方块组件；1120 宽恢复 4 列内容网格，900×620 隐藏最近世界槽和状态条、设置正文可滚动。背景与体素岛按尺寸生成并缓存，空闲 CPU 仍为 0.0%。
 
 0.31 把整个界面换成了「极光 / 龙脊夜空」：深墨蓝底、衬线大标题、玻璃卡片；启动台变成一张完整的海报——左边是当前版本与「开始游戏」，右边浮着最近世界，下面接最近内容与快捷操作。背景和英雄区不是素材图，而是在 Rust 里按尺寸生成一次、缓存成纹理（极光、星场、月亮、龙形星座、方块山脊），所以画面更丰富，空闲时仍然不重绘；0.30 的空闲 0% CPU 保留。1120 宽恢复 4 列内容网格；设置弹窗在 900×620 下改为可滚动，内容和「完成」按钮不再被裁切。
 
@@ -63,7 +65,7 @@ nailong 的思路很直：
 | **内容 · 已安装** | **存档** |
 | ![内容 · 已安装](docs/screenshots/04-library.png) | ![存档](docs/screenshots/08-saves.png) |
 
-更多截图（版本、安装、搜索、详情、进度、首次启动、设置、账户与登录、登录失败、恢复点、安装确认、空内容库、空存档，以及 6 张 900×620 窄窗口）：[docs/screenshots](docs/screenshots)。动效约 17 秒，包含侧边栏切页、发现、详情返回与启动台。
+更多截图（版本、安装、搜索、详情、进度、首次启动、设置、账户与登录、登录失败、恢复点、安装确认、空内容库、空存档，以及 6 张 900×620 窄窗口）：[docs/screenshots](docs/screenshots)。动效约 16 秒，包含侧边栏切页、发现、详情返回与启动台。界面字体为 [Fusion Pixel Font](https://github.com/TakWolf/fusion-pixel-font)，SIL OFL 1.1；许可证随 `crates/nailong-ui/assets/OFL.txt` 分发。
 
 ## 特性
 
@@ -134,8 +136,8 @@ nailong 的思路很直：
 
 | 平台 | 文件 | 大小 | 要求 |
 |---|---|---:|---|
-| Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | 约 8 MB | Windows 10/11，Java 21 |
-| Linux x64 (deb) | [nailong_0.31.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.31.0_amd64.deb) | 约 3.3 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
+| Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | 约 16 MB | Windows 10/11，Java 21 |
+| Linux x64 (deb) | [nailong_0.32.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.32.0_amd64.deb) | 约 4.8 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
 
 校验值：[SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS)。
 
@@ -152,7 +154,7 @@ nailong 的思路很直：
 ### Linux（Debian / Ubuntu）
 
 ```bash
-sudo apt install ./nailong_0.31.0_amd64.deb
+sudo apt install ./nailong_0.32.0_amd64.deb
 nailong
 ```
 
@@ -187,7 +189,7 @@ sudo apt remove nailong
 
 已经实际跑过的：
 
-- GUI：1120×720 与最小 900×620 下逐页走查，覆盖侧边栏四入口、首次启动引导、安装确认、内容发现/已安装、搜索、详情、空状态、存档快照、设置弹窗、内容恢复点、进度页和账户/登录弹窗；24 张截图（18 张 1120×720 + 6 张 900×620）和 17 秒动效 GIF 在 `docs/screenshots/`。0.31 复测窗口聚焦、鼠标移开后的空闲 CPU 为 0.0%。
+- GUI：1120×720 与最小 900×620 下逐页走查，覆盖侧边栏四入口、首次启动引导、安装确认、内容发现/已安装、搜索、详情、空状态、存档快照、设置弹窗、内容恢复点、进度页和账户/登录弹窗；24 张截图（18 张 1120×720 + 6 张 900×620）和 16 秒动效 GIF 在 `docs/screenshots/`。0.32 复测窗口聚焦、鼠标移开后的空闲 CPU 为 0.0%。
 - Linux（Xvfb + Mesa）：Fabric 0.19.5、NeoForge 21.1.209、Forge 52.1.20 在 1.21.1 启动到主菜单。
 - Fabulously Optimized `.mrpack`：151 个模组加载并启动。
 - CurseForge：真实文件通过无 key 的官方下载页回退下载成功；官方 API key 实测返回文件名、大小、SHA1 和下载地址。
