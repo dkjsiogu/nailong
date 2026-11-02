@@ -45,8 +45,6 @@ install -Dm644 packaging/linux/io.github.dkjsiogu.nailong.svg \
 install -Dm644 packaging/linux/copyright "$stage/usr/share/doc/nailong/copyright"
 install -Dm644 README.md "$stage/usr/share/doc/nailong/README.md"
 install -Dm644 LICENSE "$stage/usr/share/doc/nailong/LICENSE"
-install -Dm644 crates/nailong-ui/assets/OFL.txt \
-  "$stage/usr/share/doc/nailong/OFL-fusion-pixel.txt"
 install -Dm644 THIRD_PARTY_NOTICES.md \
   "$stage/usr/share/doc/nailong/THIRD_PARTY_NOTICES.md"
 
@@ -77,7 +75,7 @@ Architecture: $arch
 Installed-Size: $installed_kb
 Maintainer: dkjsiogu <123802475+dkjsiogu@users.noreply.github.com>
 Depends: libc6 (>= $glibc_req), libgcc-s1, libgl1, libegl1, libx11-6, libxext6, libxcursor1, libxi6, libxrandr2, libxkbcommon0
-Recommends: openjdk-21-jre | default-jre
+Recommends: openjdk-21-jre | default-jre, fonts-noto-cjk
 Homepage: https://github.com/dkjsiogu/nailong
 Description: Lightweight Minecraft launcher
  nailong is a lightweight Minecraft: Java Edition launcher written in Rust.

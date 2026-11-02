@@ -1,13 +1,8 @@
 # Third-party notices
 
-## Fusion Pixel Font
+The launcher does not bundle any Chinese font or third-party artwork. Chinese
+text uses the operating system's fonts (Noto Sans CJK on Linux, Microsoft YaHei
+on Windows), and the interface graphics are drawn in code.
 
-The launcher bundles **Fusion Pixel Font** by TakWolf.
-
-- Project: <https://github.com/TakWolf/fusion-pixel-font>
-- File: `crates/nailong-ui/assets/fusion-pixel-12px-proportional-zh_hans.ttf`
-- License: SIL Open Font License 1.1
-- License text: `crates/nailong-ui/assets/OFL.txt`
-
-The font is embedded into the GUI binary at compile time and is also installed
-with the Debian package as `OFL-fusion-pixel.txt`.
+Large Latin text uses Ubuntu Light, which ships inside the default fonts of the
+`egui` library under the Ubuntu Font Licence.

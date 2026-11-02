@@ -25,6 +25,11 @@
   <url type="bugtracker">https://github.com/dkjsiogu/nailong/issues</url>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.33.0" date="2026-11-03">
+      <description>
+        <p>Fog Blue interface: nailong's own minimal, matte look replaces the Minecraft-like pixel style, with dark and light themes that follow the system by default. A status ring on Home shows file integrity, every mod and world snapshots, with hover explanations, click-through and keyboard support. System CJK fonts replace the bundled pixel font. Idle CPU remains 0%.</p>
+      </description>
+    </release>
     <release version="0.32.0" date="2026-10-26">
       <description>
         <p>Deepslate interface: a Minecraft-native pixel language with the bundled Fusion Pixel 12 px CJK face, zero rounded corners, two-pixel hard borders, beveled block buttons, pixel icons, a deepslate brick shell and a procedurally painted isometric voxel island on Home. All pages and dialogs share the same block components; the 900×620 layout hides the latest-world slot and status strip and scrolls Settings. Idle CPU remains 0%.</p>
