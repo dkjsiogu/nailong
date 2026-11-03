@@ -158,6 +158,34 @@ pub fn list(game_dir: &Path, world: &str) -> Result<Vec<Snapshot>> {
     Ok(out)
 }
 
+/// 只看文件名统计快照：份数和最新一份的时间（秒）。
+///
+/// 快照 id 是“毫秒-序号”，不用解析整份清单，启动台可以随时调用。
+pub fn summary(game_dir: &Path, world: &str) -> Result<(usize, Option<u64>)> {
+    let world = safe_name(world)?;
+    let Ok(entries) = fs::read_dir(snapshots_dir(game_dir, world)) else {
+        return Ok((0, None));
+    };
+    let mut count = 0;
+    let mut latest: Option<u64> = None;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        count += 1;
+        let millis = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .and_then(|stem| stem.split('-').next())
+            .and_then(|millis| millis.parse::<u64>().ok());
+        if let Some(secs) = millis.map(|millis| millis / 1000) {
+            latest = Some(latest.map_or(secs, |current| current.max(secs)));
+        }
+    }
+    Ok((count, latest))
+}
+
 /// 恢复到 `saves/<world>`；目录已存在时改名为 `<world>-restored-<时间>`。
 pub fn restore(game_dir: &Path, world: &str, id: &str) -> Result<PathBuf> {
     let world = safe_name(world)?;
@@ -402,6 +430,27 @@ mod tests {
         )
         .unwrap();
         fs::write(dir.join("r.0.0.mca"), payload).unwrap();
+    }
+
+    #[test]
+    fn summary_counts_snapshots_from_file_names() {
+        let game_dir = std::env::temp_dir().join(format!(
+            "nailong-snapshot-summary-{}-{}",
+            std::process::id(),
+            now_millis()
+        ));
+        let dir = snapshots_dir(&game_dir, "World");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("1700000000000-1.json"), b"{}").unwrap();
+        fs::write(dir.join("1700000600999-2.json"), b"{}").unwrap();
+        fs::write(dir.join("notes.txt"), b"x").unwrap();
+        assert_eq!(
+            summary(&game_dir, "World").unwrap(),
+            (2, Some(1_700_000_600))
+        );
+        assert_eq!(summary(&game_dir, "Missing").unwrap(), (0, None));
+        assert!(summary(&game_dir, "../escape").is_err());
+        let _ = fs::remove_dir_all(&game_dir);
     }
 
     #[test]

@@ -694,6 +694,43 @@ impl App {
         {
             app.open_saves(row);
         }
+        #[cfg(debug_assertions)]
+        if let Some(count) = std::env::var("NAILONG_DEBUG_UPDATES")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            && let Some(row) = app.selected_row().or_else(|| app.rows.first().cloned())
+        {
+            let dir = row
+                .game_dir
+                .clone()
+                .unwrap_or_else(|| app.root.version_dir(&row.profile));
+            app.mods_updates = installed::load(&dir)
+                .entries
+                .into_iter()
+                .filter(|entry| entry.kind == mods::ContentKind::Mod)
+                .take(count)
+                .map(|entry| installed::UpdateCandidate {
+                    latest: mods::Version {
+                        source: mods::Source::Modrinth,
+                        kind: mods::ContentKind::Mod,
+                        project_id: String::new(),
+                        id: String::new(),
+                        name: entry.name.clone(),
+                        version_number: "debug".into(),
+                        game_versions: Vec::new(),
+                        loaders: Vec::new(),
+                        file_name: entry.file.clone(),
+                        download_url: None,
+                        sha1: None,
+                        size: None,
+                        published: None,
+                        dependencies: Vec::new(),
+                    },
+                    entry,
+                })
+                .collect();
+            app.mods_row = Some(row);
+        }
         if app.visible_count() == 0 && !app.rows.is_empty() {
             app.show_manage = true;
         }
@@ -1669,6 +1706,7 @@ impl App {
                                         {
                                             self.theme_pref = pref;
                                             pref.apply(ui.ctx());
+                                            self.save_ui_config();
                                         }
                                     }
                                 });
@@ -7778,11 +7816,12 @@ impl App {
         };
         let mut worlds = saves::worlds(game_dir).unwrap_or_default();
         worlds.sort_by_key(|world| world.modified);
-        let mut snapshot_times = Vec::new();
+        let mut snapshot_count = 0;
+        let mut latest_snapshot: Option<u64> = None;
         for world in &worlds {
-            for snapshot in snapshots::list(game_dir, &world.name).unwrap_or_default() {
-                snapshot_times.push(snapshot.created_at);
-            }
+            let (count, latest) = snapshots::summary(game_dir, &world.name).unwrap_or((0, None));
+            snapshot_count += count;
+            latest_snapshot = latest_snapshot.max(latest);
         }
         let latest_world = worlds.pop();
         let mod_entries = index
@@ -7797,8 +7836,8 @@ impl App {
             packs: count(mods::ContentKind::ResourcePack),
             latest_world,
             mod_entries,
-            snapshots: snapshot_times.len(),
-            latest_snapshot: snapshot_times.into_iter().max(),
+            snapshots: snapshot_count,
+            latest_snapshot,
         };
         self.home_cache = Some(cache.clone());
         cache

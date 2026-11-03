@@ -146,6 +146,12 @@ pub fn tip(data: &Data, layer: Layer) -> Tip {
             "点击打开存档",
         ),
     };
+    // 游戏运行时启动器不允许切页，只有中心圆点还能点。
+    let action = if data.state == State::Running && layer != Layer::Core {
+        ""
+    } else {
+        action
+    };
     Tip {
         title,
         detail,

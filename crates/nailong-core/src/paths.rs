@@ -8,7 +8,10 @@ pub struct Root {
 
 impl Root {
     pub fn new(dir: impl Into<PathBuf>) -> Self {
-        Self { dir: dir.into() }
+        let dir = dir.into();
+        // 游戏进程的工作目录是版本目录，相对路径会让类路径全部失效。
+        let dir = std::path::absolute(&dir).unwrap_or(dir);
+        Self { dir }
     }
 
     pub fn default_root() -> PathBuf {
@@ -158,4 +161,16 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
         io(path, e)
     })?;
     Ok(())
+}
+
+#[cfg(test)]
+mod root_tests {
+    use super::*;
+
+    #[test]
+    fn relative_roots_become_absolute() {
+        let root = Root::new("relative/.minecraft");
+        assert!(root.dir().is_absolute());
+        assert!(root.dir().ends_with("relative/.minecraft"));
+    }
 }
