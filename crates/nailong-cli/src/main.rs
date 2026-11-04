@@ -4,7 +4,7 @@ use nailong_core::install::{fabric, forge, modpack, neoforge, vanilla};
 use nailong_core::launch::{self, LaunchOptions};
 use nailong_core::manifest::{self, Context as ResolveContext};
 use nailong_core::progress::{Progress, Sink, from_fn};
-use nailong_core::{Root, cancel, java};
+use nailong_core::{Root, cancel, java, tuning};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -47,10 +47,17 @@ enum Commands {
         username: String,
         #[arg(long)]
         uuid: Option<String>,
-        #[arg(long, default_value_t = 4096)]
-        memory: u32,
-        #[arg(long, default_value_t = 1024)]
-        min_memory: u32,
+        /// 最大堆（MB）；不填时按电脑配置和 Mod 数量自动算
+        #[arg(long)]
+        memory: Option<u32>,
+        #[arg(long)]
+        min_memory: Option<u32>,
+        /// 回收器：auto、g1 或 zgc
+        #[arg(long, default_value = "auto")]
+        gc: String,
+        /// 额外的 JVM 参数，可重复；和自动参数冲突时以它为准
+        #[arg(long = "jvm-arg", allow_hyphen_values = true)]
+        jvm_args: Vec<String>,
         #[arg(long, default_value_t = 1280)]
         width: u32,
         #[arg(long, default_value_t = 720)]
@@ -168,6 +175,8 @@ fn main() -> anyhow::Result<()> {
             uuid,
             memory,
             min_memory,
+            gc,
+            jvm_args,
             width,
             height,
             demo,
@@ -180,6 +189,8 @@ fn main() -> anyhow::Result<()> {
                 uuid,
                 memory_mb: memory,
                 min_memory_mb: min_memory,
+                gc: tuning::GcChoice::from_key(&gc),
+                jvm_args,
                 width,
                 height,
                 demo,

@@ -126,6 +126,7 @@ Drag a `.mrpack` or `.zip` into the window to start an import. A single mod `.ja
 - Tokens live in `account.json` under the data directory (mode 0600 on Unix) and never appear in logs; logging out deletes it.
 - Offline-account launch (singleplayer / LAN) still works when nobody is signed in.
 - Settings: the sidebar footer opens one dialog for player name, memory, Java status, game/data folders and logs; player name and memory persist in `ui.json`.
+- Automatic JVM tuning: memory defaults to Auto. Heap size comes from physical RAM, CPU threads, the Java version and the mod count, with tuned G1 flags; large modpacks on strong machines switch to generational ZGC. Settings shows the calculation and the full flag list, and you can still set memory, the collector or extra JVM arguments by hand. See [19 · JVM tuning](docs/design/19-jvm-tuning.md) (Chinese).
 - Versions: base versions required by a loader are hidden from the main picker and protected from deletion; this page only launches, repairs, reveals the folder and deletes. Content and saves live in their own sidebar places.
 - Saves: a first-class page with a version picker at the top; list worlds with size and modified time. Backups are **git-style snapshots**: content-defined chunking stores only changed chunks, so a second backup usually adds a few MB; restore, delete and prune by count.
 - Automatic backups: when enabled, every time you quit the game a snapshot of that version's worlds is taken, plus an optional run every 15/30/60/120 minutes; 5/10/20/50 snapshots are kept per world, and settings live in `backups.json` under the data directory.
@@ -214,6 +215,8 @@ The deb only contains the GUI; building from source also produces the CLI:
 ./target/release/nailong --root /path/to/.minecraft install modpack ~/Downloads/pack.mrpack
 ./target/release/nailong --root /path/to/.minecraft install modpack ~/Downloads/pack.zip
 ./target/release/nailong --root /path/to/.minecraft launch neoforge-21.1.209 --username Steve --memory 4096
+# Omit --memory for automatic sizing; --dry-run prints the tuning steps
+./target/release/nailong --root /path/to/.minecraft launch neoforge-21.1.209 --gc zgc --jvm-arg=-XX:+AlwaysPreTouch --dry-run
 ```
 
 ## Build from source

@@ -19,6 +19,28 @@ impl JavaRuntime {
             None => format!("Java {}", self.version),
         }
     }
+
+    /// 读不到架构时按 64 位处理，现在的发行版基本都是。
+    pub fn is_64bit(&self) -> bool {
+        let Some(arch) = &self.arch else {
+            return true;
+        };
+        !matches!(
+            arch.to_ascii_lowercase().as_str(),
+            "x86" | "i386" | "i486" | "i586" | "i686" | "arm" | "aarch32" | "ppc" | "sparc"
+        )
+    }
+
+    /// Oracle GraalVM 的 vendor 也写 Oracle，所以还要看 `release` 文件。
+    pub fn is_graal(&self) -> bool {
+        let lower = |s: &str| s.to_ascii_lowercase().contains("graal");
+        if lower(&self.path.to_string_lossy()) || self.vendor.as_deref().is_some_and(lower) {
+            return true;
+        }
+        let home = self.path.parent().and_then(|p| p.parent());
+        home.and_then(|home| std::fs::read_to_string(home.join("release")).ok())
+            .is_some_and(|release| release.contains("GRAALVM_VERSION"))
+    }
 }
 
 pub fn find_all() -> Vec<JavaRuntime> {

@@ -15,6 +15,7 @@ pub mod progress;
 pub mod rollback;
 pub mod saves;
 pub mod snapshots;
+pub mod tuning;
 
 pub use error::{Error, Result};
 pub use paths::Root;

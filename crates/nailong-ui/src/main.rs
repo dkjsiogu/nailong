@@ -10,6 +10,7 @@ use nailong_core::progress::{Progress, Sink, from_fn};
 use nailong_core::rollback;
 use nailong_core::saves;
 use nailong_core::snapshots;
+use nailong_core::tuning;
 use nailong_core::{Error, Root, cancel, java};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
@@ -281,7 +282,16 @@ struct App {
     rows: Vec<Row>,
     selected: Option<String>,
     username: String,
-    memory: u32,
+    /// 最大堆，MB；None 表示按电脑配置和 Mod 数量自动算。
+    memory: Option<u32>,
+    gc: tuning::GcChoice,
+    /// 设置里填的额外 JVM 参数，原样保存。
+    jvm_args: String,
+    show_tuning: bool,
+    javas: Vec<java::JavaRuntime>,
+    machine: tuning::Machine,
+    /// 每个版本的负载（Java、加载器、Mod 数），进页面和内容变化时重算。
+    tuning_cache: HashMap<String, Option<tuning::Workload>>,
     reduce_motion: bool,
     theme_pref: t::Preference,
     java_ok: bool,
@@ -396,36 +406,55 @@ struct App {
     running_row: Option<String>,
 }
 
-/// 玩家名与内存存在数据目录的 `ui.json`，随设置弹窗关闭落盘。
-fn load_ui_prefs(root: &Root) -> (String, u32, bool, t::Preference) {
+struct UiPrefs {
+    username: String,
+    memory: Option<u32>,
+    gc: tuning::GcChoice,
+    jvm_args: String,
+    reduce_motion: bool,
+    theme: t::Preference,
+}
+
+/// 玩家名、内存和外观存在数据目录的 `ui.json`，随设置弹窗关闭落盘。
+fn load_ui_prefs(root: &Root) -> UiPrefs {
     let value = std::fs::read(root.dir().join("ui.json"))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
-    let username = value
-        .as_ref()
-        .and_then(|value| value.get("username"))
+    let get = |key: &str| value.as_ref().and_then(|value| value.get(key));
+    let username = get("username")
         .and_then(|value| value.as_str())
         .filter(|name| !name.trim().is_empty())
         .unwrap_or("Player")
         .to_string();
-    let memory = value
-        .as_ref()
-        .and_then(|value| value.get("memory"))
+    // 0.33 及以前没有 "gc"，那时的 4096 是默认值而不是用户选的，迁移成自动。
+    let legacy = get("gc").is_none();
+    let memory = get("memory")
         .and_then(|value| value.as_u64())
-        .unwrap_or(4096)
-        .clamp(1024, 16384) as u32;
-    let reduce_motion = value
-        .as_ref()
-        .and_then(|value| value.get("reduce_motion"))
+        .filter(|&mb| !(legacy && mb == 4096))
+        .map(|mb| mb.clamp(1024, 16384) as u32);
+    let gc = get("gc")
+        .and_then(|value| value.as_str())
+        .map(tuning::GcChoice::from_key)
+        .unwrap_or_default();
+    let jvm_args = get("jvm_args")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let reduce_motion = get("reduce_motion")
         .and_then(|value| value.as_bool())
         .unwrap_or(false);
-    let theme = value
-        .as_ref()
-        .and_then(|value| value.get("theme"))
+    let theme = get("theme")
         .and_then(|value| value.as_str())
         .map(t::Preference::from_key)
         .unwrap_or(t::Preference::System);
-    (username, memory, reduce_motion, theme)
+    UiPrefs {
+        username,
+        memory,
+        gc,
+        jvm_args,
+        reduce_motion,
+        theme,
+    }
 }
 
 impl App {
@@ -435,7 +464,7 @@ impl App {
         let java_label = javas.iter().find(|j| j.major >= 21).map(|j| j.label());
         let account = auth::load(&root);
         let backup_cfg = snapshots::load_config(&root);
-        let (username, memory, reduce_motion, theme_pref) = load_ui_prefs(&root);
+        let prefs = load_ui_prefs(&root);
         let (icon_jobs, icon_job_rx) = mpsc::channel::<(String, String)>();
         let (icon_done, icon_rx) = mpsc::channel::<(String, Vec<u8>)>();
         std::thread::spawn(move || {
@@ -451,10 +480,16 @@ impl App {
             root,
             rows: Vec::new(),
             selected: None,
-            username,
-            memory,
-            reduce_motion,
-            theme_pref,
+            username: prefs.username,
+            memory: prefs.memory,
+            gc: prefs.gc,
+            jvm_args: prefs.jvm_args,
+            show_tuning: false,
+            javas,
+            machine: tuning::Machine::detect(),
+            tuning_cache: HashMap::new(),
+            reduce_motion: prefs.reduce_motion,
+            theme_pref: prefs.theme,
             java_ok,
             java_label,
             show_install: false,
@@ -900,10 +935,141 @@ impl App {
             .iter()
             .find(|runtime| runtime.major >= 21)
             .map(|runtime| runtime.label());
+        self.javas = runtimes;
+        self.tuning_cache.clear();
+    }
+
+    fn tuning_settings(&self) -> tuning::Settings {
+        tuning::Settings {
+            memory_mb: self.memory,
+            min_memory_mb: None,
+            gc: self.gc,
+            extra: tuning::split_args(&self.jvm_args),
+        }
+    }
+
+    /// 这个版本启动时会用的堆和 GC 参数，和 `launch` 的算法相同；只在缓存失效时读盘。
+    fn tuning_for(&mut self, row: &Row) -> Option<tuning::Plan> {
+        if !self.tuning_cache.contains_key(&row.id) {
+            let game_dir = row
+                .game_dir
+                .clone()
+                .unwrap_or_else(|| self.root.dir().to_path_buf());
+            let work = tuning::workload(&self.root, &row.profile, &game_dir, &self.javas).ok();
+            self.machine = tuning::Machine::detect();
+            self.tuning_cache.insert(row.id.clone(), work);
+        }
+        let work = self.tuning_cache.get(&row.id)?.as_ref()?;
+        Some(tuning::plan(&self.machine, work, &self.tuning_settings()))
+    }
+
+    /// 例如「内存 5 GB（自动）」。
+    fn memory_label(&mut self, row: &Row) -> String {
+        match self.tuning_for(row) {
+            Some(plan) if plan.auto_memory => format!("内存 {}（自动）", tuning::gb(plan.heap_mb)),
+            Some(plan) => format!("内存 {}", tuning::gb(plan.heap_mb)),
+            None => match self.memory {
+                Some(mb) => format!("内存 {}", tuning::gb(mb)),
+                None => "内存自动".into(),
+            },
+        }
+    }
+
+    /// 设置里的性能卡片：内存、回收器，以及当前版本会用的参数和计算过程。
+    fn tuning_card(&mut self, ui: &mut egui::Ui) {
+        let row = self.selected_row();
+        let plan = row.as_ref().and_then(|row| self.tuning_for(row));
+        egui::Frame::new()
+            .fill(t::bg())
+            .stroke(egui::Stroke::new(1.0, t::hairline()))
+            .corner_radius(motion::R)
+            .inner_margin(egui::Margin::symmetric(14, 12))
+            .show(ui, |ui| {
+                ui.set_width(442.0);
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("内存").size(13.0).color(t::sub()));
+                    let auto_mb = plan.as_ref().map_or(4096, |plan| {
+                        if plan.auto_memory { plan.heap_mb } else { 4096 }
+                    });
+                    memory_stepper(ui, &mut self.memory, auto_mb);
+                });
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("回收器").size(13.0).color(t::sub()));
+                    for gc in tuning::GcChoice::ALL {
+                        if chip(ui, gc.label(), self.gc == gc).clicked() {
+                            self.gc = gc;
+                        }
+                    }
+                });
+                let (Some(row), Some(plan)) = (row, plan) else {
+                    return;
+                };
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(plan.headline()).size(14.0));
+                    ui.label(
+                        egui::RichText::new(short_text(&row.label, 24))
+                            .size(13.0)
+                            .color(t::dim()),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let label = if self.show_tuning {
+                            "收起"
+                        } else {
+                            "查看计算"
+                        };
+                        if action_link(ui, label).clicked() {
+                            self.show_tuning = !self.show_tuning;
+                        }
+                    });
+                });
+                ui.label(egui::RichText::new(&plan.basis).size(13.0).color(t::dim()));
+                for warning in &plan.warnings {
+                    ui.label(egui::RichText::new(warning).size(13.0).color(t::warn()));
+                }
+                if !self.show_tuning {
+                    if !self.jvm_args.trim().is_empty() {
+                        ui.label(
+                            egui::RichText::new("另有自定义 JVM 参数")
+                                .size(13.0)
+                                .color(t::dim()),
+                        );
+                    }
+                    return;
+                }
+                ui.add_space(8.0);
+                for step in &plan.steps {
+                    ui.label(egui::RichText::new(step).size(13.0).color(t::sub()));
+                }
+                ui.add_space(8.0);
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(plan.args().join(" "))
+                            .size(13.0)
+                            .monospace()
+                            .color(t::sub()),
+                    )
+                    .wrap(),
+                );
+                ui.add_space(10.0);
+                ui.label(
+                    egui::RichText::new("额外 JVM 参数")
+                        .size(13.0)
+                        .color(t::sub()),
+                );
+                text_field(
+                    ui,
+                    &mut self.jvm_args,
+                    "和自动参数冲突时以这里为准",
+                    ui.available_width(),
+                );
+            });
     }
 
     fn refresh(&mut self) {
         self.home_cache = None;
+        self.tuning_cache.clear();
         self.version_cache = None;
         let required_by = profile_dependents(&self.root);
         let used_by = instance_usage(&self.root);
@@ -1665,11 +1831,6 @@ impl App {
                                         egui::RichText::new("玩家名").size(13.0).color(t::sub()),
                                     );
                                     text_field(ui, &mut self.username, "", 150.0);
-                                    ui.add_space(10.0);
-                                    ui.label(
-                                        egui::RichText::new("内存").size(13.0).color(t::sub()),
-                                    );
-                                    memory_stepper(ui, &mut self.memory);
                                 });
                                 ui.add_space(8.0);
                                 ui.horizontal(|ui| {
@@ -1705,6 +1866,9 @@ impl App {
                                     }
                                 });
                             });
+                        ui.add_space(12.0);
+
+                        self.tuning_card(ui);
                         ui.add_space(12.0);
 
                         egui::Frame::new()
@@ -1923,6 +2087,8 @@ impl App {
         let value = serde_json::json!({
             "username": self.username,
             "memory": self.memory,
+            "gc": self.gc.key(),
+            "jvm_args": self.jvm_args.trim(),
             "reduce_motion": self.reduce_motion,
             "theme": self.theme_pref.key(),
         });
@@ -2581,16 +2747,25 @@ impl App {
         self.launch_started = Some(Instant::now());
         self.running_row = Some(row.id.clone());
         self.log.push(format!("启动 {}", row.id));
+        self.tuning_cache.remove(&row.id);
+        if let Some(plan) = self.tuning_for(&row) {
+            self.log
+                .push(format!("JVM {}，{}", plan.headline(), plan.basis));
+            self.log
+                .extend(plan.warnings.iter().map(|w| format!("注意：{w}")));
+        }
         let root = self.root.clone();
         let username = self.username.clone();
-        let memory = self.memory;
+        let tuning = self.tuning_settings();
         let account = self.account.clone();
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         std::thread::spawn(move || {
             let mut opts = LaunchOptions {
                 username,
-                memory_mb: memory,
+                memory_mb: tuning.memory_mb,
+                gc: tuning.gc,
+                jvm_args: tuning.extra,
                 game_dir: row.game_dir.clone(),
                 ..Default::default()
             };
@@ -2763,6 +2938,7 @@ impl App {
 
     fn start_mods_scan(&mut self) {
         self.home_cache = None;
+        self.tuning_cache.clear();
         self.version_cache = None;
         let Some(game_dir) = self.mods_game_dir.clone() else {
             return;
@@ -3953,6 +4129,7 @@ impl App {
                 Msg::SavesDone(result) => {
                     self.saves_busy = false;
                     self.home_cache = None;
+                    self.tuning_cache.clear();
                     self.saves_rx = None;
                     if self.auto_backup_running {
                         self.auto_backup_running = false;
@@ -4782,6 +4959,7 @@ impl App {
 
                         if !compact_h {
                             ui.add_space(14.0);
+                            let memory = self.memory_label(&row);
                             let java = if self.java_ok {
                                 "Java 21 已就绪"
                             } else {
@@ -4789,8 +4967,7 @@ impl App {
                             };
                             ui.label(
                                 egui::RichText::new(format!(
-                                    "{java}    内存 {} GB    拖入 .mrpack 可导入整合包",
-                                    self.memory / 1024
+                                    "{java}    {memory}    拖入 .mrpack 可导入整合包"
                                 ))
                                 .size(13.0)
                                 .color(if self.java_ok {
@@ -7780,10 +7957,9 @@ impl App {
                                         |ui| {
                                             ui.vertical(|ui| {
                                                 ui.label(
-                                                    egui::RichText::new(format!(
-                                                        "默认内存 {} MB",
-                                                        self.memory
-                                                    ))
+                                                    egui::RichText::new(
+                                                        self.memory_label(&row),
+                                                    )
                                                     .size(13.0)
                                                     .color(t::sub()),
                                                 );
@@ -8760,6 +8936,7 @@ impl eframe::App for App {
             self.page_key = page;
             // 别的页面可能改了内容或快照，回到启动台时重新读取。
             self.home_cache = None;
+            self.tuning_cache.clear();
             self.page_enter_at = now;
         }
         let enter = if self.reduce_motion {
@@ -10065,9 +10242,19 @@ fn text_field(ui: &mut egui::Ui, text: &mut String, hint: &str, width: f32) -> e
     )
 }
 
-/// 内存用 1 GB 步进的紧凑步进器，比裸 DragValue 更像启动器设置。
-fn memory_stepper(ui: &mut egui::Ui, memory: &mut u32) {
-    let gb = (*memory as f32 / 1024.0).round().clamp(1.0, 16.0) as u32;
+/// 内存：「自动」加 1 GB 步进。自动时显示算出来的值，按加减就转成手动。
+fn memory_stepper(ui: &mut egui::Ui, memory: &mut Option<u32>, auto_mb: u32) {
+    if chip(ui, "自动", memory.is_none()).clicked() {
+        *memory = None;
+    }
+    ui.add_space(4.0);
+    let (down, up) = match *memory {
+        Some(mb) => {
+            let gb = (mb as f32 / 1024.0).round() as u32;
+            (gb.saturating_sub(1), gb + 1)
+        }
+        None => (auto_mb.div_ceil(1024).saturating_sub(1), auto_mb / 1024 + 1),
+    };
     let button = |ui: &mut egui::Ui, text: &str, enabled: bool| {
         ui.add_enabled(
             enabled,
@@ -10075,27 +10262,35 @@ fn memory_stepper(ui: &mut egui::Ui, memory: &mut u32) {
                 .fill(t::bg())
                 .stroke(egui::Stroke::new(1.0, t::hairline()))
                 .corner_radius(motion::R)
-                .min_size(egui::vec2(24.0, 26.0)),
+                .min_size(egui::vec2(28.0, 28.0)),
         )
         .clicked()
     };
-    if button(ui, "−", gb > 1) {
-        *memory = (gb - 1) * 1024;
+    if button(ui, "−", down >= 1) {
+        *memory = Some(down * 1024);
     }
+    let (text, color) = match *memory {
+        Some(mb) => (tuning::gb(mb), t::ink()),
+        None => (tuning::gb(auto_mb), t::sub()),
+    };
     egui::Frame::new()
         .fill(t::surface())
         .stroke(egui::Stroke::new(1.0, t::hairline()))
         .corner_radius(motion::R)
         .inner_margin(egui::Margin::symmetric(9, 4))
         .show(ui, |ui| {
-            ui.label(
-                egui::RichText::new(format!("{gb} GB"))
-                    .size(13.0)
-                    .family(bold_family()),
+            ui.add_sized(
+                [52.0, 18.0],
+                egui::Label::new(
+                    egui::RichText::new(text)
+                        .size(13.0)
+                        .color(color)
+                        .family(bold_family()),
+                ),
             );
         });
-    if button(ui, "+", gb < 16) {
-        *memory = (gb + 1) * 1024;
+    if button(ui, "+", up <= 16) {
+        *memory = Some(up * 1024);
     }
 }
 

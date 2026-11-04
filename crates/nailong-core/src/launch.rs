@@ -2,6 +2,7 @@ use crate::error::{Error, Result, io};
 use crate::java;
 use crate::manifest::{self, Argument, Context, Resolved, StringOrList};
 use crate::paths::Root;
+use crate::tuning::{self, GcChoice, Machine, Workload};
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
@@ -16,8 +17,12 @@ pub struct LaunchOptions {
     pub access_token: Option<String>,
     pub xuid: Option<String>,
     pub client_id: Option<String>,
-    pub memory_mb: u32,
-    pub min_memory_mb: u32,
+    /// 最大堆，MB；None 时按电脑配置和 Mod 数量自动算。
+    pub memory_mb: Option<u32>,
+    pub min_memory_mb: Option<u32>,
+    pub gc: GcChoice,
+    /// 用户自己的 JVM 参数，和自动参数冲突时以它为准。
+    pub jvm_args: Vec<String>,
     pub width: u32,
     pub height: u32,
     pub demo: bool,
@@ -34,8 +39,10 @@ impl Default for LaunchOptions {
             access_token: None,
             xuid: None,
             client_id: None,
-            memory_mb: 4096,
-            min_memory_mb: 1024,
+            memory_mb: None,
+            min_memory_mb: None,
+            gc: GcChoice::Auto,
+            jvm_args: Vec::new(),
             width: 1280,
             height: 720,
             demo: false,
@@ -51,9 +58,7 @@ pub fn launch(root: &Root, profile: &str, opts: &LaunchOptions) -> Result<i32> {
     ctx.features.custom_resolution = true;
     ctx.features.demo = opts.demo;
     let resolved = manifest::resolve(root, profile, &ctx)?;
-    let required = resolved
-        .java_major
-        .unwrap_or_else(|| guess_java(&resolved.id));
+    let required = required_java(&resolved);
     let javas = java::find_all();
     let java_rt = java::select(required, &javas)?;
     println!(
@@ -66,7 +71,14 @@ pub fn launch(root: &Root, profile: &str, opts: &LaunchOptions) -> Result<i32> {
         .game_dir
         .clone()
         .unwrap_or_else(|| root.dir().to_path_buf());
+    // 游戏以这个目录为工作目录启动，--gameDir 再给相对路径就会被解析两次。
+    let game_dir = std::path::absolute(&game_dir).unwrap_or(game_dir);
     std::fs::create_dir_all(&game_dir).map_err(|e| io(&game_dir, e))?;
+    let plan = tuning_plan(&java_rt, &resolved, &game_dir, opts);
+    println!("→ JVM {}", plan.headline());
+    for warning in &plan.warnings {
+        println!("  ! {warning}");
+    }
 
     let natives = prepare_natives(root, &resolved, &ctx)?;
     let asset_id = resolved
@@ -78,9 +90,6 @@ pub fn launch(root: &Root, profile: &str, opts: &LaunchOptions) -> Result<i32> {
         .uuid
         .clone()
         .unwrap_or_else(|| offline_uuid(&opts.username));
-    let memory = opts.memory_mb.max(1024);
-    let min_memory = opts.min_memory_mb.min(memory);
-
     let mut classpath = manifest::classpath(root, &resolved, &ctx);
     // 1.17+ 的 Forge/NeoForge 由 BootstrapLauncher/ModLauncher 自己发现
     // patched client jar 与 universal jar；如果 classpath 再带游戏 jar，
@@ -196,8 +205,7 @@ pub fn launch(root: &Root, profile: &str, opts: &LaunchOptions) -> Result<i32> {
         "-Dminecraft.client.jar=",
         &format!("-Dminecraft.client.jar={}", resolved.client_jar.display()),
     );
-    push_default(&mut jvm, "-Xms", &format!("-Xms{min_memory}m"));
-    push_default(&mut jvm, "-Xmx", &format!("-Xmx{memory}m"));
+    plan.apply(&mut jvm);
     if let Some(logging) = &resolved.logging {
         let p = root.assets().join("log_configs").join(&logging.file.id);
         if p.exists() {
@@ -252,6 +260,10 @@ pub fn launch(root: &Root, profile: &str, opts: &LaunchOptions) -> Result<i32> {
         println!("Classpath ({}):", classpath.len());
         for p in &classpath {
             println!("  {}", p.display());
+        }
+        println!("调参（{}）:", plan.headline());
+        for step in &plan.steps {
+            println!("  {step}");
         }
         println!("JVM:");
         for a in &jvm {
@@ -421,6 +433,29 @@ fn substitute(input: &str, vars: &BTreeMap<String, String>) -> String {
         out = out.replace(&format!("${{{k}}}"), v);
     }
     out
+}
+
+/// 这个版本要求的 Java 大版本；版本文件没写时按版本号推断。
+pub(crate) fn required_java(resolved: &Resolved) -> u32 {
+    resolved
+        .java_major
+        .unwrap_or_else(|| guess_java(&resolved.id))
+}
+
+fn tuning_plan(
+    java: &java::JavaRuntime,
+    resolved: &Resolved,
+    game_dir: &std::path::Path,
+    opts: &LaunchOptions,
+) -> tuning::Plan {
+    let work = Workload::new(java, &resolved.main_class, game_dir);
+    let settings = tuning::Settings {
+        memory_mb: opts.memory_mb,
+        min_memory_mb: opts.min_memory_mb,
+        gc: opts.gc,
+        extra: opts.jvm_args.clone(),
+    };
+    tuning::plan(&Machine::detect(), &work, &settings)
 }
 
 fn guess_java(profile: &str) -> u32 {

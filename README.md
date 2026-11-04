@@ -127,6 +127,7 @@ nailong 的思路很直：
 - 令牌存在数据目录的 `account.json`（Unix 0600），不写日志；退出登录会删除。
 - 离线账户启动（单人 / 局域网），没登录时就是原来的离线模式。
 - 设置：侧边栏底部「设置」集中玩家名、内存、Java 状态、游戏/数据目录和日志；玩家名与内存写入 `ui.json`，下次打开还在。
+- JVM 自动调参：内存默认「自动」，按电脑内存、处理器、Java 版本和 Mod 数量算出堆大小，并配好 G1 参数；大整合包配强机器时自动换分代 ZGC。设置里能看到计算过程和完整参数，也能手动指定内存、回收器或追加 JVM 参数。算法和依据见 [19 · JVM 自动调参](docs/design/19-jvm-tuning.md)。
 - 版本：加载器依赖的原版自动隐藏；被依赖的版本不能误删；只负责启动、补全、打开目录和删除，内容与存档分别去左侧对应入口。
 - 存档：一级页面，顶部可直接切换版本；列出世界、显示大小和最近修改时间；备份是 **git 式快照**——按内容分块（CDC）只存改动过的块，第二次备份通常只增加几 MB；可恢复、删除、按份数自动清理。
 - 自动备份：开启后每次退出游戏都会给这个版本的世界留一份快照，另外可设每 15/30/60/120 分钟一次；每个世界保留 5/10/20/50 份，配置存数据目录的 `backups.json`。
@@ -216,6 +217,8 @@ deb 只装 GUI；自己构建会同时得到 CLI：
 ./target/release/nailong --root /path/to/.minecraft install modpack ~/Downloads/pack.mrpack
 ./target/release/nailong --root /path/to/.minecraft install modpack ~/Downloads/pack.zip
 ./target/release/nailong --root /path/to/.minecraft launch neoforge-21.1.209 --username Steve --memory 4096
+# 不写 --memory 就自动算；--dry-run 会打印调参过程
+./target/release/nailong --root /path/to/.minecraft launch neoforge-21.1.209 --gc zgc --jvm-arg=-XX:+AlwaysPreTouch --dry-run
 ```
 
 ## 从源码构建
