@@ -5,7 +5,7 @@
 
 use crate::error::Result;
 use crate::java::{self, JavaRuntime};
-use crate::manifest::{self, Context};
+use crate::manifest::{self, Context, Resolved};
 use crate::paths::Root;
 use std::collections::HashSet;
 use std::path::Path;
@@ -206,11 +206,14 @@ pub struct Workload {
     pub loader: Loader,
     /// `mods` 目录里启用的 jar 数量；原版为 0。
     pub mods: usize,
+    /// 版本文件 `default-user-jvm` 里 Mojang 给官方启动器的默认参数（26.1 起才有），
+    /// 已按当前系统筛过规则。
+    pub official: Vec<String>,
 }
 
 impl Workload {
-    pub fn new(java: &JavaRuntime, main_class: &str, game_dir: &Path) -> Self {
-        let loader = Loader::from_main_class(main_class);
+    pub fn new(java: &JavaRuntime, resolved: &Resolved, game_dir: &Path) -> Self {
+        let loader = Loader::from_main_class(&resolved.main_class);
         let mods = if loader == Loader::Vanilla {
             0
         } else {
@@ -222,8 +225,41 @@ impl Workload {
             graal: java.is_graal(),
             loader,
             mods,
+            official: crate::launch::expand_args(
+                &resolved.arguments.default_user_jvm,
+                &Context::current(),
+            ),
         }
     }
+
+    fn official_has(&self, flag: &str) -> bool {
+        self.official.iter().any(|arg| arg == flag)
+    }
+
+    /// 官方默认里的初始堆，例如 `-Xms2G` 得到 2048。
+    fn official_xms(&self) -> Option<u32> {
+        self.official
+            .iter()
+            .find_map(|arg| arg.strip_prefix("-Xms"))
+            .and_then(parse_size_mb)
+    }
+}
+
+/// `2G`、`512m`、`1024` 这类 JVM 内存写法换算成 MB。
+fn parse_size_mb(text: &str) -> Option<u32> {
+    let lower = text.to_ascii_lowercase();
+    let (digits, scale) = match lower.chars().last()? {
+        'g' => (&lower[..lower.len() - 1], 1024),
+        'm' => (&lower[..lower.len() - 1], 1),
+        'k' => {
+            return lower[..lower.len() - 1]
+                .parse::<u32>()
+                .ok()
+                .map(|k| k / 1024);
+        }
+        _ => return lower.parse::<u64>().ok().map(|b| (b / 1024 / 1024) as u32),
+    };
+    digits.parse::<u32>().ok().map(|n| n * scale)
 }
 
 /// 按启动时会选中的 Java 读出负载，界面用它预览参数。
@@ -235,7 +271,7 @@ pub fn workload(
 ) -> Result<Workload> {
     let resolved = manifest::resolve(root, profile, &Context::current())?;
     let java = java::select(crate::launch::required_java(&resolved), javas)?;
-    Ok(Workload::new(&java, &resolved.main_class, game_dir))
+    Ok(Workload::new(&java, &resolved, game_dir))
 }
 
 fn count_mods(dir: &Path) -> usize {
@@ -514,6 +550,17 @@ pub fn plan(machine: &Machine, work: &Workload, settings: &Settings) -> Plan {
             });
             Collector::G1
         }
+        GcChoice::Auto if !work.official.is_empty() => {
+            // 26.1 起 Mojang 在版本文件里写了官方启动器的默认回收器：
+            // 新系统用 ZGC，Windows 10 1803 以前用 G1。这是他们在大量机器上验证过的选择。
+            if work.official_has("-XX:+UseZGC") && zgc_ok {
+                steps.push("回收器 ZGC：这个版本的官方默认".into());
+                Collector::Zgc
+            } else {
+                steps.push("回收器 G1：这个版本在本系统上的官方默认".into());
+                Collector::G1
+            }
+        }
         GcChoice::Auto => {
             let strong = work.java_major >= ZGC_MIN_JAVA
                 && zgc_ok
@@ -586,6 +633,13 @@ pub fn plan(machine: &Machine, work: &Workload, settings: &Settings) -> Plan {
 
     let min_heap = match settings.min_memory_mb {
         Some(min) => min.clamp(MIN_HEAP_MB.min(heap), heap),
+        // 官方默认用 AlwaysPreTouch 在启动时把初始堆写一遍，初始堆太大会拖慢启动，
+        // 所以沿用官方的初始堆。
+        None if work.official_has("-XX:+AlwaysPreTouch") => {
+            let xms = work.official_xms().unwrap_or(2048).min(heap);
+            steps.push(format!("初始堆 {}：沿用官方默认，启动时预先占好", gb(xms)));
+            xms
+        }
         None => {
             // 初始堆在启动时就要占住；ZGC 还会立刻向系统要实打实的内存，
             // 不够就直接启动失败。所以看的是此刻空闲的内存，而不是总内存。
@@ -654,6 +708,23 @@ pub fn plan(machine: &Machine, work: &Workload, settings: &Settings) -> Plan {
             }
         }
     }
+    // 官方默认里与回收器无关的参数（紧凑对象头、预先占用、字符串去重）照用；
+    // 堆大小和回收器由上面算出来。
+    for arg in &work.official {
+        let name = flag_name(arg);
+        let skip = arg.starts_with("-Xm")
+            || selects_gc(arg)
+            || name.is_some_and(|name| {
+                name.starts_with("G1")
+                    || name.starts_with('Z')
+                    || name == "MaxGCPauseMillis"
+                    || name.starts_with("Unlock")
+                    || flags.iter().any(|(flag, _)| flag_name(flag) == Some(name))
+            });
+        if !skip {
+            flags.push((arg.clone(), Kind::Other));
+        }
+    }
     flags.push(("-XX:+PerfDisableSharedMem".into(), Kind::Other));
     if !verified {
         steps.push(format!(
@@ -709,7 +780,22 @@ mod tests {
             graal: false,
             loader,
             mods,
+            official: Vec::new(),
         }
+    }
+
+    /// 26.3 版本文件在 Linux 上展开后的 `default-user-jvm`。
+    fn official_26() -> Vec<String> {
+        [
+            "-Xms2G",
+            "-Xmx4G",
+            "-XX:+UseCompactObjectHeaders",
+            "-XX:+AlwaysPreTouch",
+            "-XX:+UseStringDeduplication",
+            "-XX:+UseZGC",
+        ]
+        .map(String::from)
+        .to_vec()
     }
 
     fn auto(machine: &Machine, work: &Workload) -> Plan {
@@ -772,6 +858,51 @@ mod tests {
         let plan = auto(&machine(4, 4), &work(21, Loader::Vanilla, 0));
         assert_eq!(plan.heap_mb, 1536);
         assert!(!plan.warnings.is_empty());
+    }
+
+    #[test]
+    fn follows_the_official_defaults_when_the_version_has_them() {
+        let mut w = work(25, Loader::Vanilla, 0);
+        w.official = official_26();
+        let plan = auto(&machine(16, 8), &w);
+        assert_eq!(plan.collector, Collector::Zgc);
+        // 原版需要 3 GB，ZGC 多给 1/4，正好是官方的 4 GB。
+        assert_eq!(plan.heap_mb, 4096);
+        assert_eq!(plan.min_heap_mb, 2048);
+        let args = plan.args();
+        for flag in [
+            "-XX:+UseZGC",
+            "-XX:+UseCompactObjectHeaders",
+            "-XX:+AlwaysPreTouch",
+            "-XX:+UseStringDeduplication",
+        ] {
+            assert_eq!(args.iter().filter(|a| *a == flag).count(), 1, "{flag}");
+        }
+        assert!(!args.iter().any(|a| a.contains("ZGenerational")));
+
+        // 手动选 G1 时用我们的 G1 参数，官方的通用参数照留，紧凑对象头不重复。
+        let g1 = plan_for_gc(&machine(16, 8), &w, GcChoice::G1).args();
+        assert!(g1.contains(&"-XX:+UseG1GC".to_string()));
+        assert!(!g1.contains(&"-XX:+UseZGC".to_string()));
+        assert_eq!(
+            g1.iter()
+                .filter(|a| a.contains("CompactObjectHeaders"))
+                .count(),
+            1
+        );
+
+        // 旧版 Windows 上官方默认是 G1。
+        w.official.retain(|a| a != "-XX:+UseZGC");
+        w.official.push("-XX:+UseG1GC".into());
+        assert_eq!(auto(&machine(16, 8), &w).collector, Collector::G1);
+    }
+
+    #[test]
+    fn parses_jvm_sizes() {
+        assert_eq!(parse_size_mb("2G"), Some(2048));
+        assert_eq!(parse_size_mb("512m"), Some(512));
+        assert_eq!(parse_size_mb("1048576k"), Some(1024));
+        assert_eq!(parse_size_mb("x"), None);
     }
 
     #[test]
@@ -959,6 +1090,7 @@ mod tests {
                     graal: java.is_graal(),
                     loader: Loader::Forge,
                     mods: 120,
+                    official: Vec::new(),
                 };
                 let pc = Machine {
                     available_mb: Machine::detect().available_mb,

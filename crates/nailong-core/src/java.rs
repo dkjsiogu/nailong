@@ -204,14 +204,16 @@ pub fn major_from_version(v: &str) -> u32 {
     }
 }
 
+/// 选最接近要求的 Java：版本不够的不选，够的里面选最低的那个大版本。
+/// 老版本（尤其是 Forge 1.12 的 LaunchWrapper）在太新的 Java 上起不来，所以不能直接拿最新的。
+/// 同一个大版本里优先普通的 64 位 OpenJDK：GraalVM 换 ZGC 时会关掉自己的编译器。
 pub fn select(required: u32, candidates: &[JavaRuntime]) -> Result<JavaRuntime> {
-    if let Some(j) = candidates.iter().find(|j| j.major == required) {
-        return Ok(j.clone());
-    }
-    if let Some(j) = candidates.iter().find(|j| j.major > required) {
-        return Ok(j.clone());
-    }
-    Err(Error::JavaNotFound(required))
+    candidates
+        .iter()
+        .filter(|j| j.major >= required)
+        .min_by_key(|j| (j.major, !j.is_64bit(), j.is_graal()))
+        .cloned()
+        .ok_or(Error::JavaNotFound(required))
 }
 
 fn which_java() -> Option<PathBuf> {
@@ -227,4 +229,41 @@ fn which_java() -> Option<PathBuf> {
 
 fn java_exe() -> &'static str {
     if cfg!(windows) { "java.exe" } else { "java" }
+}
+
+#[cfg(test)]
+mod select_tests {
+    use super::*;
+
+    fn rt(major: u32, path: &str, arch: &str) -> JavaRuntime {
+        JavaRuntime {
+            path: PathBuf::from(path),
+            major,
+            version: major.to_string(),
+            vendor: None,
+            arch: Some(arch.into()),
+        }
+    }
+
+    #[test]
+    fn picks_the_closest_newer_java_and_skips_graal() {
+        let all = [
+            rt(25, "/usr/lib/jvm/java-25/bin/java", "amd64"),
+            rt(21, "/usr/lib/jvm/graalvm-21/bin/java", "amd64"),
+            rt(21, "/usr/lib/jvm/java-21/bin/java", "amd64"),
+            rt(17, "/usr/lib/jvm/java-17/bin/java", "x86"),
+            rt(17, "/usr/lib/jvm/java-17-64/bin/java", "amd64"),
+        ];
+        assert_eq!(
+            select(21, &all).unwrap().path,
+            PathBuf::from("/usr/lib/jvm/java-21/bin/java")
+        );
+        // 要 Java 8 而本机没有时，用最接近的 17，而不是最新的 25。
+        assert_eq!(
+            select(8, &all).unwrap().path,
+            PathBuf::from("/usr/lib/jvm/java-17-64/bin/java")
+        );
+        assert_eq!(select(22, &all).unwrap().major, 25);
+        assert!(select(26, &all).is_err());
+    }
 }

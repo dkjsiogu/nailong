@@ -409,7 +409,7 @@ fn remove_classpath_args(args: &mut Vec<String>) {
     *args = out;
 }
 
-fn expand_args(args: &[Argument], ctx: &Context) -> Vec<String> {
+pub(crate) fn expand_args(args: &[Argument], ctx: &Context) -> Vec<String> {
     let mut out = Vec::new();
     for arg in args {
         match arg {
@@ -448,7 +448,7 @@ fn tuning_plan(
     game_dir: &std::path::Path,
     opts: &LaunchOptions,
 ) -> tuning::Plan {
-    let work = Workload::new(java, &resolved.main_class, game_dir);
+    let work = Workload::new(java, resolved, game_dir);
     let settings = tuning::Settings {
         memory_mb: opts.memory_mb,
         min_memory_mb: opts.min_memory_mb,
@@ -491,6 +491,10 @@ pub(crate) fn offline_uuid(name: &str) -> String {
     u.simple().to_string()
 }
 
+/// 解压 native 库，返回 `${natives_directory}`。
+///
+/// 26.x 把它拆成 `java`、`lwjgl`、`jna`、`netty` 几个子目录，只有 `java` 放解压出来的库；
+/// 变量本身仍指向上一级，否则 `-Djava.library.path` 会变成 `.../java/java`。
 fn prepare_natives(root: &Root, resolved: &Resolved, ctx: &Context) -> Result<PathBuf> {
     let root_dir = root.natives(&resolved.id);
     let mut target = root_dir.clone();
@@ -506,14 +510,14 @@ fn prepare_natives(root: &Root, resolved: &Resolved, ctx: &Context) -> Result<Pa
             break;
         }
     }
-    if target.exists() {
-        let _ = std::fs::remove_dir_all(&target);
+    if root_dir.exists() {
+        let _ = std::fs::remove_dir_all(&root_dir);
     }
     std::fs::create_dir_all(&target).map_err(|e| io(&target, e))?;
     let jars = manifest::native_jars(root, resolved, ctx);
     if jars.is_empty() {
         println!("→ 没有需要解压的 native 库");
-        return Ok(target);
+        return Ok(root_dir);
     }
     println!("→ 解压 native 库（{} 个 jar）…", jars.len());
     for jar in jars {
@@ -553,7 +557,7 @@ fn prepare_natives(root: &Root, resolved: &Resolved, ctx: &Context) -> Result<Pa
             }
         }
     }
-    Ok(target)
+    Ok(root_dir)
 }
 
 #[cfg(test)]

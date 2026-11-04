@@ -136,6 +136,8 @@ pub struct Arguments {
 pub enum Argument {
     Plain(String),
     Ruled {
+        /// 26.1 起 `default-user-jvm` 里有不带 rules 的条目，表示无条件。
+        #[serde(default)]
         rules: Vec<Rule>,
         value: StringOrList,
     },
@@ -906,6 +908,28 @@ mod tests {
 
         let no_rules: Vec<Rule> = Vec::new();
         assert!(allowed(&no_rules, &linux()));
+    }
+
+    #[test]
+    fn parses_default_user_jvm_without_rules() {
+        // 摘自 26.3 的版本 JSON：第一条没有 rules，0.34 以前会整个解析失败。
+        let args: Arguments = serde_json::from_value(serde_json::json!({
+            "game": [],
+            "jvm": [],
+            "default-user-jvm": [
+                {"value": ["-Xms2G", "-Xmx4G", "-XX:+UseCompactObjectHeaders"]},
+                {
+                    "rules": [{"action": "allow", "os": {"name": "linux"}}],
+                    "value": ["-XX:+UseZGC"]
+                }
+            ]
+        }))
+        .unwrap();
+        assert_eq!(args.default_user_jvm.len(), 2);
+        assert!(matches!(
+            &args.default_user_jvm[0],
+            Argument::Ruled { rules, .. } if rules.is_empty()
+        ));
     }
 
     #[test]

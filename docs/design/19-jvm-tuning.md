@@ -82,6 +82,18 @@ Java 自身 = 768 MB + 每个 Mod 2 MB，最多 2 GB（类元数据、编译代�
 | `ThreadPriorityPolicy` 等线程优先级 | Linux 需要 root |
 | 各种 JIT 节点限制、代码缓存调整 | 收益很小，而且版本间变动频繁，出错就启动不了 |
 
+### 官方默认（26.1 起）
+
+从 26.1 开始，Mojang 在版本文件的 `arguments.default-user-jvm` 里写了官方启动器的默认参数。26.1–26.3 都是：
+
+```
+-Xms2G -Xmx4G -XX:+UseCompactObjectHeaders -XX:+AlwaysPreTouch -XX:+UseStringDeduplication
+-XX:+UseZGC                      macOS、Linux、Windows 10 1803 及以后
+-XX:+UseG1GC 及官方 G1 参数        Windows 10 1803 以前
+```
+
+版本文件带了这一段时，「自动」按它走：回收器用官方选的，紧凑对象头、预先占用、字符串去重照用；最大堆仍按第 2 节计算（原版正好是官方的 4 GB，整合包按 Mod 数量放大）；初始堆沿用官方的 2 GB，因为 `AlwaysPreTouch` 会在启动时把初始堆写一遍。手动选 G1 时换成本节上面的 G1 参数，官方的通用参数保留。1.21.11 及以前的版本文件没有这一段，仍按上面的规则。
+
 ## 4. 用户参数
 
 设置里的「额外 JVM 参数」按空白拆分，支持引号，排在所有参数最后。和自动参数冲突时：
@@ -124,8 +136,13 @@ Java 自身 = 768 MB + 每个 Mod 2 MB，最多 2 GB（类元数据、编译代�
   旧参数的堆整局停在初始的 1 GB，新生代被压得很小，回收更频繁；新参数初始堆等于最大堆，回收次数减半，总停顿少约三分之一。加载阶段新参数略多，因为新生代更大、单次要复制的更多，这一段不影响游戏中的帧。样本只有一次，软件渲染下帧率本身很低，只能说明方向，不能当作精确的提升幅度。
 - Java 8 本机没有安装，参数与官方启动器在 Java 8 上用了多年的那组相同，未实测。
 
-## 7. 依据
+## 7. Java 选择
 
+按版本要求的大版本选「够用里最低的」：要 Java 8 而本机只有 17 和 25 时选 17，不选最新的 25（老 Forge 在太新的 Java 上起不来）。同一个大版本里优先普通的 64 位 OpenJDK，其次才是 GraalVM。
+
+## 8. 依据
+
+- Mojang 版本清单 `piston-meta.mojang.com` 中 26.1–26.3 的 `default-user-jvm`
 - [JEP 474：ZGC 默认分代（JDK 23）](https://openjdk.org/jeps/474)，[JEP 490：移除不分代 ZGC（JDK 24）](https://openjdk.org/jeps/490)
 - [JEP 519：紧凑对象头转正（JDK 25）](https://openjdk.org/jeps/519)
 - [JDK-8359925：废弃 ParallelRefProcEnabled](https://bugs.openjdk.org/browse/JDK-8359925)
