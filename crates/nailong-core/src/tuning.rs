@@ -300,9 +300,24 @@ pub struct Settings {
     pub gc: GcChoice,
     /// 用户自己写的 JVM 参数。排在最后，和自动参数冲突时以它为准。
     pub extra: Vec<String>,
+    /// 这个版本的实测结果；有它时，自动内存和自动回收器按实测走。
+    pub measured: Option<Measured>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// 实测调参（`bench.rs`）的结论。
+#[derive(Debug, Clone)]
+pub struct Measured {
+    /// 测试中回收后仍然存活的数据，取最大值。
+    pub live_mb: u32,
+    pub g1_heap_mb: u32,
+    pub zgc_heap_mb: Option<u32>,
+    pub collector: Collector,
+    /// 例如「3 天前」。
+    pub age: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Collector {
     G1,
     Zgc,
@@ -334,6 +349,12 @@ pub struct Plan {
     pub min_heap_mb: u32,
     pub collector: Collector,
     pub auto_memory: bool,
+    /// 按公式算出的需要量，MB。
+    pub need_mb: u32,
+    /// 这台电脑能给的最大堆，MB；读不到内存时为 None。
+    pub cap_mb: Option<u32>,
+    /// 版本文件里官方默认的回收器（26.1 起才有）。
+    pub official_collector: Option<Collector>,
     /// 例如「按 16 GB 内存、16 线程、Java 21、87 个 Mod 计算」。
     pub basis: String,
     /// 计算过程，一行一条，给设置页和 `--dry-run` 看。
@@ -524,65 +545,76 @@ pub fn plan(machine: &Machine, work: &Workload, settings: &Settings) -> Plan {
     // ZGC 回收时不暂停，但要多留空间给并发回收，所以多给 1/4。
     let zgc_heap = ceil_to(need + need / 4, 512);
     let zgc_ok = work.java_major >= 17 && work.java_64bit;
-    let collector = match settings.gc {
-        GcChoice::G1 => {
-            steps.push("回收器 G1：手动选择".into());
-            Collector::G1
-        }
-        GcChoice::Zgc if zgc_ok => {
-            if work.java_major < ZGC_MIN_JAVA {
-                warnings.push(format!(
-                    "Java {} 只有不分代的 ZGC，帧率可能比 G1 低",
-                    work.java_major
-                ));
-            }
-            if work.graal {
-                warnings.push("GraalVM 用 ZGC 时会关掉 Graal 编译器".into());
-            }
-            steps.push("回收器 ZGC：手动选择".into());
-            Collector::Zgc
-        }
-        GcChoice::Zgc => {
-            warnings.push(if work.java_64bit {
-                format!("Java {} 不支持 ZGC，改用 G1", work.java_major)
-            } else {
-                "32 位 Java 不支持 ZGC，改用 G1".into()
-            });
-            Collector::G1
-        }
-        GcChoice::Auto if !work.official.is_empty() => {
-            // 26.1 起 Mojang 在版本文件里写了官方启动器的默认回收器：
-            // 新系统用 ZGC，Windows 10 1803 以前用 G1。这是他们在大量机器上验证过的选择。
-            if work.official_has("-XX:+UseZGC") && zgc_ok {
-                steps.push("回收器 ZGC：这个版本的官方默认".into());
+    let collector = match (settings.gc, &settings.measured) {
+        (GcChoice::Auto, Some(measured)) => {
+            if measured.collector == Collector::Zgc && zgc_ok {
+                steps.push(format!("回收器 ZGC：{}实测停顿更少", measured.age));
                 Collector::Zgc
             } else {
-                steps.push("回收器 G1：这个版本在本系统上的官方默认".into());
+                steps.push(format!("回收器 G1：{}实测更合适", measured.age));
                 Collector::G1
             }
         }
-        GcChoice::Auto => {
-            let strong = work.java_major >= ZGC_MIN_JAVA
-                && zgc_ok
-                && !work.graal
-                && machine.threads >= ZGC_MIN_THREADS
-                && machine
-                    .total_mb
-                    .is_some_and(|total| total >= ZGC_MIN_TOTAL_MB)
-                && need >= ZGC_MIN_HEAP_MB
-                && cap.is_some_and(|cap| cap >= zgc_heap);
-            if strong {
-                steps.push("回收器 ZGC：堆很大，核和内存也够，用分代 ZGC 消除回收停顿".into());
+        _ => match settings.gc {
+            GcChoice::G1 => {
+                steps.push("回收器 G1：手动选择".into());
+                Collector::G1
+            }
+            GcChoice::Zgc if zgc_ok => {
+                if work.java_major < ZGC_MIN_JAVA {
+                    warnings.push(format!(
+                        "Java {} 只有不分代的 ZGC，帧率可能比 G1 低",
+                        work.java_major
+                    ));
+                }
+                if work.graal {
+                    warnings.push("GraalVM 用 ZGC 时会关掉 Graal 编译器".into());
+                }
+                steps.push("回收器 ZGC：手动选择".into());
                 Collector::Zgc
-            } else {
-                steps.push(format!(
+            }
+            GcChoice::Zgc => {
+                warnings.push(if work.java_64bit {
+                    format!("Java {} 不支持 ZGC，改用 G1", work.java_major)
+                } else {
+                    "32 位 Java 不支持 ZGC，改用 G1".into()
+                });
+                Collector::G1
+            }
+            GcChoice::Auto if !work.official.is_empty() => {
+                // 26.1 起 Mojang 在版本文件里写了官方启动器的默认回收器：
+                // 新系统用 ZGC，Windows 10 1803 以前用 G1。这是他们在大量机器上验证过的选择。
+                if work.official_has("-XX:+UseZGC") && zgc_ok {
+                    steps.push("回收器 ZGC：这个版本的官方默认".into());
+                    Collector::Zgc
+                } else {
+                    steps.push("回收器 G1：这个版本在本系统上的官方默认".into());
+                    Collector::G1
+                }
+            }
+            GcChoice::Auto => {
+                let strong = work.java_major >= ZGC_MIN_JAVA
+                    && zgc_ok
+                    && !work.graal
+                    && machine.threads >= ZGC_MIN_THREADS
+                    && machine
+                        .total_mb
+                        .is_some_and(|total| total >= ZGC_MIN_TOTAL_MB)
+                    && need >= ZGC_MIN_HEAP_MB
+                    && cap.is_some_and(|cap| cap >= zgc_heap);
+                if strong {
+                    steps.push("回收器 ZGC：堆很大，核和内存也够，用分代 ZGC 消除回收停顿".into());
+                    Collector::Zgc
+                } else {
+                    steps.push(format!(
                     "回收器 G1：ZGC 要 Java {ZGC_MIN_JAVA}+、{ZGC_MIN_THREADS} 线程、{} 内存、堆 {} 以上才划算",
                     gb(ZGC_MIN_TOTAL_MB),
                     gb(ZGC_MIN_HEAP_MB)
                 ));
-                Collector::G1
+                    Collector::G1
+                }
             }
-        }
+        },
     };
 
     let auto_memory = settings.memory_mb.is_none();
@@ -608,10 +640,30 @@ pub fn plan(machine: &Machine, work: &Workload, settings: &Settings) -> Plan {
             heap
         }
         None => {
-            let want = if collector == Collector::Zgc {
-                zgc_heap
-            } else {
-                need
+            let want = match (&settings.measured, collector) {
+                (Some(measured), Collector::G1) => {
+                    steps.push(format!(
+                        "{}实测存活 {}，G1 要给新生代和预留留出 40%：{}",
+                        measured.age,
+                        gb(measured.live_mb),
+                        gb(measured.g1_heap_mb)
+                    ));
+                    measured.g1_heap_mb
+                }
+                (Some(measured), Collector::Zgc) => {
+                    let heap = measured
+                        .zgc_heap_mb
+                        .unwrap_or_else(|| ceil_to(measured.live_mb * 2, 512));
+                    steps.push(format!(
+                        "{}实测存活 {}，ZGC 并发回收要留一半：{}",
+                        measured.age,
+                        gb(measured.live_mb),
+                        gb(heap)
+                    ));
+                    heap
+                }
+                (None, Collector::Zgc) => zgc_heap,
+                (None, Collector::G1) => need,
             };
             let limit = cap.unwrap_or(UNKNOWN_MACHINE_MB);
             let heap = want.min(limit).max(MIN_HEAP_MB);
@@ -738,7 +790,25 @@ pub fn plan(machine: &Machine, work: &Workload, settings: &Settings) -> Plan {
         min_heap_mb: min_heap,
         collector,
         auto_memory,
-        basis: basis(machine, work),
+        need_mb: need,
+        cap_mb: cap,
+        official_collector: if work.official_has("-XX:+UseZGC") {
+            Some(Collector::Zgc)
+        } else if work.official_has("-XX:+UseG1GC") {
+            Some(Collector::G1)
+        } else {
+            None
+        },
+        basis: match &settings.measured {
+            Some(measured) if auto_memory || settings.gc == GcChoice::Auto => {
+                format!(
+                    "按{}的实测结果，存活数据 {}",
+                    measured.age,
+                    gb(measured.live_mb)
+                )
+            }
+            _ => basis(machine, work),
+        },
         steps,
         warnings,
         flags,

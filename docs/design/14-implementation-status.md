@@ -1,7 +1,7 @@
-# 14 · 原型实现状态（0.1 → 0.34.1）
+# 14 · 原型实现状态（0.1 → 0.35.0）
 
 > 日期：2026-11-04
-> 对应发布：GitHub Release `v0.34.1` 的 `nailong.exe`、`nailong_0.34.1_amd64.deb`
+> 对应发布：GitHub Release `v0.35.0` 的 `nailong.exe`、`nailong_0.35.0_amd64.deb`
 > 目的：把「设计稿」和「已经跑起来的代码」分开记账，避免把计划当成已完成。
 
 ## 1. 一句话结论
@@ -47,6 +47,8 @@
 0.34.0 加入 JVM 自动调参（`tuning.rs`，规范见 `docs/design/19-jvm-tuning.md`）：内存默认自动，按物理内存、逻辑处理器、Java 版本、加载器和 Mod 数量算出堆大小，配官方启动器那套 G1 参数并按堆放大 Region；Java 25 加紧凑对象头；大整合包配强机器时自动换分代 ZGC。设置里显示结果、依据和完整参数，可手动指定内存、回收器或追加 JVM 参数；CLI 增加 `--gc`、`--jvm-arg`，`--dry-run` 打印计算过程。生成的参数在本机 OpenJDK 11/17/21/25 和 GraalVM 21 上逐一启动验证。顺带修复 CLI 传相对 `--game-dir` 时游戏目录被解析两次的问题。
 
 0.34.1 修复 26.x 无法安装和启动：版本文件 `default-user-jvm` 的首条没有 `rules`，解析失败；`${natives_directory}` 误指向 `java` 子目录，`java.library.path` 变成 `.../java/java`。实测 26.1、26.3 原版可安装并进入世界。调参在版本文件带官方默认时跟随官方（26.x 为 ZGC + 紧凑对象头 + 预先占用 + 字符串去重，初始堆 2 GB）。Java 选择改为够用里最低的大版本，同版本优先 64 位 OpenJDK。
+
+0.35.0 加入实测调优（`bench.rs`，规范见 `docs/design/20-tuning-benchmark.md`）：复制版本的 Mod、配置和资源包成测试实例，用内置的 1.20.1 / 26.1 世界模板（26.x 按目标 `world_version` 改写 NBT 数据版本，避免升级备份提示）和数据包，通过 `--quickPlaySingleplayer` 进入世界后以旁观模式每 tick 前进一格；从标准输出的标记计时，从 GC 日志和进程 CPU 时间算出存活数据、停顿和 CPU。三轮：低 IHOP 的 G1 测量、正式 G1 验证（整堆回收或晋升失败时加 1/4 重测）、ZGC 对比。结果按版本 + 游戏目录存进 `bench.json`，指纹含 Mod 列表、Java 大版本和内存，之后「自动」优先用实测值。`launch` 拆成 `prepare` 和启动两步供测试复用；CLI 的 `launch` 不写 `--game-dir` 时也按版本隔离选目录。Xvfb + llvmpipe 实测：NeoForge 1.21.1 存活约 0.5 GB → G1 2 GB（CLI 和界面各跑一次，结果一致）；26.3 原版 2 GB 出现 3 次晋升失败，加到 2.5 GB 后 G1 仍每分钟 6 次超过一帧，ZGC 3.5 GB 无停顿、CPU 不多 → ZGC；1.20.1 原版存活 1.0 GB → G1 2 GB（Java 17，不测 ZGC）。没有测帧率：原版无法把帧率写进日志。
 
 0.32.0 把 0.31 的极光玻璃整体推倒，改成 Minecraft 原生的「深岩」像素语言：内置 Fusion Pixel 12px 中文字体（SIL OFL 1.1，7 MB），零圆角、2px 硬边、方块浮雕按钮、像素图标与 48×24 深板岩砖背景；启动台主视觉换成 Rust 逐块拼出的等距体素岛（草方块、树、水池、矿脉、小人、四层石/土裙边、悬浮金块），按尺寸缓存，空闲 CPU 仍为 0.0%。所有页面与弹窗统一方块组件；1120 宽 4 列内容网格，900×620 隐藏最近世界槽和状态条、设置正文滚动。新增 `docs/design/17-ui-deepslate.md`，24 张新截图和 16 秒动效替换 0.31 图。
 
@@ -137,7 +139,7 @@
 | 大文件分段下载 | `core::http` | 完成 | client jar 4 段并行、段续传、源回退 |
 | 重复安装快速路径 | `core::install::forge` / `neoforge` | 完成 | health 通过则 0 下载、0 processor |
 | Windows 交叉编译 | `x86_64-pc-windows-gnu` | 通过 | 无 MinGW DLL 依赖，仅系统 DLL |
-| 发布包 | GitHub Release `v0.34.1` | 完成（CI 构建） | 单 exe 约 8 MB / deb 约 3.4 MB |
+| 发布包 | GitHub Release `v0.35.0` | 完成（CI 构建） | 单 exe 约 8 MB / deb 约 3.4 MB |
 
 ### 2.1 实测记录
 

@@ -4,7 +4,7 @@ use nailong_core::install::{fabric, forge, modpack, neoforge, vanilla};
 use nailong_core::launch::{self, LaunchOptions};
 use nailong_core::manifest::{self, Context as ResolveContext};
 use nailong_core::progress::{Progress, Sink, from_fn};
-use nailong_core::{Root, cancel, java, tuning};
+use nailong_core::{Root, bench, cancel, java, tuning};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -39,6 +39,13 @@ enum Commands {
     Install {
         #[command(subcommand)]
         target: InstallTarget,
+    },
+    /// 实测调参：用测试世界自动跑几轮游戏，量出这个版本需要多少内存、用哪个回收器
+    Bench {
+        profile: String,
+        /// 游戏目录；不填时按版本是否隔离决定
+        #[arg(long)]
+        game_dir: Option<PathBuf>,
     },
     /// 启动
     Launch {
@@ -87,6 +94,15 @@ enum InstallTarget {
     Modpack { path: PathBuf },
 }
 
+/// 和界面一样：版本做了隔离就用版本目录，否则用数据目录。
+fn default_game_dir(root: &Root, profile: &str) -> PathBuf {
+    if root.isolated_marker(profile).exists() {
+        root.version_dir(profile)
+    } else {
+        root.dir().to_path_buf()
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let root = Root::new(cli.root.clone().unwrap_or_else(Root::default_root));
@@ -119,6 +135,52 @@ fn main() -> anyhow::Result<()> {
             for id in ids {
                 println!("  ● {id}");
             }
+        }
+        Commands::Bench { profile, game_dir } => {
+            let game_dir = game_dir.unwrap_or_else(|| default_game_dir(&root, &profile));
+            let last = Arc::new(Mutex::new(String::new()));
+            let sink = from_fn(move |p: Progress| {
+                let line = format!("  {} {:>3}%", p.stage, (p.fraction() * 100.0) as u32);
+                let mut last = last.lock().unwrap();
+                if *last != line {
+                    println!("{line}");
+                    *last = line;
+                }
+            });
+            let record = bench::run(&root, &profile, &game_dir, &sink)?;
+            println!();
+            println!(
+                "{:<22} {:>8} {:>8} {:>7} {:>6} {:>8} {:>8} {:>6}",
+                "轮次", "堆", "加载", "tick/s", "CPU核", "停顿合计", "最长停顿", "超一帧"
+            );
+            for run in &record.runs {
+                println!(
+                    "{:<22} {:>8} {:>7.0}s {:>7.1} {:>6} {:>7.0}ms {:>7.2}ms {:>6}",
+                    run.label,
+                    tuning::gb(run.heap_mb),
+                    run.load_secs,
+                    run.tps,
+                    run.cpu_cores
+                        .map(|c| format!("{c:.1}"))
+                        .unwrap_or_else(|| "-".into()),
+                    run.gc.total_ms,
+                    run.gc.max_ms,
+                    run.gc.over_frame
+                );
+            }
+            println!();
+            for note in &record.notes {
+                println!("  {note}");
+            }
+            let heap = match record.collector {
+                tuning::Collector::Zgc => record.zgc_heap_mb.unwrap_or(record.g1_heap_mb),
+                tuning::Collector::G1 => record.g1_heap_mb,
+            };
+            println!(
+                "\n✓ 实测结论：{} · {}，之后「自动」按这个启动",
+                record.collector.label(),
+                tuning::gb(heap)
+            );
         }
         Commands::Java => {
             let all = java::find_all();
@@ -194,7 +256,7 @@ fn main() -> anyhow::Result<()> {
                 width,
                 height,
                 demo,
-                game_dir,
+                game_dir: Some(game_dir.unwrap_or_else(|| default_game_dir(&root, &profile))),
                 dry_run,
                 print_plan,
                 ..Default::default()

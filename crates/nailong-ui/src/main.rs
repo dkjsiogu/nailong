@@ -2,6 +2,7 @@
 
 use eframe::egui;
 use nailong_core::auth;
+use nailong_core::bench;
 use nailong_core::install::{catalog, fabric, forge, health, modpack, neoforge, vanilla};
 use nailong_core::installed;
 use nailong_core::launch::{self, LaunchOptions};
@@ -132,6 +133,8 @@ enum Task {
     Install,
     Mods,
     Launch,
+    /// 实测调参：会打开游戏窗口自动跑测试世界。
+    Bench,
 }
 
 /// 侧边栏的四个一级入口。玩家只需要记住这四个地方。
@@ -206,6 +209,8 @@ enum Msg {
     LoginDone(Result<auth::Account, String>),
     LaunchDone(i32),
     LaunchFailed(String),
+    BenchDone(Result<bench::Record, String>),
+    BenchCancelled,
 }
 
 /// 浏览页的一排内容：热门 / 最新。
@@ -277,6 +282,9 @@ fn project_key(project: &mods::Project) -> String {
     format!("{:?}:{}", project.source, project.id)
 }
 
+/// 一个版本的负载，以及它的实测记录和记录是否仍然有效。
+type TuningEntry = (tuning::Workload, Option<(bench::Record, bool)>);
+
 struct App {
     root: Root,
     rows: Vec<Row>,
@@ -290,8 +298,11 @@ struct App {
     show_tuning: bool,
     javas: Vec<java::JavaRuntime>,
     machine: tuning::Machine,
-    /// 每个版本的负载（Java、加载器、Mod 数），进页面和内容变化时重算。
-    tuning_cache: HashMap<String, Option<tuning::Workload>>,
+    /// 每个版本的负载（Java、加载器、Mod 数）和实测记录（以及它是否仍然有效），
+    /// 进页面和内容变化时重算。
+    tuning_cache: HashMap<String, Option<TuningEntry>>,
+    /// 实测调参的确认弹窗。
+    bench_confirm: bool,
     reduce_motion: bool,
     theme_pref: t::Preference,
     java_ok: bool,
@@ -488,6 +499,7 @@ impl App {
             javas,
             machine: tuning::Machine::detect(),
             tuning_cache: HashMap::new(),
+            bench_confirm: false,
             reduce_motion: prefs.reduce_motion,
             theme_pref: prefs.theme,
             java_ok,
@@ -784,13 +796,17 @@ impl App {
 
     /// 安装和下载会占住进度页；游戏运行不会，玩的时候照样能看内容和存档。
     fn page_locked(&self) -> bool {
-        matches!(self.busy, Some(Task::Install) | Some(Task::Mods)) || self.login_busy
+        matches!(
+            self.busy,
+            Some(Task::Install) | Some(Task::Mods) | Some(Task::Bench)
+        ) || self.login_busy
     }
 
     /// 现在不能改这个版本的原因；`None` 表示可以改。
     fn write_block(&self, row_id: Option<&str>) -> Option<&'static str> {
         match self.busy {
             Some(Task::Install) | Some(Task::Mods) => Some("正在安装，完成后再试"),
+            Some(Task::Bench) => Some("正在实测调参，完成后再试"),
             Some(Task::Launch) if row_id.is_some() && self.running_row.as_deref() == row_id => {
                 Some("游戏正在使用这个版本，退出游戏后再修改")
             }
@@ -858,12 +874,16 @@ impl App {
     fn busy_reason(&self) -> &'static str {
         match self.busy {
             Some(Task::Launch) => "游戏运行中，退出游戏后再安装",
+            Some(Task::Bench) => "正在实测调参，完成后再试",
             _ => "正在安装，完成后再试",
         }
     }
 
     fn page_id(&self) -> u8 {
-        if matches!(self.busy, Some(Task::Install) | Some(Task::Mods)) {
+        if matches!(
+            self.busy,
+            Some(Task::Install) | Some(Task::Mods) | Some(Task::Bench)
+        ) {
             return 10;
         }
         if self.show_mods {
@@ -945,6 +965,7 @@ impl App {
             min_memory_mb: None,
             gc: self.gc,
             extra: tuning::split_args(&self.jvm_args),
+            measured: None,
         }
     }
 
@@ -955,12 +976,24 @@ impl App {
                 .game_dir
                 .clone()
                 .unwrap_or_else(|| self.root.dir().to_path_buf());
-            let work = tuning::workload(&self.root, &row.profile, &game_dir, &self.javas).ok();
+            let entry = tuning::workload(&self.root, &row.profile, &game_dir, &self.javas)
+                .ok()
+                .map(|work| {
+                    let record = bench::load(&self.root, &row.profile, &game_dir, work.java_major);
+                    (work, record)
+                });
             self.machine = tuning::Machine::detect();
-            self.tuning_cache.insert(row.id.clone(), work);
+            self.tuning_cache.insert(row.id.clone(), entry);
         }
-        let work = self.tuning_cache.get(&row.id)?.as_ref()?;
-        Some(tuning::plan(&self.machine, work, &self.tuning_settings()))
+        let (work, record) = self.tuning_cache.get(&row.id)?.as_ref()?;
+        let settings = tuning::Settings {
+            measured: record
+                .as_ref()
+                .filter(|(_, fresh)| *fresh)
+                .map(|(record, _)| record.measured()),
+            ..self.tuning_settings()
+        };
+        Some(tuning::plan(&self.machine, work, &settings))
     }
 
     /// 例如「内存 5 GB（自动）」。
@@ -972,6 +1005,123 @@ impl App {
                 Some(mb) => format!("内存 {}", tuning::gb(mb)),
                 None => "内存自动".into(),
             },
+        }
+    }
+
+    fn start_bench(&mut self) {
+        if self.busy.is_some() {
+            return;
+        }
+        let Some(row) = self.selected_row() else {
+            return;
+        };
+        if row.health.missing > 0 {
+            self.error = Some("这个版本缺少文件，先补全再测试".into());
+            return;
+        }
+        self.error = None;
+        self.notice = None;
+        self.busy = Some(Task::Bench);
+        self.cancel_requested = false;
+        cancel::reset();
+        self.progress = Some(Progress::stage("准备测试实例"));
+        self.progress_label = row.label.clone();
+        self.log.push(format!("实测调参 {}", row.id));
+        let root = self.root.clone();
+        let game_dir = row
+            .game_dir
+            .clone()
+            .unwrap_or_else(|| self.root.dir().to_path_buf());
+        let (tx, rx) = mpsc::channel();
+        self.rx = Some(rx);
+        std::thread::spawn(move || {
+            let progress = tx.clone();
+            let sink = from_fn(move |p| {
+                let _ = progress.send(Msg::Progress(p));
+            });
+            let msg = match bench::run(&root, &row.profile, &game_dir, &sink) {
+                Ok(record) => Msg::BenchDone(Ok(record)),
+                Err(Error::Cancelled) => Msg::BenchCancelled,
+                Err(e) => Msg::BenchDone(Err(e.to_string())),
+            };
+            let _ = tx.send(msg);
+        });
+    }
+
+    fn finish_bench(&mut self) {
+        self.busy = None;
+        self.rx = None;
+        self.progress = None;
+        self.cancel_requested = false;
+        cancel::reset();
+        self.tuning_cache.clear();
+    }
+
+    /// 开始实测前说清楚会发生什么。
+    fn bench_overlay(&mut self, ctx: &egui::Context) {
+        if !self.bench_confirm {
+            return;
+        }
+        let label = self.selected_row().map(|row| row.label);
+        let mut start = false;
+        let mut close = false;
+        let modal = egui::Modal::new(egui::Id::unique("bench_modal"))
+            .backdrop_color(t::veil(1.0))
+            .frame(
+                egui::Frame::new()
+                    .fill(t::surface())
+                    .stroke(egui::Stroke::new(1.0, t::hairline()))
+                    .corner_radius(motion::R)
+                    .inner_margin(egui::Margin::symmetric(26, 22)),
+            )
+            .show(ctx, |ui| {
+                ui.set_width(440.0);
+                ui.label(
+                    egui::RichText::new("实测调优")
+                        .size(24.0)
+                        .family(display_family()),
+                );
+                ui.label(
+                    egui::RichText::new(match &label {
+                        Some(label) => format!("给「{}」跑一次真实的测试", short_text(label, 24)),
+                        None => "先选一个版本".into(),
+                    })
+                    .size(13.0)
+                    .color(t::sub()),
+                );
+                ui.add_space(14.0);
+                for line in [
+                    "会打开游戏窗口，在测试世界里自动飞行，持续生成新地形",
+                    "跑 2–3 轮，每轮加载游戏再飞 1 分钟，一共约 5–10 分钟",
+                    "测试期间不要操作游戏窗口，声音已经关掉",
+                    "用的是单独的测试实例，不会碰你的存档和设置",
+                    "测完记下需要多少内存、G1 还是 ZGC，之后「自动」按实测启动",
+                ] {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(egui::RichText::new("·").size(13.0).color(t::dim()));
+                        ui.label(egui::RichText::new(line).size(13.0));
+                    });
+                }
+                ui.add_space(16.0);
+                ui.horizontal(|ui| {
+                    if motion::primary_sized(ui, "开始测试", label.is_some(), 120.0, 34.0, 13.0)
+                    {
+                        start = true;
+                    }
+                    ui.add_space(8.0);
+                    if motion::secondary_sized(ui, "取消", true, 72.0, 34.0, 13.0).clicked() {
+                        close = true;
+                    }
+                });
+            });
+        if modal.backdrop_response.clicked() || escape_pressed(ctx) {
+            close = true;
+        }
+        if start {
+            self.bench_confirm = false;
+            self.start_bench();
+        } else if close {
+            self.bench_confirm = false;
         }
     }
 
@@ -1028,6 +1178,36 @@ impl App {
                 for warning in &plan.warnings {
                     ui.label(egui::RichText::new(warning).size(13.0).color(t::warn()));
                 }
+                let record = self
+                    .tuning_cache
+                    .get(&row.id)
+                    .and_then(|entry| entry.as_ref())
+                    .and_then(|(_, record)| record.clone());
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    let (text, color) = match &record {
+                        Some((record, true)) => (
+                            format!("{}实测过，结果已用在上面", bench::age(record.when)),
+                            t::dim(),
+                        ),
+                        Some(_) => (
+                            "实测结果已过期：Mod、Java 或内存有变化".to_string(),
+                            t::warn(),
+                        ),
+                        None => ("还没实测，现在按公式估算".to_string(), t::dim()),
+                    };
+                    ui.label(egui::RichText::new(text).size(13.0).color(color));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let label = if record.is_some() {
+                            "重新实测"
+                        } else {
+                            "实测调优"
+                        };
+                        if action_link(ui, label).clicked() {
+                            self.bench_confirm = true;
+                        }
+                    });
+                });
                 if !self.show_tuning {
                     if !self.jvm_args.trim().is_empty() {
                         ui.label(
@@ -1052,6 +1232,28 @@ impl App {
                     )
                     .wrap(),
                 );
+                if let Some((record, _)) = &record {
+                    ui.add_space(8.0);
+                    ui.label(egui::RichText::new("实测记录").size(13.0).color(t::sub()));
+                    for run in &record.runs {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{}：{} · {}，加载 {:.0} 秒，{:.1} tick/s，最长停顿 {:.0} ms",
+                                run.label,
+                                run.collector.label(),
+                                tuning::gb(run.heap_mb),
+                                run.load_secs,
+                                run.tps,
+                                run.gc.max_ms
+                            ))
+                            .size(13.0)
+                            .color(t::sub()),
+                        );
+                    }
+                    for note in &record.notes {
+                        ui.label(egui::RichText::new(note).size(13.0).color(t::dim()));
+                    }
+                }
                 ui.add_space(10.0);
                 ui.label(
                     egui::RichText::new("额外 JVM 参数")
@@ -2077,7 +2279,7 @@ impl App {
         if recheck_java {
             self.refresh_java();
         }
-        if close {
+        if close || self.bench_confirm {
             self.save_ui_config();
             self.show_settings = false;
         }
@@ -3859,7 +4061,10 @@ impl App {
         for msg in messages {
             match msg {
                 Msg::Progress(p) => {
-                    if matches!(self.busy, Some(Task::Install) | Some(Task::Mods)) {
+                    if matches!(
+                        self.busy,
+                        Some(Task::Install) | Some(Task::Mods) | Some(Task::Bench)
+                    ) {
                         if self.progress.as_ref().map(|x| &x.stage) != Some(&p.stage) {
                             self.log.push(p.stage.clone());
                         }
@@ -4209,6 +4414,35 @@ impl App {
                     self.show_log = true;
                     self.error = Some(format!("启动失败：{e}"));
                     self.log.push(format!("启动失败: {e}"));
+                }
+                Msg::BenchDone(result) => {
+                    self.finish_bench();
+                    match result {
+                        Ok(record) => {
+                            let heap = match record.collector {
+                                tuning::Collector::Zgc => {
+                                    record.zgc_heap_mb.unwrap_or(record.g1_heap_mb)
+                                }
+                                tuning::Collector::G1 => record.g1_heap_mb,
+                            };
+                            let summary =
+                                format!("{} · {}", record.collector.label(), tuning::gb(heap));
+                            self.log.push(format!("实测完成：{summary}"));
+                            self.log.extend(record.notes.iter().cloned());
+                            self.notice =
+                                Some(format!("实测完成：{summary}，之后「自动」按这个启动"));
+                            self.show_settings = true;
+                            self.show_tuning = true;
+                        }
+                        Err(e) => {
+                            self.log.push(format!("实测失败: {e}"));
+                            self.error = Some(format!("实测没完成：{e}"));
+                        }
+                    }
+                }
+                Msg::BenchCancelled => {
+                    self.finish_bench();
+                    self.notice = Some("实测已停止，设置没有任何改动".into());
                 }
             }
         }
@@ -8760,10 +8994,11 @@ impl App {
             .progress
             .clone()
             .unwrap_or_else(|| Progress::stage("准备安装"));
-        let title = if matches!(self.busy, Some(Task::Mods)) {
-            "正在下载内容"
-        } else {
-            "正在安装"
+        let bench = matches!(self.busy, Some(Task::Bench));
+        let title = match self.busy {
+            Some(Task::Mods) => "正在下载内容",
+            Some(Task::Bench) => "正在实测调参",
+            _ => "正在安装",
         };
         let width = ui.available_width().min(520.0);
         let pad = ((ui.available_width() - width) / 2.0).max(24.0);
@@ -8775,7 +9010,9 @@ impl App {
         );
         let compact_h = ui.ctx().content_rect().height() < 680.0;
         let ring_h: f32 = if compact_h { 200.0 } else { 260.0 };
-        let files = if p.files_total > 0 {
+        let files = if bench {
+            "测试会打开游戏窗口自动飞行，请不要操作它".to_string()
+        } else if p.files_total > 0 {
             format!("{} / {} 个文件", p.files_done, p.files_total)
         } else {
             format!("{} 个文件", p.files_done)
@@ -8848,10 +9085,10 @@ impl App {
                 });
                 ui.add_space(10.0);
                 ui.vertical_centered(|ui| {
-                    let label = if self.cancel_requested {
-                        "正在取消…"
-                    } else {
-                        "取消安装"
+                    let label = match (self.cancel_requested, bench) {
+                        (true, _) => "正在取消…",
+                        (false, true) => "停止测试",
+                        (false, false) => "取消安装",
                     };
                     if motion::secondary_sized(ui, label, !self.cancel_requested, 96.0, 34.0, 13.0)
                         .clicked()
@@ -8860,9 +9097,13 @@ impl App {
                     }
                     ui.add_space(4.0);
                     ui.label(
-                        egui::RichText::new("已完成的部分会保留，下次只补缺失文件")
-                            .size(13.0)
-                            .color(t::dim()),
+                        egui::RichText::new(if bench {
+                            "测试用的是单独的实例，不会碰你的存档和设置"
+                        } else {
+                            "已完成的部分会保留，下次只补缺失文件"
+                        })
+                        .size(13.0)
+                        .color(t::dim()),
                     );
                 });
             });
@@ -8957,7 +9198,10 @@ impl eframe::App for App {
             .frame(egui::Frame::new().fill(t::bg()))
             .show(ui, |ui| {
                 ui.add_space((1.0 - eased) * 6.0);
-                if matches!(self.busy, Some(Task::Install) | Some(Task::Mods)) {
+                if matches!(
+                    self.busy,
+                    Some(Task::Install) | Some(Task::Mods) | Some(Task::Bench)
+                ) {
                     self.progress_view(ui);
                 } else if self.show_mods {
                     self.mods_view(ui);
@@ -8983,6 +9227,7 @@ impl eframe::App for App {
             });
         self.account_overlay(ui.ctx());
         self.settings_overlay(ui.ctx());
+        self.bench_overlay(ui.ctx());
         self.rollback_overlay(ui.ctx());
         self.install_review_overlay(ui.ctx());
         motion::focus_ring(ui.ctx());

@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod bench;
 pub mod blob;
 pub mod builtin;
 pub mod cancel;

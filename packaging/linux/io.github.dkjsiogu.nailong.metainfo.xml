@@ -25,6 +25,11 @@
   <url type="bugtracker">https://github.com/dkjsiogu/nailong/issues</url>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.35.0" date="2026-11-04">
+      <description>
+        <p>Tuning benchmark: one click builds a separate test instance, quick-plays into a built-in test world and flies through freshly generated terrain for two or three rounds to measure how much memory the version really needs and whether G1 or ZGC pauses less. Auto then launches with the measured values until mods, Java or installed memory change. Works for Minecraft 1.20 and later, including 26.x, without touching saves.</p>
+      </description>
+    </release>
     <release version="0.34.1" date="2026-11-04">
       <description>
         <p>Fixes Minecraft 26.x: installation no longer fails on the new default-user-jvm section, and native libraries are found again at launch. Automatic tuning follows the official JVM defaults Mojang ships in 26.x version files. Java selection picks the lowest sufficient version and prefers OpenJDK over GraalVM.</p>

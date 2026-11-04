@@ -53,7 +53,92 @@ impl Default for LaunchOptions {
     }
 }
 
-pub fn launch(root: &Root, profile: &str, opts: &LaunchOptions) -> Result<i32> {
+/// 准备好的启动命令：解析版本、选 Java、解压 natives、算好调参和全部参数，但还没启动。
+#[derive(Debug, Clone)]
+pub struct Prepared {
+    pub version_id: String,
+    pub java: java::JavaRuntime,
+    pub main_class: String,
+    pub classpath: Vec<PathBuf>,
+    pub jvm: Vec<String>,
+    pub game: Vec<String>,
+    pub game_dir: PathBuf,
+    pub client_jar: PathBuf,
+    pub plan: tuning::Plan,
+}
+
+impl Prepared {
+    /// 版本参数里带快速进入单人世界（1.20 起才有）。
+    pub fn supports_quick_play(&self, root: &Root) -> bool {
+        let Ok(resolved) = manifest::resolve(root, &self.version_id, &Context::current()) else {
+            return false;
+        };
+        resolved.arguments.game.iter().any(|arg| match arg {
+            Argument::Plain(text) => text.contains("quickPlaySingleplayer"),
+            Argument::Ruled { value, .. } => match value {
+                StringOrList::One(text) => text.contains("quickPlaySingleplayer"),
+                StringOrList::Many(list) => {
+                    list.iter().any(|t| t.contains("quickPlaySingleplayer"))
+                }
+            },
+        })
+    }
+
+    /// 启动用的命令；标准输出和错误由调用方决定接到哪里。
+    pub fn command(&self) -> Command {
+        let mut cmd = Command::new(&self.java.path);
+        cmd.args(&self.jvm)
+            .arg("-cp")
+            .arg(join_paths(&self.classpath))
+            .arg(&self.main_class)
+            .args(&self.game)
+            .current_dir(&self.game_dir)
+            .stdin(Stdio::null());
+        if std::env::var_os("NAILONG_KEEP_JAVA_OPTIONS").is_none() {
+            cmd.env_remove("_JAVA_OPTIONS");
+            cmd.env_remove("JAVA_TOOL_OPTIONS");
+            cmd.env_remove("JDK_JAVA_OPTIONS");
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+        cmd
+    }
+
+    fn print(&self) {
+        println!("\nJava: {}", self.java.path.display());
+        println!("Classpath ({}):", self.classpath.len());
+        for p in &self.classpath {
+            println!("  {}", p.display());
+        }
+        println!("调参（{}）:", self.plan.headline());
+        for step in &self.plan.steps {
+            println!("  {step}");
+        }
+        println!("JVM:");
+        for a in &self.jvm {
+            println!("  {}", redact(a));
+        }
+        println!("Main: {}", self.main_class);
+        println!("Game:");
+        let mut i = 0;
+        while i < self.game.len() {
+            let a = &self.game[i];
+            if a == "--accessToken" {
+                println!("  --accessToken <redacted>");
+                i += 2;
+                continue;
+            }
+            println!("  {}", a);
+            i += 1;
+        }
+        println!();
+    }
+}
+
+pub fn prepare(root: &Root, profile: &str, opts: &LaunchOptions) -> Result<Prepared> {
     let mut ctx = Context::current();
     ctx.features.custom_resolution = true;
     ctx.features.demo = opts.demo;
@@ -74,7 +159,7 @@ pub fn launch(root: &Root, profile: &str, opts: &LaunchOptions) -> Result<i32> {
     // 游戏以这个目录为工作目录启动，--gameDir 再给相对路径就会被解析两次。
     let game_dir = std::path::absolute(&game_dir).unwrap_or(game_dir);
     std::fs::create_dir_all(&game_dir).map_err(|e| io(&game_dir, e))?;
-    let plan = tuning_plan(&java_rt, &resolved, &game_dir, opts);
+    let plan = tuning_plan(root, profile, &java_rt, &resolved, &game_dir, opts);
     println!("→ JVM {}", plan.headline());
     for warning in &plan.warnings {
         println!("  ! {warning}");
@@ -248,41 +333,23 @@ pub fn launch(root: &Root, profile: &str, opts: &LaunchOptions) -> Result<i32> {
     }
     game = game.into_iter().map(|a| substitute(&a, &vars)).collect();
 
-    let mut argv: Vec<String> = vec![java_rt.path.to_string_lossy().to_string()];
-    argv.extend(jvm.clone());
-    argv.push("-cp".into());
-    argv.push(join_paths(&classpath));
-    argv.push(resolved.main_class.clone());
-    argv.extend(game.clone());
+    Ok(Prepared {
+        version_id: resolved.id.clone(),
+        java: java_rt,
+        main_class: resolved.main_class.clone(),
+        classpath,
+        jvm,
+        game,
+        game_dir,
+        client_jar: resolved.client_jar.clone(),
+        plan,
+    })
+}
 
+pub fn launch(root: &Root, profile: &str, opts: &LaunchOptions) -> Result<i32> {
+    let prepared = prepare(root, profile, opts)?;
     if opts.print_plan || opts.dry_run {
-        println!("\nJava: {}", java_rt.path.display());
-        println!("Classpath ({}):", classpath.len());
-        for p in &classpath {
-            println!("  {}", p.display());
-        }
-        println!("调参（{}）:", plan.headline());
-        for step in &plan.steps {
-            println!("  {step}");
-        }
-        println!("JVM:");
-        for a in &jvm {
-            println!("  {}", redact(a));
-        }
-        println!("Main: {}", resolved.main_class);
-        println!("Game:");
-        let mut i = 0;
-        while i < game.len() {
-            let a = &game[i];
-            if a == "--accessToken" {
-                println!("  --accessToken <redacted>");
-                i += 2;
-                continue;
-            }
-            println!("  {}", a);
-            i += 1;
-        }
-        println!();
+        prepared.print();
     }
     if opts.dry_run {
         return Ok(0);
@@ -292,35 +359,15 @@ pub fn launch(root: &Root, profile: &str, opts: &LaunchOptions) -> Result<i32> {
     let log_path = root
         .cache()
         .join("logs")
-        .join(format!("launch-{}.log", resolved.id));
+        .join(format!("launch-{}.log", prepared.version_id));
     if let Some(parent) = log_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| io(parent, e))?;
     }
     let log_file = std::fs::File::create(&log_path).map_err(|e| io(&log_path, e))?;
     let log = Arc::new(Mutex::new(log_file));
 
-    let mut cmd = Command::new(&java_rt.path);
-    cmd.args(&jvm)
-        .arg("-cp")
-        .arg(join_paths(&classpath))
-        .arg(&resolved.main_class)
-        .args(&game)
-        .current_dir(&game_dir)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    if let Some(env) = std::env::var_os("NAILONG_KEEP_JAVA_OPTIONS") {
-        let _ = env;
-    } else {
-        cmd.env_remove("_JAVA_OPTIONS");
-        cmd.env_remove("JAVA_TOOL_OPTIONS");
-        cmd.env_remove("JDK_JAVA_OPTIONS");
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    }
+    let mut cmd = prepared.command();
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = cmd
         .spawn()
         .map_err(|e| Error::Launch(format!("无法启动 Java: {e}")))?;
@@ -375,7 +422,7 @@ fn join_paths(paths: &[PathBuf]) -> String {
         .join(sep)
 }
 
-fn redact(s: &str) -> String {
+pub(crate) fn redact(s: &str) -> String {
     // 简单脱敏：--accessToken 的值通常不会出现在游戏日志中；这里处理常见形式
     let mut out = s.to_string();
     if let Some(pos) = out.find("accessToken=") {
@@ -443,6 +490,8 @@ pub(crate) fn required_java(resolved: &Resolved) -> u32 {
 }
 
 fn tuning_plan(
+    root: &Root,
+    profile: &str,
     java: &java::JavaRuntime,
     resolved: &Resolved,
     game_dir: &std::path::Path,
@@ -454,6 +503,7 @@ fn tuning_plan(
         min_memory_mb: opts.min_memory_mb,
         gc: opts.gc,
         extra: opts.jvm_args.clone(),
+        measured: crate::bench::measured(root, profile, game_dir, java.major),
     };
     tuning::plan(&Machine::detect(), &work, &settings)
 }

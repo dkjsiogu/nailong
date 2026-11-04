@@ -8,7 +8,7 @@
 
 **简体中文** | [English](README.en.md)
 
-> 当前版本：**0.34.1**（预览版）
+> 当前版本：**0.35.0**（预览版）
 >
 > 目标：小体积、少依赖、安装过程可见、中断可补。功能边界见 [实现状态](docs/design/14-implementation-status.md)。
 
@@ -26,6 +26,8 @@ nailong 的思路很直：
 它不是“万能启动器”，也还不是 1.0。能做和不能做的，下文列清楚了。
 
 ## 界面
+
+0.35 加入「实测调优」：在设置里点一下，启动器会给当前版本建一个单独的测试实例，自动进入内置的测试世界，以旁观模式持续飞行生成新地形，跑 2–3 轮（测量内存、验证 G1、对比 ZGC），从 GC 日志和 CPU 时间里量出这个版本真正需要多少内存、哪个回收器停顿更少。结果存进数据目录，之后「自动」按实测值启动；换了 Mod 会提示过期。全程不用操作，也不碰存档。支持 1.20 及以后的版本（包括 26.x），命令行是 `nailong bench <版本>`。设计见 [20 · 实测调优](docs/design/20-tuning-benchmark.md)。
 
 0.34.1 修复 26.x：26.1 起的版本文件多了 `default-user-jvm`，以前会安装失败；natives 目录也会多套一层导致启动时找不到 LWJGL。现在 26.x 能装能玩，「自动」也改为跟随 Mojang 写在版本文件里的官方默认（ZGC、紧凑对象头等）。Java 改为选「够用里最低的」，同版本优先 OpenJDK 而不是 GraalVM。
 
@@ -145,7 +147,7 @@ nailong 的思路很直：
 | 平台 | 文件 | 大小 | 要求 |
 |---|---|---:|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | 约 8 MB | Windows 10/11，Java 21 |
-| Linux x64 (deb) | [nailong_0.34.1_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.34.1_amd64.deb) | 约 3.4 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
+| Linux x64 (deb) | [nailong_0.35.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.35.0_amd64.deb) | 约 3.4 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
 
 校验值：[SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS)。
 
@@ -162,7 +164,7 @@ nailong 的思路很直：
 ### Linux（Debian / Ubuntu）
 
 ```bash
-sudo apt install ./nailong_0.34.1_amd64.deb
+sudo apt install ./nailong_0.35.0_amd64.deb
 nailong
 ```
 

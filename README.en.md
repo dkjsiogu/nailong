@@ -8,7 +8,7 @@ A small, native Minecraft: Java Edition launcher written in Rust. Windows ships 
 
 [简体中文](README.md) | **English**
 
-> Current version: **0.34.1** (preview)
+> Current version: **0.35.0** (preview)
 >
 > Goals: small binaries, few dependencies, visible install progress, and a repair path after interruption. See [implementation status](docs/design/14-implementation-status.md) for exact boundaries.
 
@@ -26,6 +26,8 @@ nailong tries to do one thing simply:
 It is not a universal launcher, and it is not 1.0 yet. What works and what does not is laid out below.
 
 ## Interface
+
+0.35 adds a tuning benchmark: one click in Settings builds a separate test instance for the current version, quick-plays into a built-in test world, flies in spectator mode to keep generating terrain, and runs 2–3 rounds (measure memory, verify G1, compare ZGC). From GC logs and CPU time it works out how much heap the version really needs and which collector pauses less. The result is stored in the data directory and Auto launches with it from then on; changing mods marks it stale. No input needed, and saves are never touched. Works for 1.20 and later, including 26.x; the CLI is `nailong bench <version>`. See [20 · tuning benchmark](docs/design/20-tuning-benchmark.md) (Chinese).
 
 0.34.1 fixes 26.x: version files from 26.1 on carry `default-user-jvm`, which used to break installation, and the natives directory gained an extra level so LWJGL was not found. 26.x now installs and runs, and Auto follows the official defaults Mojang puts in the version file (ZGC, compact object headers and so on). Java selection now picks the lowest sufficient major version and prefers OpenJDK over GraalVM within a version.
 
@@ -144,7 +146,7 @@ Drag a `.mrpack` or `.zip` into the window to start an import. A single mod `.ja
 | Platform | File | Size | Requirements |
 |---|---|---:|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | ~8 MB | Windows 10/11, Java 21 |
-| Linux x64 (deb) | [nailong_0.34.1_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.34.1_amd64.deb) | ~3.4 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
+| Linux x64 (deb) | [nailong_0.35.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.35.0_amd64.deb) | ~3.4 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
 
 Checksums: [SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS).
 
@@ -161,7 +163,7 @@ Java 21 must be installed. nailong searches for it automatically and shows a war
 ### Linux (Debian / Ubuntu)
 
 ```bash
-sudo apt install ./nailong_0.34.1_amd64.deb
+sudo apt install ./nailong_0.35.0_amd64.deb
 nailong
 ```
 
