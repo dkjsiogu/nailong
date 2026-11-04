@@ -27,6 +27,15 @@ const ZGC_MIN_THREADS: usize = 12;
 const ZGC_MIN_TOTAL_MB: u32 = 24 * 1024;
 const ZGC_MIN_HEAP_MB: u32 = 8 * 1024;
 
+/// G1 至少给新生代 20%、预留 20%，存活数据最多占堆的 60%。
+const G1_LIVE_SHARE: f32 = 0.6;
+/// ZGC 并发回收时还要接住新分配，存活数据最多占一半。
+const ZGC_LIVE_SHARE: f32 = 0.5;
+/// 玩过之后存活数据到这么多，就看通用测试「大型整合包」那一档（测的是 3 GB）的结论。
+pub const LARGE_TIER_LIVE_MB: u32 = 2048;
+/// 没玩过时按公式：需要量到这么多（约 130 个 Forge Mod）才算大型整合包。公式本身偏宽松。
+pub const LARGE_TIER_NEED_MB: u32 = 6144;
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Machine {
     /// 物理内存，MB；读不到时为 None。
@@ -268,10 +277,10 @@ pub fn workload(
     profile: &str,
     game_dir: &Path,
     javas: &[JavaRuntime],
-) -> Result<Workload> {
+) -> Result<(Workload, JavaRuntime)> {
     let resolved = manifest::resolve(root, profile, &Context::current())?;
     let java = java::select(crate::launch::required_java(&resolved), javas)?;
-    Ok(Workload::new(&java, &resolved, game_dir))
+    Ok((Workload::new(&java, &resolved, game_dir), java))
 }
 
 fn count_mods(dir: &Path) -> usize {
@@ -300,20 +309,57 @@ pub struct Settings {
     pub gc: GcChoice,
     /// 用户自己写的 JVM 参数。排在最后，和自动参数冲突时以它为准。
     pub extra: Vec<String>,
-    /// 这个版本的实测结果；有它时，自动内存和自动回收器按实测走。
-    pub measured: Option<Measured>,
+    /// 通用测试对这台电脑上这个 Java 的结论；有它时，自动回收器按它选。
+    pub bench: Option<BenchVerdict>,
+    /// 这个版本玩过之后从 GC 日志里学到的；有它时，自动内存按它算。
+    pub learned: Option<Learned>,
 }
 
-/// 实测调参（`bench.rs`）的结论。
+/// 通用测试（`bench.rs`）对某个 Java 的结论。
 #[derive(Debug, Clone)]
-pub struct Measured {
-    /// 测试中回收后仍然存活的数据，取最大值。
-    pub live_mb: u32,
-    pub g1_heap_mb: u32,
-    pub zgc_heap_mb: Option<u32>,
-    pub collector: Collector,
-    /// 例如「3 天前」。
+pub struct BenchVerdict {
+    /// 存活约 1 GB 的负载：原版、轻量 Mod。
+    pub standard: TierVerdict,
+    /// 存活约 3 GB 的负载：大型整合包。电脑放不下时没测。
+    pub large: Option<TierVerdict>,
+    /// 例如「今天」「3 天前」。
     pub age: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TierVerdict {
+    /// 一般版本用哪个。
+    pub collector: Collector,
+    /// 官方默认是 ZGC 的版本（26.1 起）用哪个。
+    pub official: Collector,
+}
+
+/// 正常游戏时从 GC 日志里学到的（`learned.rs`）。
+#[derive(Debug, Clone, Default)]
+pub struct Learned {
+    /// 清理过老年代的回收之后剩下的最大值，取最近几局里最大的。
+    pub live_mb: Option<u32>,
+    /// 最近几局出现过整堆回收或晋升失败时，那一局的堆加 1/4。
+    pub floor_mb: Option<u32>,
+    /// 有存活数据的局数。
+    pub sessions: usize,
+    /// 最近一局，例如「今天」。
+    pub age: String,
+}
+
+/// G1 需要的堆：存活数据占 60%，至少比存活多 1 GB。
+pub fn g1_heap_for(live: u32) -> u32 {
+    let need = ((live as f32 / G1_LIVE_SHARE) as u32).max(live + 1024);
+    ceil_to(need, 512).clamp(AUTO_MIN_MB, AUTO_MAX_MB.max(ceil_to(live + 1024, 512)))
+}
+
+/// ZGC 需要的堆：存活数据占一半，且不少于 G1 的 1.25 倍。
+pub fn zgc_heap_for(live: u32) -> u32 {
+    let g1 = g1_heap_for(live);
+    ceil_to(
+        ((live as f32 / ZGC_LIVE_SHARE) as u32).max(g1 + g1 / 4),
+        512,
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -542,18 +588,51 @@ pub fn plan(machine: &Machine, work: &Workload, settings: &Settings) -> Plan {
         steps.push(format!("32 位 Java 最多 {}", gb(MAX_32BIT_MB)));
     }
 
-    // ZGC 回收时不暂停，但要多留空间给并发回收，所以多给 1/4。
-    let zgc_heap = ceil_to(need + need / 4, 512);
     let zgc_ok = work.java_major >= 17 && work.java_64bit;
-    let collector = match (settings.gc, &settings.measured) {
-        (GcChoice::Auto, Some(measured)) => {
-            if measured.collector == Collector::Zgc && zgc_ok {
-                steps.push(format!("回收器 ZGC：{}实测停顿更少", measured.age));
-                Collector::Zgc
+    let official_zgc = work.official_has("-XX:+UseZGC");
+    let live = settings
+        .learned
+        .as_ref()
+        .and_then(|learned| learned.live_mb);
+    // G1 大概要多少：玩过就按实测存活，没玩过按公式。
+    let g1_guess = live.map(g1_heap_for).unwrap_or(need);
+    let bench = settings
+        .bench
+        .as_ref()
+        .filter(|_| zgc_ok && !work.graal && work.java_major >= ZGC_MIN_JAVA)
+        .map(|bench| {
+            let large_pack = match live {
+                Some(live) => live >= LARGE_TIER_LIVE_MB,
+                None => need >= LARGE_TIER_NEED_MB,
+            };
+            let (tier, label) = match bench.large {
+                Some(large) if large_pack => (large, "大型整合包档"),
+                _ => (bench.standard, "常规档"),
+            };
+            let pick = if official_zgc {
+                tier.official
             } else {
-                steps.push(format!("回收器 G1：{}实测更合适", measured.age));
-                Collector::G1
-            }
+                tier.collector
+            };
+            (pick, label, bench.age.as_str())
+        });
+    let collector = match (settings.gc, bench) {
+        (GcChoice::Auto, Some((pick, label, age))) => {
+            steps.push(match (pick, official_zgc) {
+                (Collector::Zgc, true) => {
+                    format!("回收器 ZGC：官方默认，{age}在这台电脑上测过（{label}）不比 G1 差")
+                }
+                (Collector::G1, true) => {
+                    format!("回收器 G1：{age}在这台电脑上测过（{label}），ZGC 明显更慢")
+                }
+                (Collector::Zgc, false) => {
+                    format!("回收器 ZGC：{age}在这台电脑上测过（{label}），G1 会顿、ZGC 更顺")
+                }
+                (Collector::G1, false) => {
+                    format!("回收器 G1：{age}在这台电脑上测过（{label}），G1 已经够顺")
+                }
+            });
+            pick
         }
         _ => match settings.gc {
             GcChoice::G1 => {
@@ -584,7 +663,7 @@ pub fn plan(machine: &Machine, work: &Workload, settings: &Settings) -> Plan {
             GcChoice::Auto if !work.official.is_empty() => {
                 // 26.1 起 Mojang 在版本文件里写了官方启动器的默认回收器：
                 // 新系统用 ZGC，Windows 10 1803 以前用 G1。这是他们在大量机器上验证过的选择。
-                if work.official_has("-XX:+UseZGC") && zgc_ok {
+                if official_zgc && zgc_ok {
                     steps.push("回收器 ZGC：这个版本的官方默认".into());
                     Collector::Zgc
                 } else {
@@ -593,6 +672,10 @@ pub fn plan(machine: &Machine, work: &Workload, settings: &Settings) -> Plan {
                 }
             }
             GcChoice::Auto => {
+                // 没测过这台电脑时按经验：堆很大、核和内存都够才值得用 ZGC。
+                let zgc_heap = live
+                    .map(zgc_heap_for)
+                    .unwrap_or_else(|| ceil_to(need + need / 4, 512));
                 let strong = work.java_major >= ZGC_MIN_JAVA
                     && zgc_ok
                     && !work.graal
@@ -600,7 +683,7 @@ pub fn plan(machine: &Machine, work: &Workload, settings: &Settings) -> Plan {
                     && machine
                         .total_mb
                         .is_some_and(|total| total >= ZGC_MIN_TOTAL_MB)
-                    && need >= ZGC_MIN_HEAP_MB
+                    && g1_guess >= ZGC_MIN_HEAP_MB
                     && cap.is_some_and(|cap| cap >= zgc_heap);
                 if strong {
                     steps.push("回收器 ZGC：堆很大，核和内存也够，用分代 ZGC 消除回收停顿".into());
@@ -640,31 +723,40 @@ pub fn plan(machine: &Machine, work: &Workload, settings: &Settings) -> Plan {
             heap
         }
         None => {
-            let want = match (&settings.measured, collector) {
-                (Some(measured), Collector::G1) => {
+            let learned = settings.learned.as_ref();
+            let sessions = learned.map_or(0, |learned| learned.sessions);
+            let mut want = match (live, collector) {
+                (Some(live), Collector::G1) => {
+                    let heap = g1_heap_for(live);
                     steps.push(format!(
-                        "{}实测存活 {}，G1 要给新生代和预留留出 40%：{}",
-                        measured.age,
-                        gb(measured.live_mb),
-                        gb(measured.g1_heap_mb)
-                    ));
-                    measured.g1_heap_mb
-                }
-                (Some(measured), Collector::Zgc) => {
-                    let heap = measured
-                        .zgc_heap_mb
-                        .unwrap_or_else(|| ceil_to(measured.live_mb * 2, 512));
-                    steps.push(format!(
-                        "{}实测存活 {}，ZGC 并发回收要留一半：{}",
-                        measured.age,
-                        gb(measured.live_mb),
+                        "最近 {sessions} 局游戏里存活数据最多 {}，G1 要给新生代和预留留出 40%：{}",
+                        gb(live),
                         gb(heap)
                     ));
                     heap
                 }
-                (None, Collector::Zgc) => zgc_heap,
+                (Some(live), Collector::Zgc) => {
+                    let heap = zgc_heap_for(live);
+                    steps.push(format!(
+                        "最近 {sessions} 局游戏里存活数据最多 {}，ZGC 并发回收要留一半：{}",
+                        gb(live),
+                        gb(heap)
+                    ));
+                    heap
+                }
+                // ZGC 回收时不暂停，但要多留空间给并发回收，所以多给 1/4。
+                (None, Collector::Zgc) => ceil_to(need + need / 4, 512),
                 (None, Collector::G1) => need,
             };
+            if let Some(floor) = learned.and_then(|learned| learned.floor_mb)
+                && floor > want
+            {
+                steps.push(format!(
+                    "最近的游戏里出现过整堆回收或晋升失败，至少给 {}",
+                    gb(floor)
+                ));
+                want = floor;
+            }
             let limit = cap.unwrap_or(UNKNOWN_MACHINE_MB);
             let heap = want.min(limit).max(MIN_HEAP_MB);
             if heap < want {
@@ -792,21 +884,19 @@ pub fn plan(machine: &Machine, work: &Workload, settings: &Settings) -> Plan {
         auto_memory,
         need_mb: need,
         cap_mb: cap,
-        official_collector: if work.official_has("-XX:+UseZGC") {
+        official_collector: if official_zgc {
             Some(Collector::Zgc)
         } else if work.official_has("-XX:+UseG1GC") {
             Some(Collector::G1)
         } else {
             None
         },
-        basis: match &settings.measured {
-            Some(measured) if auto_memory || settings.gc == GcChoice::Auto => {
-                format!(
-                    "按{}的实测结果，存活数据 {}",
-                    measured.age,
-                    gb(measured.live_mb)
-                )
-            }
+        basis: match (live, settings.learned.as_ref()) {
+            (Some(live), Some(learned)) if auto_memory => format!(
+                "按最近 {} 局游戏实测：存活数据最多 {}",
+                learned.sessions,
+                gb(live)
+            ),
             _ => basis(machine, work),
         },
         steps,
@@ -1029,6 +1119,118 @@ mod tests {
         let java25 = auto(&machine(32, 16), &work(25, Loader::Forge, 300));
         assert_eq!(java25.collector, Collector::Zgc);
         assert!(!java25.args().iter().any(|a| a.contains("ZGenerational")));
+    }
+
+    fn verdict(standard: Collector, large: Collector) -> BenchVerdict {
+        BenchVerdict {
+            standard: TierVerdict {
+                collector: standard,
+                official: Collector::Zgc,
+            },
+            large: Some(TierVerdict {
+                collector: large,
+                official: Collector::Zgc,
+            }),
+            age: "今天".into(),
+        }
+    }
+
+    #[test]
+    fn the_machine_test_picks_the_collector_by_tier() {
+        let settings = Settings {
+            bench: Some(verdict(Collector::G1, Collector::Zgc)),
+            ..Default::default()
+        };
+        let pc = machine(16, 8);
+        // 原版要 3 GB：看常规档，G1。
+        assert_eq!(
+            plan(&pc, &work(21, Loader::Vanilla, 0), &settings).collector,
+            Collector::G1
+        );
+        // 30 个 Mod 的小整合包（4.5 GB）仍是常规档。
+        assert_eq!(
+            plan(&pc, &work(21, Loader::Forge, 30), &settings).collector,
+            Collector::G1
+        );
+        // 150 个 Forge Mod 要 6.5 GB：看大型整合包档，ZGC。
+        let big = plan(&pc, &work(21, Loader::Forge, 150), &settings);
+        assert_eq!(big.collector, Collector::Zgc);
+        assert!(big.steps.iter().any(|s| s.contains("大型整合包档")));
+        // 玩过之后按实测存活分档：150 个 Mod 实测只有 1.5 GB，回到常规档。
+        let light = Settings {
+            learned: Some(Learned {
+                live_mb: Some(1500),
+                sessions: 2,
+                ..Default::default()
+            }),
+            ..settings.clone()
+        };
+        assert_eq!(
+            plan(&pc, &work(21, Loader::Forge, 150), &light).collector,
+            Collector::G1
+        );
+        // 官方默认 ZGC 的版本用官方那一栏的结论。
+        let mut official = work(25, Loader::Vanilla, 0);
+        official.official = official_26();
+        assert_eq!(plan(&pc, &official, &settings).collector, Collector::Zgc);
+        // Java 17 和 GraalVM 不看测试结论。
+        assert_eq!(
+            plan(&pc, &work(17, Loader::Forge, 100), &settings).collector,
+            Collector::G1
+        );
+        let mut graal = work(21, Loader::Forge, 100);
+        graal.graal = true;
+        assert_eq!(plan(&pc, &graal, &settings).collector, Collector::G1);
+        // 手动选择优先。
+        let manual = Settings {
+            gc: GcChoice::G1,
+            ..settings.clone()
+        };
+        assert_eq!(
+            plan(&pc, &work(21, Loader::Forge, 100), &manual).collector,
+            Collector::G1
+        );
+    }
+
+    #[test]
+    fn learned_live_data_sizes_the_heap() {
+        let pc = machine(16, 8);
+        let pack = work(21, Loader::Forge, 150);
+        // 公式：3 GB + 0.5 GB + 150 × 20 MB = 6.5 GB。
+        assert_eq!(auto(&pc, &pack).heap_mb, 6656);
+        let learned = Settings {
+            learned: Some(Learned {
+                live_mb: Some(2100),
+                floor_mb: None,
+                sessions: 3,
+                age: "今天".into(),
+            }),
+            ..Default::default()
+        };
+        // 实测存活 2.1 GB：2100 / 0.6 = 3500 → 3.5 GB。
+        let plan_g1 = plan(&pc, &pack, &learned);
+        assert_eq!(plan_g1.heap_mb, 3584);
+        assert!(plan_g1.basis.contains("3 局"));
+        let zgc = Settings {
+            gc: GcChoice::Zgc,
+            ..learned.clone()
+        };
+        assert_eq!(plan(&pc, &pack, &zgc).heap_mb, 4608);
+        // 出过整堆回收：至少给到那一局的 1.25 倍。
+        let pressured = Settings {
+            learned: Some(Learned {
+                floor_mb: Some(5120),
+                ..learned.learned.clone().unwrap()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(plan(&pc, &pack, &pressured).heap_mb, 5120);
+        // 手动内存优先。
+        let manual = Settings {
+            memory_mb: Some(8192),
+            ..learned
+        };
+        assert_eq!(plan(&pc, &pack, &manual).heap_mb, 8192);
     }
 
     #[test]

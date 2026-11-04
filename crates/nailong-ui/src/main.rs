@@ -6,6 +6,7 @@ use nailong_core::bench;
 use nailong_core::install::{catalog, fabric, forge, health, modpack, neoforge, vanilla};
 use nailong_core::installed;
 use nailong_core::launch::{self, LaunchOptions};
+use nailong_core::learned;
 use nailong_core::mods;
 use nailong_core::progress::{Progress, Sink, from_fn};
 use nailong_core::rollback;
@@ -18,6 +19,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
+mod logview;
 mod motion;
 mod rings;
 mod theme;
@@ -138,6 +140,38 @@ enum Task {
 }
 
 /// 侧边栏的四个一级入口。玩家只需要记住这四个地方。
+/// 已安装列表的状态筛选。状态数字本身就是入口：点「3 个已禁用」就只看这 3 个。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum StatusFilter {
+    All,
+    Enabled,
+    Disabled,
+    Updates,
+    Duplicates,
+}
+
+impl StatusFilter {
+    fn label(self) -> &'static str {
+        match self {
+            Self::All => "全部",
+            Self::Enabled => "已启用",
+            Self::Disabled => "已禁用",
+            Self::Updates => "可更新",
+            Self::Duplicates => "重复",
+        }
+    }
+}
+
+/// 拖进来的文件分好类之后要做的事。
+#[derive(Default)]
+struct DropPlan {
+    /// 导入到哪个版本、哪个游戏目录。
+    target: Option<(Row, PathBuf)>,
+    items: Vec<(PathBuf, mods::ContentKind)>,
+    packs: Vec<PathBuf>,
+    unknown: Vec<PathBuf>,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Nav {
     Home,
@@ -207,9 +241,10 @@ enum Msg {
     RollbackDone(Result<String, String>),
     LoginBrowser(String),
     LoginDone(Result<auth::Account, String>),
-    LaunchDone(i32),
+    /// 退出码，以及从游戏输出里认出的原因。
+    LaunchDone(i32, Option<String>),
     LaunchFailed(String),
-    BenchDone(Result<bench::Record, String>),
+    BenchDone(Result<bench::Store, String>),
     BenchCancelled,
 }
 
@@ -283,7 +318,8 @@ fn project_key(project: &mods::Project) -> String {
 }
 
 /// 一个版本的负载，以及它的实测记录和记录是否仍然有效。
-type TuningEntry = (tuning::Workload, Option<(bench::Record, bool)>);
+/// 启动时会用的负载和 Java，以及这个版本玩过之后学到的内存。
+type TuningEntry = (tuning::Workload, java::JavaRuntime, Option<tuning::Learned>);
 
 struct App {
     root: Root,
@@ -303,6 +339,8 @@ struct App {
     tuning_cache: HashMap<String, Option<TuningEntry>>,
     /// 实测调参的确认弹窗。
     bench_confirm: bool,
+    /// 「测一下这台电脑」的结果，所有版本共用。
+    bench_store: Option<bench::Store>,
     reduce_motion: bool,
     theme_pref: t::Preference,
     java_ok: bool,
@@ -316,6 +354,17 @@ struct App {
     mods_game_dir: Option<PathBuf>,
     mods_query: String,
     mods_filter: String,
+    /// 已安装列表按状态筛：全部、已启用、已禁用、可更新、重复。和搜索可以叠加。
+    mods_status: StatusFilter,
+    /// 这次导入的文件，列表里标「刚导入」，换页就清掉。
+    mods_recent: HashSet<String>,
+    /// 下一帧把焦点交给搜索框（Ctrl+F）。
+    focus_search: bool,
+    /// 内容目录上次扫描时的样子；窗口重新拿到焦点时比一比，变了就自动重扫。
+    mods_dir_sig: u64,
+    window_focused: bool,
+    /// 拖着文件悬停时的预览：(这些文件, 说明, 能不能导入)。
+    drop_preview: Option<(Vec<PathBuf>, String, bool)>,
     mods_delete_confirm: Option<String>,
     mods_kind: mods::ContentKind,
     mods_browse: Vec<Shelf>,
@@ -374,7 +423,10 @@ struct App {
     error: Option<String>,
     notice: Option<String>,
     log: Vec<String>,
-    show_log: bool,
+    /// 日志窗口；None 时关着。
+    log_view: Option<logview::LogView>,
+    /// 最近一次启动的日志在哪、结果如何。
+    last_launch: Option<logview::LastLaunch>,
     saves_row: Option<Row>,
     saves_selected: Option<String>,
     show_saves: bool,
@@ -500,6 +552,7 @@ impl App {
             machine: tuning::Machine::detect(),
             tuning_cache: HashMap::new(),
             bench_confirm: false,
+            bench_store: None,
             reduce_motion: prefs.reduce_motion,
             theme_pref: prefs.theme,
             java_ok,
@@ -513,6 +566,12 @@ impl App {
             mods_game_dir: None,
             mods_query: String::new(),
             mods_filter: String::new(),
+            mods_status: StatusFilter::All,
+            mods_recent: HashSet::new(),
+            focus_search: false,
+            mods_dir_sig: 0,
+            window_focused: true,
+            drop_preview: None,
             mods_delete_confirm: None,
             mods_kind: mods::ContentKind::Mod,
             mods_browse: Vec::new(),
@@ -570,7 +629,8 @@ impl App {
             error: None,
             notice: None,
             log: vec!["启动器已就绪".into()],
-            show_log: false,
+            log_view: None,
+            last_launch: None,
             saves_row: None,
             saves_selected: None,
             show_saves: false,
@@ -611,6 +671,12 @@ impl App {
             running_row: None,
         };
         app.refresh();
+        app.bench_store = bench::load(&app.root);
+        {
+            // 0.35 给每个版本复制过一份测试实例，现在用不到了。
+            let root = app.root.clone();
+            std::thread::spawn(move || bench::cleanup_legacy(&root));
+        }
         #[cfg(debug_assertions)]
         if let Ok(theme) = std::env::var("NAILONG_DEBUG_THEME") {
             app.theme_pref = t::Preference::from_key(&theme);
@@ -679,6 +745,23 @@ impl App {
                 }
                 "settings" => {
                     app.show_settings = true;
+                }
+                "log" => {
+                    if let Some(row) = row {
+                        app.last_launch = Some(logview::LastLaunch {
+                            label: row.label.clone(),
+                            log: launch::log_path(&app.root, &row.profile),
+                            game_dir: row
+                                .game_dir
+                                .clone()
+                                .unwrap_or_else(|| app.root.dir().to_path_buf()),
+                            started: std::time::SystemTime::now() - Duration::from_secs(180),
+                            outcome: logview::Outcome::Exited(1),
+                        });
+                        app.error =
+                            Some("游戏异常退出（代码 1）：缺少前置 Mod：日志里写了缺哪个".into());
+                        app.open_log();
+                    }
                 }
                 "running" => {
                     app.busy = Some(Task::Launch);
@@ -806,7 +889,7 @@ impl App {
     fn write_block(&self, row_id: Option<&str>) -> Option<&'static str> {
         match self.busy {
             Some(Task::Install) | Some(Task::Mods) => Some("正在安装，完成后再试"),
-            Some(Task::Bench) => Some("正在实测调参，完成后再试"),
+            Some(Task::Bench) => Some("正在测试这台电脑，完成后再试"),
             Some(Task::Launch) if row_id.is_some() && self.running_row.as_deref() == row_id => {
                 Some("游戏正在使用这个版本，退出游戏后再修改")
             }
@@ -865,8 +948,7 @@ impl App {
             self.notice = None;
         }
         if show_log {
-            self.show_log = true;
-            self.show_settings = true;
+            self.open_log();
         }
     }
 
@@ -874,7 +956,7 @@ impl App {
     fn busy_reason(&self) -> &'static str {
         match self.busy {
             Some(Task::Launch) => "游戏运行中，退出游戏后再安装",
-            Some(Task::Bench) => "正在实测调参，完成后再试",
+            Some(Task::Bench) => "正在测试这台电脑，完成后再试",
             _ => "正在安装，完成后再试",
         }
     }
@@ -916,12 +998,15 @@ impl App {
             || self.login_url.is_some()
             || self.pending_install.is_some()
             || self.show_rollback
+            || self.log_view.is_some()
         {
             return;
         }
         let mut nav = None;
         let mut settings = false;
         let mut refresh = false;
+        let mut search = false;
+        let mut logs = false;
         ctx.input_mut(|input| {
             for (key, target) in [
                 (egui::Key::Num1, Nav::Home),
@@ -935,7 +1020,16 @@ impl App {
             }
             settings = input.consume_key(egui::Modifiers::CTRL, egui::Key::Comma);
             refresh = input.consume_key(egui::Modifiers::NONE, egui::Key::F5);
+            search = input.consume_key(egui::Modifiers::CTRL, egui::Key::F);
+            logs = input.consume_key(egui::Modifiers::CTRL, egui::Key::L);
         });
+        if logs {
+            self.open_log();
+            return;
+        }
+        if search && self.show_mods {
+            self.focus_search = true;
+        }
         if settings {
             self.show_account = false;
             self.show_settings = true;
@@ -945,6 +1039,31 @@ impl App {
         }
         if let Some(nav) = nav {
             self.nav_go(nav);
+        }
+    }
+
+    /// 打开日志窗口。游戏异常退出时直接是这次的游戏输出，启动器自己出的错是启动器记录。
+    fn open_log(&mut self) {
+        let game = match (&self.last_launch, &self.error) {
+            (Some(_), Some(error)) => error.starts_with("游戏异常退出"),
+            (Some(last), None) => !matches!(last.outcome, logview::Outcome::Failed(_)),
+            (None, _) => false,
+        };
+        self.show_settings = false;
+        self.show_account = false;
+        self.log_view = Some(logview::LogView::new(if game {
+            logview::Tab::Game
+        } else {
+            logview::Tab::Launcher
+        }));
+    }
+
+    fn log_overlay(&mut self, ctx: &egui::Context) {
+        let Some(view) = &mut self.log_view else {
+            return;
+        };
+        if view.show(ctx, self.last_launch.as_ref(), &self.log) {
+            self.log_view = None;
         }
     }
 
@@ -965,7 +1084,7 @@ impl App {
             min_memory_mb: None,
             gc: self.gc,
             extra: tuning::split_args(&self.jvm_args),
-            measured: None,
+            ..Default::default()
         }
     }
 
@@ -978,19 +1097,20 @@ impl App {
                 .unwrap_or_else(|| self.root.dir().to_path_buf());
             let entry = tuning::workload(&self.root, &row.profile, &game_dir, &self.javas)
                 .ok()
-                .map(|work| {
-                    let record = bench::load(&self.root, &row.profile, &game_dir, work.java_major);
-                    (work, record)
+                .map(|(work, java)| {
+                    let learned = learned::load(&self.root, &row.profile, &game_dir);
+                    (work, java, learned)
                 });
             self.machine = tuning::Machine::detect();
             self.tuning_cache.insert(row.id.clone(), entry);
         }
-        let (work, record) = self.tuning_cache.get(&row.id)?.as_ref()?;
+        let (work, java, learned) = self.tuning_cache.get(&row.id)?.as_ref()?;
         let settings = tuning::Settings {
-            measured: record
+            bench: self
+                .bench_store
                 .as_ref()
-                .filter(|(_, fresh)| *fresh)
-                .map(|(record, _)| record.measured()),
+                .and_then(|store| store.verdict(java)),
+            learned: learned.clone(),
             ..self.tuning_settings()
         };
         Some(tuning::plan(&self.machine, work, &settings))
@@ -1012,26 +1132,15 @@ impl App {
         if self.busy.is_some() {
             return;
         }
-        let Some(row) = self.selected_row() else {
-            return;
-        };
-        if row.health.missing > 0 {
-            self.error = Some("这个版本缺少文件，先补全再测试".into());
-            return;
-        }
         self.error = None;
         self.notice = None;
         self.busy = Some(Task::Bench);
         self.cancel_requested = false;
         cancel::reset();
-        self.progress = Some(Progress::stage("准备测试实例"));
-        self.progress_label = row.label.clone();
-        self.log.push(format!("实测调参 {}", row.id));
+        self.progress = Some(Progress::stage("准备测试"));
+        self.progress_label = "这台电脑".into();
+        self.log.push("测一下这台电脑".into());
         let root = self.root.clone();
-        let game_dir = row
-            .game_dir
-            .clone()
-            .unwrap_or_else(|| self.root.dir().to_path_buf());
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         std::thread::spawn(move || {
@@ -1039,8 +1148,8 @@ impl App {
             let sink = from_fn(move |p| {
                 let _ = progress.send(Msg::Progress(p));
             });
-            let msg = match bench::run(&root, &row.profile, &game_dir, &sink) {
-                Ok(record) => Msg::BenchDone(Ok(record)),
+            let msg = match bench::run(&root, &sink) {
+                Ok(store) => Msg::BenchDone(Ok(store)),
                 Err(Error::Cancelled) => Msg::BenchCancelled,
                 Err(e) => Msg::BenchDone(Err(e.to_string())),
             };
@@ -1057,12 +1166,13 @@ impl App {
         self.tuning_cache.clear();
     }
 
-    /// 开始实测前说清楚会发生什么。
+    /// 开始测试前说清楚会发生什么。
     fn bench_overlay(&mut self, ctx: &egui::Context) {
         if !self.bench_confirm {
             return;
         }
-        let label = self.selected_row().map(|row| row.label);
+        let (picked, _) = bench::candidates(&self.javas);
+        let can_run = !picked.is_empty();
         let mut start = false;
         let mut close = false;
         let modal = egui::Modal::new(egui::Id::unique("bench_modal"))
@@ -1077,25 +1187,34 @@ impl App {
             .show(ctx, |ui| {
                 ui.set_width(440.0);
                 ui.label(
-                    egui::RichText::new("实测调优")
+                    egui::RichText::new("测一下这台电脑")
                         .size(24.0)
                         .family(display_family()),
                 );
                 ui.label(
-                    egui::RichText::new(match &label {
-                        Some(label) => format!("给「{}」跑一次真实的测试", short_text(label, 24)),
-                        None => "先选一个版本".into(),
+                    egui::RichText::new(if can_run {
+                        format!(
+                            "用 {} 比较 G1 和 ZGC，结论所有版本共用",
+                            picked
+                                .iter()
+                                .map(|java| format!("Java {}", java.major))
+                                .collect::<Vec<_>>()
+                                .join("、")
+                        )
+                    } else {
+                        "这台电脑没有 64 位的 Java 21 或更新版本：只能用 G1，不需要测试".into()
                     })
                     .size(13.0)
-                    .color(t::sub()),
+                    .color(if can_run { t::sub() } else { t::warn() }),
                 );
                 ui.add_space(14.0);
+                let minutes = (picked.len() as f32 * 1.4).ceil().max(1.0) as u32;
                 for line in [
-                    "会打开游戏窗口，在测试世界里自动飞行，持续生成新地形",
-                    "跑 2–3 轮，每轮加载游戏再飞 1 分钟，一共约 5–10 分钟",
-                    "测试期间不要操作游戏窗口，声音已经关掉",
-                    "用的是单独的测试实例，不会碰你的存档和设置",
-                    "测完记下需要多少内存、G1 还是 ZGC，之后「自动」按实测启动",
+                    "不开游戏，也不碰任何版本：后台跑一个模拟游戏负载的小程序".to_string(),
+                    "负载照游戏来：常驻数据、区块缓存、生成线程、服务端和不封顶的渲染".to_string(),
+                    "比平均帧率、1% 低帧、能看出来的顿和 CPU，分常规和大型整合包两档".to_string(),
+                    format!("大约 {minutes} 分钟，期间电脑会比较忙，可以随时停止"),
+                    "内存大小不在这里测：正常玩一局，启动器会从游戏里学".to_string(),
                 ] {
                     ui.horizontal_wrapped(|ui| {
                         ui.label(egui::RichText::new("·").size(13.0).color(t::dim()));
@@ -1104,8 +1223,7 @@ impl App {
                 }
                 ui.add_space(16.0);
                 ui.horizontal(|ui| {
-                    if motion::primary_sized(ui, "开始测试", label.is_some(), 120.0, 34.0, 13.0)
-                    {
+                    if motion::primary_sized(ui, "开始测试", can_run, 120.0, 34.0, 13.0) {
                         start = true;
                     }
                     ui.add_space(8.0);
@@ -1155,6 +1273,11 @@ impl App {
                 let (Some(row), Some(plan)) = (row, plan) else {
                     return;
                 };
+                let entry = self
+                    .tuning_cache
+                    .get(&row.id)
+                    .and_then(|entry| entry.as_ref())
+                    .map(|(work, java, learned)| (work.clone(), java.clone(), learned.clone()));
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(plan.headline()).size(14.0));
@@ -1178,35 +1301,34 @@ impl App {
                 for warning in &plan.warnings {
                     ui.label(egui::RichText::new(warning).size(13.0).color(t::warn()));
                 }
-                let record = self
-                    .tuning_cache
-                    .get(&row.id)
-                    .and_then(|entry| entry.as_ref())
-                    .and_then(|(_, record)| record.clone());
+                // 内存从哪来：玩过就按实测，没玩过提示一句。
+                if plan.auto_memory
+                    && entry
+                        .as_ref()
+                        .is_none_or(|(_, _, learned)| learned.as_ref().is_none_or(|l| l.live_mb.is_none()))
+                {
+                    ui.label(
+                        egui::RichText::new("内存现在按公式估算；正常玩一局后改按游戏里的实测")
+                            .size(13.0)
+                            .color(t::dim()),
+                    );
+                }
+                // 回收器从哪来：这台电脑测过没有。
+                let java = entry.as_ref().map(|(_, java, _)| java.clone());
+                let (text, color, action) = self.bench_status(java.as_ref());
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
-                    let (text, color) = match &record {
-                        Some((record, true)) => (
-                            format!("{}实测过，结果已用在上面", bench::age(record.when)),
-                            t::dim(),
-                        ),
-                        Some(_) => (
-                            "实测结果已过期：Mod、Java 或内存有变化".to_string(),
-                            t::warn(),
-                        ),
-                        None => ("还没实测，现在按公式估算".to_string(), t::dim()),
-                    };
-                    ui.label(egui::RichText::new(text).size(13.0).color(color));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let label = if record.is_some() {
-                            "重新实测"
-                        } else {
-                            "实测调优"
-                        };
-                        if action_link(ui, label).clicked() {
-                            self.bench_confirm = true;
-                        }
-                    });
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(text).size(13.0).color(color))
+                            .truncate(),
+                    );
+                    if let Some(action) = action {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if action_link(ui, action).clicked() {
+                                self.bench_confirm = true;
+                            }
+                        });
+                    }
                 });
                 if !self.show_tuning {
                     if !self.jvm_args.trim().is_empty() {
@@ -1232,26 +1354,56 @@ impl App {
                     )
                     .wrap(),
                 );
-                if let Some((record, _)) = &record {
+                if let Some(store) = &self.bench_store {
                     ui.add_space(8.0);
-                    ui.label(egui::RichText::new("实测记录").size(13.0).color(t::sub()));
-                    for run in &record.runs {
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{}：{} · {}，加载 {:.0} 秒，{:.1} tick/s，最长停顿 {:.0} ms",
-                                run.label,
-                                run.collector.label(),
-                                tuning::gb(run.heap_mb),
-                                run.load_secs,
-                                run.tps,
-                                run.gc.max_ms
-                            ))
-                            .size(13.0)
-                            .color(t::sub()),
-                        );
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "这台电脑的测试（{}）",
+                            bench::age(store.when)
+                        ))
+                        .size(13.0)
+                        .color(t::sub()),
+                    );
+                    for result in &store.javas {
+                        for tier in &result.tiers {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "Java {} · {}档 → {}",
+                                    result.major,
+                                    tier.label,
+                                    tier.collector.label()
+                                ))
+                                .size(13.0)
+                                .color(t::sub()),
+                            );
+                            for run in [&tier.g1, &tier.zgc] {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "    {} {}：平均 {:.0} 帧 · 1% 低 {:.0} 帧 · 每分钟顿 {:.0} 次{}",
+                                        run.collector.label(),
+                                        tuning::gb(run.heap_mb),
+                                        run.fps,
+                                        run.low_fps,
+                                        run.hitches_per_min,
+                                        run.cpu_cores
+                                            .map(|c| format!(" · CPU {c:.1} 核"))
+                                            .unwrap_or_default()
+                                    ))
+                                    .size(13.0)
+                                    .color(t::dim()),
+                                );
+                            }
+                        }
+                        for note in &result.notes {
+                            ui.label(egui::RichText::new(note).size(13.0).color(t::dim()));
+                        }
                     }
-                    for note in &record.notes {
-                        ui.label(egui::RichText::new(note).size(13.0).color(t::dim()));
+                    for note in &store.skipped {
+                        ui.label(
+                            egui::RichText::new(format!("没测：{note}"))
+                                .size(13.0)
+                                .color(t::dim()),
+                        );
                     }
                 }
                 ui.add_space(10.0);
@@ -1267,6 +1419,66 @@ impl App {
                     ui.available_width(),
                 );
             });
+    }
+
+    /// 回收器那一行：测过没有、结论是什么、能不能再测。
+    fn bench_status(
+        &self,
+        java: Option<&java::JavaRuntime>,
+    ) -> (String, egui::Color32, Option<&'static str>) {
+        let testable = !bench::candidates(&self.javas).0.is_empty();
+        let Some(store) = &self.bench_store else {
+            return if testable {
+                (
+                    "回收器按经验选；测一下这台电脑更准，约 1–2 分钟".into(),
+                    t::dim(),
+                    Some("测一下"),
+                )
+            } else {
+                ("没有 Java 21+，回收器只能用 G1".into(), t::dim(), None)
+            };
+        };
+        if !store.fresh() {
+            return (
+                "上次测试后电脑的核数或内存变了，结论不再使用".into(),
+                t::warn(),
+                testable.then_some("重新测试"),
+            );
+        }
+        let age = bench::age(store.when);
+        match java {
+            Some(java) if java.major < 21 => (
+                format!("这个版本用 Java {}，只用 G1，不需要测试", java.major),
+                t::dim(),
+                testable.then_some("重新测试"),
+            ),
+            Some(java) if java.is_graal() => (
+                "这个版本用 GraalVM，只用 G1，不需要测试".into(),
+                t::dim(),
+                testable.then_some("重新测试"),
+            ),
+            Some(java) => match store.find(java) {
+                Some(result) => {
+                    let tiers = result
+                        .tiers
+                        .iter()
+                        .map(|tier| format!("{}档 {}", tier.label, tier.collector.label()))
+                        .collect::<Vec<_>>()
+                        .join("、");
+                    (
+                        format!("{age}测过这台电脑：Java {} {tiers}", result.major),
+                        t::dim(),
+                        Some("重新测试"),
+                    )
+                }
+                None => (
+                    format!("{age}的测试里没有 Java {}，回收器按经验选", java.major),
+                    t::dim(),
+                    Some("重新测试"),
+                ),
+            },
+            None => (format!("{age}测过这台电脑"), t::dim(), Some("重新测试")),
+        }
     }
 
     fn refresh(&mut self) {
@@ -1472,7 +1684,6 @@ impl App {
         self.show_install = true;
         self.show_manage = false;
         self.show_mods = false;
-        self.show_log = false;
         cancel::reset();
         self.cancel_requested = false;
         self.busy = Some(Task::Install);
@@ -1532,7 +1743,6 @@ impl App {
         if loader == LoaderKind::Vanilla {
             self.show_base = true;
         }
-        self.show_log = false;
         cancel::reset();
         self.cancel_requested = false;
         self.busy = Some(Task::Install);
@@ -1921,6 +2131,7 @@ impl App {
         let mut open_dir: Option<PathBuf> = None;
         let mut refresh = false;
         let mut recheck_java = false;
+        let mut open_log = false;
         let veil = t::veil(1.0);
         let modal = egui::Modal::new(egui::Id::unique("settings_modal"))
             .backdrop_color(veil)
@@ -2202,43 +2413,31 @@ impl App {
                                 },
                             );
                         });
-                        egui::CollapsingHeader::new(
-                            egui::RichText::new(format!(
-                                "日志（最近 {} 条）",
-                                self.log.len().min(80)
-                            ))
-                            .size(13.0)
-                            .color(t::sub()),
-                        )
-                        .open(std::mem::take(&mut self.show_log).then_some(true))
-                        .show(ui, |ui| {
-                            egui::Frame::new()
-                                .fill(t::bg())
-                                .stroke(egui::Stroke::new(1.0, t::hairline()))
-                                .corner_radius(motion::R)
-                                .inner_margin(egui::Margin::symmetric(10, 8))
-                                .show(ui, |ui| {
-                                    ui.set_width(444.0);
-                                    egui::ScrollArea::vertical()
-                                        .max_height(110.0)
-                                        .auto_shrink([false, false])
-                                        .stick_to_bottom(true)
-                                        .show(ui, |ui| {
-                                            for line in self.log.iter().rev().take(80).rev() {
-                                                ui.label(
-                                                    egui::RichText::new(line)
-                                                        .monospace()
-                                                        .size(13.0)
-                                                        .color(t::sub()),
-                                                );
-                                            }
-                                        });
-                                });
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(match &self.last_launch {
+                                    Some(last) => format!(
+                                        "最近一次启动：{}",
+                                        short_text(&last.label, 24)
+                                    ),
+                                    None => format!("启动器记录 {} 条", self.log.len()),
+                                })
+                                .size(13.0)
+                                .color(t::sub()),
+                            );
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if action_link(ui, "查看日志").clicked() {
+                                        open_log = true;
+                                    }
+                                },
+                            );
                         });
                         ui.add_space(10.0);
                         ui.label(
                             egui::RichText::new(
-                                "快捷键：Ctrl+1–4 切换页面 · Ctrl+, 设置 · Esc 关闭弹窗",
+                                "快捷键：Ctrl+1–4 切换页面 · Ctrl+F 搜索 · Ctrl+L 日志 · Ctrl+, 设置 · Esc 关闭弹窗",
                             )
                             .size(13.0)
                             .color(t::sub()),
@@ -2279,9 +2478,12 @@ impl App {
         if recheck_java {
             self.refresh_java();
         }
-        if close || self.bench_confirm {
+        if close || self.bench_confirm || open_log {
             self.save_ui_config();
             self.show_settings = false;
+        }
+        if open_log {
+            self.open_log();
         }
     }
 
@@ -2949,6 +3151,16 @@ impl App {
         self.launch_started = Some(Instant::now());
         self.running_row = Some(row.id.clone());
         self.log.push(format!("启动 {}", row.id));
+        self.last_launch = Some(logview::LastLaunch {
+            label: row.label.clone(),
+            log: launch::log_path(&self.root, &row.profile),
+            game_dir: row
+                .game_dir
+                .clone()
+                .unwrap_or_else(|| self.root.dir().to_path_buf()),
+            started: std::time::SystemTime::now(),
+            outcome: logview::Outcome::Running,
+        });
         self.tuning_cache.remove(&row.id);
         if let Some(plan) = self.tuning_for(&row) {
             self.log
@@ -2989,8 +3201,17 @@ impl App {
                 }
             }
             let msg = match launch::launch(&root, &row.profile, &opts) {
-                Ok(0) => Msg::LaunchDone(0),
-                Ok(code) => Msg::LaunchDone(code),
+                Ok(0) => Msg::LaunchDone(0, None),
+                Ok(code) => {
+                    // 在后台线程里读日志找原因，界面不用等。
+                    let reason = std::fs::read(launch::log_path(&root, &row.profile))
+                        .ok()
+                        .and_then(|bytes| {
+                            let tail = &bytes[bytes.len().saturating_sub(2 << 20)..];
+                            launch::diagnose(&String::from_utf8_lossy(tail))
+                        });
+                    Msg::LaunchDone(code, reason)
+                }
                 Err(e) => Msg::LaunchFailed(e.to_string()),
             };
             let _ = tx.send(msg);
@@ -3096,46 +3317,313 @@ impl App {
         self.mods_deps_loading = false;
     }
 
-    fn import_local_mod(&mut self, path: PathBuf) {
-        if self.busy.is_some() {
-            self.error = Some("正在安装，请等当前任务结束".into());
-            return;
+    /// 拖进来的内容装到哪：在内容页就是上面选的目标，其他页面是当前版本。
+    fn drop_target(&self) -> Option<(Row, PathBuf)> {
+        if self.show_mods {
+            return self.mods_row.clone().zip(self.mods_game_dir.clone());
         }
-        let Some(row) = self.selected_row() else {
-            self.error = Some("先选择一个 Fabric / NeoForge / Forge 版本".into());
-            return;
-        };
-        if mod_loader(row.loader).is_none() {
-            self.error = Some("原版不能安装 Mod".into());
-            return;
-        }
-        let game_dir = row
+        let row = self.selected_row()?;
+        let dir = row
             .game_dir
             .clone()
             .unwrap_or_else(|| self.root.version_dir(&row.profile));
-        if row.instance.is_none() {
-            if let Err(e) = std::fs::create_dir_all(&game_dir) {
-                self.error = Some(format!("创建版本目录失败: {e}"));
-                return;
-            }
-            if let Err(e) = std::fs::write(self.root.isolated_marker(&row.profile), b"1") {
-                self.error = Some(format!("启用版本隔离失败: {e}"));
-                return;
+        Some((row, dir))
+    }
+
+    /// 把拖进来的文件（或文件夹里的文件）分成内容、整合包和认不出的。
+    fn plan_drop(&self, paths: &[PathBuf]) -> DropPlan {
+        let mut files = Vec::new();
+        for path in paths {
+            if path.is_dir() {
+                let mut inside: Vec<PathBuf> = std::fs::read_dir(path)
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .map(|entry| entry.path())
+                    .filter(|p| {
+                        p.is_file() && installed::classify(p) != installed::Dropped::Unknown
+                    })
+                    .collect();
+                inside.sort();
+                files.extend(inside);
+            } else {
+                files.push(path.clone());
             }
         }
-        let loader = loader_state_files(&self.root, &row, &game_dir);
-        if let Err(e) = rollback::backup_extra(&game_dir, "导入本地文件前", &loader) {
-            self.error = Some(format!("无法创建恢复点: {e}"));
+        // 在资源包、光影页拖进不认识的 zip，就按当前页的类别装。
+        let page_kind =
+            (self.show_mods && self.mods_kind != mods::ContentKind::Mod).then_some(self.mods_kind);
+        let mut plan = DropPlan {
+            target: self.drop_target(),
+            ..Default::default()
+        };
+        for file in files {
+            match installed::classify(&file) {
+                installed::Dropped::Content(kind) => plan.items.push((file, kind)),
+                installed::Dropped::Modpack => plan.packs.push(file),
+                installed::Dropped::Archive => match page_kind {
+                    Some(kind) => plan.items.push((file, kind)),
+                    None => plan.unknown.push(file),
+                },
+                installed::Dropped::Unknown => plan.unknown.push(file),
+            }
+        }
+        plan
+    }
+
+    /// 悬停时的一句话：会装进哪、装几个；不能装时说为什么。
+    fn describe_drop(&self, plan: &DropPlan) -> (String, bool) {
+        if plan.items.is_empty() {
+            return match (plan.packs.len(), plan.unknown.len()) {
+                (1, 0) => ("松开导入整合包，自动装好加载器".into(), self.busy.is_none()),
+                (0, _) => (
+                    "认不出这些文件：支持 Mod .jar、资源包和光影 .zip、整合包 .mrpack".into(),
+                    false,
+                ),
+                _ => ("整合包一次拖一个".into(), false),
+            };
+        }
+        let Some((row, _)) = &plan.target else {
+            return ("先选一个版本：内容只会装进当前版本".into(), false);
+        };
+        if let Some(reason) = self.write_block(Some(&row.id)) {
+            return (reason.into(), false);
+        }
+        if plan
+            .items
+            .iter()
+            .any(|(_, kind)| *kind == mods::ContentKind::Mod)
+            && mod_loader(row.loader).is_none()
+        {
+            return (
+                format!("「{}」是原版，不能装 Mod", short_text(&row.label, 20)),
+                false,
+            );
+        }
+        let mut extra = String::new();
+        if !plan.packs.is_empty() || !plan.unknown.is_empty() {
+            extra = format!(
+                "（另有 {} 个不是内容，会跳过）",
+                plan.packs.len() + plan.unknown.len()
+            );
+        }
+        (
+            format!(
+                "松开导入 {} → {}{extra}",
+                count_kinds(plan.items.iter().map(|(_, kind)| *kind)),
+                short_text(&row.label, 24)
+            ),
+            true,
+        )
+    }
+
+    /// 导入一批拖进来或选中的文件：整批只留一个恢复点，已经装过的跳过。
+    fn import_dropped(&mut self, plan: DropPlan) {
+        let on_content = self.show_mods;
+        let mut imported: Vec<mods::ContentKind> = Vec::new();
+        let mut names: Vec<String> = Vec::new();
+        let mut skipped: Vec<String> = Vec::new();
+        let mut problems: Vec<String> = Vec::new();
+        let mut marked = false;
+        if !plan.items.is_empty() {
+            let (reason, ok) = self.describe_drop(&DropPlan {
+                target: plan.target.clone(),
+                items: plan.items.clone(),
+                ..Default::default()
+            });
+            match (&plan.target, ok) {
+                (Some((row, game_dir)), true) => {
+                    let fresh: Vec<&(PathBuf, mods::ContentKind)> = plan
+                        .items
+                        .iter()
+                        .filter(|(path, kind)| {
+                            let file = path
+                                .file_name()
+                                .map(|f| f.to_string_lossy().to_string())
+                                .unwrap_or_default();
+                            let known = installed::contains(game_dir, *kind, &file);
+                            if known {
+                                skipped.push(file);
+                            }
+                            !known
+                        })
+                        .collect();
+                    if !fresh.is_empty() {
+                        if row.instance.is_none()
+                            && !self.root.isolated_marker(&row.profile).exists()
+                        {
+                            let _ = std::fs::create_dir_all(game_dir);
+                            match std::fs::write(self.root.isolated_marker(&row.profile), b"1") {
+                                Ok(()) => marked = true,
+                                Err(e) => problems.push(format!("启用版本隔离失败: {e}")),
+                            }
+                        }
+                        let loader = loader_state_files(&self.root, row, game_dir);
+                        if problems.is_empty() {
+                            if let Err(e) = rollback::backup_extra(game_dir, "导入内容前", &loader)
+                            {
+                                problems.push(format!("无法创建恢复点: {e}"));
+                            } else {
+                                for (path, kind) in fresh {
+                                    match installed::import_local(game_dir, *kind, path) {
+                                        Ok(entry) => {
+                                            self.mods_recent.insert(entry.file.clone());
+                                            names.push(entry.name);
+                                            imported.push(*kind);
+                                        }
+                                        Err(e) => problems.push(e.to_string()),
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => problems.push(reason),
+            }
+        }
+        let lone_pack = plan.items.is_empty() && plan.unknown.is_empty() && plan.packs.len() == 1;
+        if !plan.unknown.is_empty() {
+            let shown = plan
+                .unknown
+                .iter()
+                .take(2)
+                .filter_map(|p| p.file_name().map(|f| f.to_string_lossy().to_string()))
+                .collect::<Vec<_>>()
+                .join("、");
+            problems.push(format!(
+                "认不出 {shown}{}：支持 Mod .jar、资源包和光影 .zip、整合包 .mrpack",
+                if plan.unknown.len() > 2 { " 等" } else { "" }
+            ));
+        }
+        if !plan.packs.is_empty() && !lone_pack {
+            problems.push("整合包要单独拖进来，一次一个".into());
+        }
+
+        let mut notice = None;
+        if !imported.is_empty() {
+            let mut text = format!(
+                "已导入 {}：{}",
+                count_kinds(imported.iter().copied()),
+                short_text(&names.join("、"), 60)
+            );
+            if !skipped.is_empty() {
+                text.push_str(&format!("；{} 个已经装过，跳过", skipped.len()));
+            }
+            notice = Some(text);
+        } else if !skipped.is_empty() {
+            notice = Some(format!("{} 个文件已经装过，没有重复导入", skipped.len()));
+        }
+        let error = (!problems.is_empty()).then(|| problems.join("；"));
+        if on_content {
+            self.mods_notice = notice;
+            self.mods_error = error;
+        } else {
+            self.notice = notice;
+            self.error = error;
+        }
+        if lone_pack {
+            if self.busy.is_none() {
+                self.start_modpack(plan.packs[0].clone());
+            } else {
+                self.error = Some(self.busy_reason().into());
+            }
             return;
         }
-        match installed::import_local(&game_dir, mods::ContentKind::Mod, &path) {
-            Ok(entry) => {
-                self.notice = Some(format!("已导入 {}", entry.name));
-                self.error = None;
-                self.refresh();
-            }
-            Err(e) => self.error = Some(e.to_string()),
+        if imported.is_empty() {
+            return;
         }
+        if marked {
+            self.refresh();
+        }
+        if on_content {
+            // 新导入的要看得见：清掉筛选；全是另一类时切到那一类。
+            self.mods_status = StatusFilter::All;
+            self.mods_filter.clear();
+            if let Some(&kind) = imported.first()
+                && imported.iter().all(|k| *k == kind)
+                && kind != self.mods_kind
+            {
+                self.mods_kind = kind;
+            }
+            self.start_mods_scan();
+        } else {
+            self.home_cache = None;
+            self.tuning_cache.clear();
+        }
+    }
+
+    /// 文件管理器里改过内容目录、回到窗口时自动重扫。
+    fn rescan_if_changed(&mut self) {
+        if !(self.show_mods && self.mods_show_installed) || self.mods_scan_rx.is_some() {
+            return;
+        }
+        let Some(game_dir) = &self.mods_game_dir else {
+            return;
+        };
+        if content_signature(game_dir) != self.mods_dir_sig {
+            self.mods_notice = None;
+            self.start_mods_scan();
+        }
+    }
+
+    /// 拖着文件经过窗口时，盖一层说明会装到哪。安装页有自己的拖放区，不盖。
+    fn drop_overlay(&mut self, ui: &mut egui::Ui) {
+        let hovered: Vec<PathBuf> = ui.ctx().input(|i| {
+            i.raw
+                .hovered_files
+                .iter()
+                .filter_map(|file| file.path.clone())
+                .collect()
+        });
+        let dragging = ui.ctx().input(|i| !i.raw.hovered_files.is_empty());
+        if !dragging || self.show_install {
+            self.drop_preview = None;
+            return;
+        }
+        let stale = self
+            .drop_preview
+            .as_ref()
+            .is_none_or(|(paths, _, _)| *paths != hovered);
+        if stale {
+            let (text, ok) = if hovered.is_empty() {
+                ("松开导入".to_string(), true)
+            } else {
+                self.describe_drop(&self.plan_drop(&hovered))
+            };
+            self.drop_preview = Some((hovered, text, ok));
+        }
+        let Some((_, text, ok)) = &self.drop_preview else {
+            return;
+        };
+        let rect = ui.max_rect();
+        let painter = ui.painter();
+        painter.rect_filled(rect, 0.0, t::tint(t::bg(), 0.88));
+        let zone = rect.shrink(24.0);
+        let color = if *ok { t::accent() } else { t::warn() };
+        painter.rect_stroke(
+            zone,
+            motion::R,
+            egui::Stroke::new(1.5, t::tint(color, 0.7)),
+            egui::StrokeKind::Inside,
+        );
+        painter.text(
+            zone.center() - egui::vec2(0.0, 14.0),
+            egui::Align2::CENTER_CENTER,
+            if *ok {
+                "松开导入"
+            } else {
+                "这里不能导入"
+            },
+            egui::FontId::new(22.0, display_family()),
+            t::ink(),
+        );
+        painter.text(
+            zone.center() + egui::vec2(0.0, 18.0),
+            egui::Align2::CENTER_CENTER,
+            text,
+            egui::FontId::proportional(14.0),
+            color,
+        );
     }
 
     fn start_mods_scan(&mut self) {
@@ -3147,6 +3635,7 @@ impl App {
         };
         self.mods_installed_loading = true;
         self.mods_error = None;
+        self.mods_dir_sig = content_signature(&game_dir);
         let (tx, rx) = mpsc::channel();
         self.mods_scan_rx = Some(rx);
         std::thread::spawn(move || {
@@ -4108,7 +4597,6 @@ impl App {
                     self.progress = None;
                     self.rx = None;
                     self.show_install = true;
-                    self.show_log = true;
                     self.log.push(format!("安装未完成: {e}"));
                     if e.contains("操作已取消") {
                         self.error = None;
@@ -4125,7 +4613,6 @@ impl App {
                     self.progress = None;
                     self.rx = None;
                     self.show_install = true;
-                    self.show_log = false;
                     self.error = None;
                     self.notice =
                         Some("安装已取消，已下载的部分会保留；重新开始会检查并补全。".into());
@@ -4392,7 +4879,10 @@ impl App {
                         }
                     }
                 }
-                Msg::LaunchDone(code) => {
+                Msg::LaunchDone(code, reason) => {
+                    if let Some(last) = &mut self.last_launch {
+                        last.outcome = logview::Outcome::Exited(code);
+                    }
                     self.busy = None;
                     self.running_row = None;
                     // 每玩完一局就给世界留一份快照，比按时间间隔更贴近“坏了能救”。
@@ -4400,49 +4890,71 @@ impl App {
                         self.start_auto_backup();
                     }
                     self.rx = None;
+                    self.tuning_cache.clear();
                     if code == 0 {
                         self.notice = Some("游戏已退出".into());
                     } else {
-                        self.error =
-                            Some(format!("游戏异常退出（代码 {code}），可以查看日志找原因"));
+                        self.log.push(format!("游戏异常退出（代码 {code}）"));
+                        self.error = Some(match reason {
+                            Some(reason) => format!("游戏异常退出（代码 {code}）：{reason}"),
+                            None => {
+                                format!("游戏异常退出（代码 {code}），日志里标红的是出错的地方")
+                            }
+                        });
                     }
                 }
                 Msg::LaunchFailed(e) => {
+                    if let Some(last) = &mut self.last_launch {
+                        last.outcome = logview::Outcome::Failed(e.clone());
+                    }
                     self.busy = None;
                     self.running_row = None;
                     self.rx = None;
-                    self.show_log = true;
                     self.error = Some(format!("启动失败：{e}"));
                     self.log.push(format!("启动失败: {e}"));
                 }
                 Msg::BenchDone(result) => {
                     self.finish_bench();
                     match result {
-                        Ok(record) => {
-                            let heap = match record.collector {
-                                tuning::Collector::Zgc => {
-                                    record.zgc_heap_mb.unwrap_or(record.g1_heap_mb)
+                        Ok(store) => {
+                            let summary = store
+                                .javas
+                                .iter()
+                                .map(|java| {
+                                    let tiers = java
+                                        .tiers
+                                        .iter()
+                                        .map(|tier| {
+                                            format!("{} {}", tier.label, tier.collector.label())
+                                        })
+                                        .collect::<Vec<_>>()
+                                        .join("、");
+                                    format!("Java {} {tiers}", java.major)
+                                })
+                                .collect::<Vec<_>>()
+                                .join("；");
+                            self.log.push(format!("测试完成：{summary}"));
+                            for java in &store.javas {
+                                for tier in &java.tiers {
+                                    self.log.extend(tier.notes.iter().cloned());
                                 }
-                                tuning::Collector::G1 => record.g1_heap_mb,
-                            };
-                            let summary =
-                                format!("{} · {}", record.collector.label(), tuning::gb(heap));
-                            self.log.push(format!("实测完成：{summary}"));
-                            self.log.extend(record.notes.iter().cloned());
+                            }
                             self.notice =
-                                Some(format!("实测完成：{summary}，之后「自动」按这个启动"));
+                                Some(format!("测试完成：{summary}。之后「自动」回收器按它选"));
+                            self.bench_store = Some(store);
+                            self.tuning_cache.clear();
                             self.show_settings = true;
                             self.show_tuning = true;
                         }
                         Err(e) => {
-                            self.log.push(format!("实测失败: {e}"));
-                            self.error = Some(format!("实测没完成：{e}"));
+                            self.log.push(format!("测试失败: {e}"));
+                            self.error = Some(format!("测试没完成：{e}"));
                         }
                     }
                 }
                 Msg::BenchCancelled => {
                     self.finish_bench();
-                    self.notice = Some("实测已停止，设置没有任何改动".into());
+                    self.notice = Some("测试已停止，之前的结论没有改动".into());
                 }
             }
         }
@@ -5137,10 +5649,10 @@ impl App {
                                         )
                                         .frame(false),
                                     )
+                                    .on_hover_text("直接打开这次的游戏输出（Ctrl+L）")
                                     .clicked()
                                 {
-                                    self.show_log = true;
-                                    self.show_settings = true;
+                                    self.open_log();
                                 }
                             });
                             ui.add_space(6.0);
@@ -5201,7 +5713,7 @@ impl App {
                             };
                             ui.label(
                                 egui::RichText::new(format!(
-                                    "{java}    {memory}    拖入 .mrpack 可导入整合包"
+                                    "{java}    {memory}    Mod、资源包、整合包都可以直接拖进窗口"
                                 ))
                                 .size(13.0)
                                 .color(if self.java_ok {
@@ -5382,7 +5894,10 @@ impl App {
                     });
                 if !self.mods_show_installed {
                     let go = motion::secondary_sized(ui, "搜索", true, 54.0, 30.0, 10.5).clicked();
-                    let response = text_field(ui, &mut self.mods_query, "名称或关键词", 180.0);
+                    let response = search_field(ui, &mut self.mods_query, "名称或关键词", 200.0);
+                    if std::mem::take(&mut self.focus_search) {
+                        response.request_focus();
+                    }
                     let enter =
                         response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                     if go || enter {
@@ -5455,6 +5970,7 @@ impl App {
             self.mods_shelf = None;
             self.mods_searching = false;
             self.mods_filter.clear();
+            self.mods_status = StatusFilter::All;
             self.mods_delete_confirm = None;
             self.mods_notice = None;
             self.mods_error = None;
@@ -5602,6 +6118,8 @@ impl App {
                 self.mods_loader = None;
             }
         }
+        self.mods_status = StatusFilter::All;
+        self.mods_recent.clear();
         self.mods_selected = None;
         self.mods_versions.clear();
         self.mods_version = None;
@@ -7550,6 +8068,7 @@ impl App {
         let mut toggles: Vec<(installed::InstalledEntry, bool)> = Vec::new();
         let mut deletes: Vec<installed::InstalledEntry> = Vec::new();
         let mut open_dir = false;
+        let mut reveal: Option<PathBuf> = None;
         let mut open_rollback = false;
 
         let entries_all: Vec<installed::InstalledEntry> = self
@@ -7560,16 +8079,6 @@ impl App {
             .collect();
         let enabled = entries_all.iter().filter(|entry| entry.enabled).count();
         let disabled = entries_all.len().saturating_sub(enabled);
-        let filter = self.mods_filter.trim().to_lowercase();
-        let entries: Vec<installed::InstalledEntry> = entries_all
-            .iter()
-            .filter(|entry| {
-                filter.is_empty()
-                    || entry.name.to_lowercase().contains(&filter)
-                    || entry.file.to_lowercase().contains(&filter)
-            })
-            .cloned()
-            .collect();
         let updates: Vec<installed::UpdateCandidate> = self
             .mods_updates
             .iter()
@@ -7577,40 +8086,65 @@ impl App {
             .cloned()
             .collect();
         let groups = installed::duplicates(&entries_all);
+        // 重复的按组排在一起，同一个 Mod 的两份挨着，方便留一份。
+        let duplicate_rank: HashMap<String, usize> = groups
+            .iter()
+            .enumerate()
+            .flat_map(|(rank, (_, items))| {
+                items.iter().map(move |entry| (entry.file.clone(), rank))
+            })
+            .collect();
+        let status = self.mods_status;
+        let query = self.mods_filter.trim().to_lowercase();
+        let mut entries: Vec<installed::InstalledEntry> = entries_all
+            .iter()
+            .filter(|entry| match status {
+                StatusFilter::All => true,
+                StatusFilter::Enabled => entry.enabled,
+                StatusFilter::Disabled => !entry.enabled,
+                StatusFilter::Updates => updates.iter().any(|c| c.entry.file == entry.file),
+                StatusFilter::Duplicates => duplicate_rank.contains_key(&entry.file),
+            })
+            .filter(|entry| {
+                query.is_empty()
+                    || entry.name.to_lowercase().contains(&query)
+                    || entry.file.to_lowercase().contains(&query)
+                    || entry
+                        .mod_id
+                        .as_deref()
+                        .is_some_and(|id| id.to_lowercase().contains(&query))
+            })
+            .cloned()
+            .collect();
+        if status == StatusFilter::Duplicates {
+            entries.sort_by_key(|entry| duplicate_rank.get(&entry.file).copied());
+        }
+        let filtered = status != StatusFilter::All || !query.is_empty();
 
+        // 第一行：搜索在左，文件相关的动作在右。
+        let mut wanted_status: Option<StatusFilter> = None;
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("已安装").size(13.0).color(t::sub()));
-            ui.add_space(2.0);
-            ui.label(
-                egui::RichText::new(entries_all.len().to_string())
-                    .size(15.0)
-                    .family(bold_family()),
+            let search = search_field(
+                ui,
+                &mut self.mods_filter,
+                &if kind.label().is_ascii() {
+                    format!("搜索 {} 名称或文件名", kind.label())
+                } else {
+                    format!("搜索{}名称或文件名", kind.label())
+                },
+                240.0,
             );
-            if disabled > 0 {
-                inline_dot(ui);
-                ui.label(
-                    egui::RichText::new(format!("{disabled} 个已禁用"))
-                        .size(13.0)
-                        .color(t::warn()),
-                );
+            if std::mem::take(&mut self.focus_search) {
+                search.request_focus();
             }
-            if !filter.is_empty() {
-                inline_dot(ui);
-                ui.label(
-                    egui::RichText::new(format!("筛选出 {}", entries.len()))
-                        .size(13.0)
-                        .color(t::sub()),
-                );
-            }
-            ui.add_space(8.0);
-            if motion::secondary_sized(ui, "恢复点", true, 66.0, 24.0, 10.0)
-                .on_hover_text("恢复 Mod / 配置到之前的状态")
-                .clicked()
-            {
-                open_rollback = true;
+            if search.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.mods_filter.clear();
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if accent_outline(ui, "＋ 导入文件").clicked() {
+                if accent_outline(ui, "＋ 导入文件")
+                    .on_hover_text("也可以直接把文件拖进窗口，一次可以拖很多个")
+                    .clicked()
+                {
                     import = true;
                 }
                 ui.add_space(2.0);
@@ -7621,13 +8155,74 @@ impl App {
                 {
                     check_updates = true;
                 }
-                if quick_action(ui, "重新扫描").clicked() {
-                    rescan = true;
+                if quick_action(ui, "打开文件夹")
+                    .on_hover_text(game_dir.join(kind.folder()).display().to_string())
+                    .clicked()
+                {
+                    open_dir = true;
                 }
-                ui.add_space(2.0);
-                text_field(ui, &mut self.mods_filter, "筛选", 132.0);
             });
         });
+
+        // 第二行：状态就是筛选。只显示有东西的状态。
+        if !entries_all.is_empty() {
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                for (filter, count, tone) in [
+                    (StatusFilter::All, entries_all.len(), None),
+                    (StatusFilter::Enabled, enabled, None),
+                    (StatusFilter::Disabled, disabled, Some(t::warn())),
+                    (StatusFilter::Updates, updates.len(), Some(t::accent())),
+                    (
+                        StatusFilter::Duplicates,
+                        duplicate_rank.len(),
+                        Some(t::warn()),
+                    ),
+                ] {
+                    let show = match filter {
+                        StatusFilter::All => true,
+                        StatusFilter::Enabled | StatusFilter::Disabled => disabled > 0,
+                        _ => count > 0,
+                    };
+                    if !show && status != filter {
+                        continue;
+                    }
+                    if status_chip(ui, filter.label(), count, status == filter, tone).clicked() {
+                        wanted_status = Some(if status == filter {
+                            StatusFilter::All
+                        } else {
+                            filter
+                        });
+                    }
+                }
+                if filtered {
+                    inline_dot(ui);
+                    ui.label(
+                        egui::RichText::new(format!("显示 {} 项", entries.len()))
+                            .size(13.0)
+                            .color(t::sub()),
+                    );
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if action_link(ui, "重新扫描")
+                        .on_hover_text("回到窗口时会自动发现文件夹里的变化，一般不用点")
+                        .clicked()
+                    {
+                        rescan = true;
+                    }
+                    if action_link(ui, "恢复点")
+                        .on_hover_text("恢复 Mod / 配置到之前的状态")
+                        .clicked()
+                    {
+                        open_rollback = true;
+                    }
+                });
+            });
+        }
+        if let Some(filter) = wanted_status {
+            self.mods_status = filter;
+            self.mods_delete_confirm = None;
+        }
 
         if self.mods_updates_loading {
             ui.add_space(9.0);
@@ -7736,31 +8331,42 @@ impl App {
                     });
             }
 
-            if !groups.is_empty() {
+            if !groups.is_empty() && status != StatusFilter::Duplicates {
                 let names = groups
                     .iter()
-                    .map(|(_, items)| {
-                        items
-                            .iter()
-                            .map(|entry| entry.name.clone())
-                            .collect::<Vec<_>>()
-                            .join(" / ")
-                    })
+                    .map(|(_, items)| items[0].name.clone())
                     .collect::<Vec<_>>()
-                    .join("；");
+                    .join("、");
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
                     status_dot(ui, false);
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "{} 组重复安装：{}",
-                            groups.len(),
-                            short_text(&names, 86)
-                        ))
-                        .size(13.0)
-                        .color(t::warn()),
+                    ui.add_space(2.0);
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(format!(
+                                "{} 个 Mod 装了不止一份：{}",
+                                groups.len(),
+                                short_text(&names, 60)
+                            ))
+                            .size(13.0)
+                            .color(t::warn()),
+                        )
+                        .truncate(),
                     );
+                    if action_link(ui, "只看这些").clicked() {
+                        self.mods_status = StatusFilter::Duplicates;
+                        self.mods_delete_confirm = None;
+                    }
                 });
+            } else if status == StatusFilter::Duplicates && !groups.is_empty() {
+                ui.add_space(10.0);
+                ui.label(
+                    egui::RichText::new(
+                        "同一个 Mod 的几份挨在一起：留一份，其余禁用或删除，游戏才不会报重复",
+                    )
+                    .size(13.0)
+                    .color(t::sub()),
+                );
             }
 
             if entries.is_empty() {
@@ -7772,17 +8378,24 @@ impl App {
                     .inner_margin(egui::Margin::symmetric(24, 26))
                     .show(ui, |ui| {
                         ui.vertical_centered(|ui| {
-                            ui.label(
-                                egui::RichText::new(format!(
-                                    "没有匹配「{}」的内容",
+                            let title = match (query.is_empty(), status) {
+                                (false, StatusFilter::All) => {
+                                    format!("没有匹配「{}」的内容", self.mods_filter.trim())
+                                }
+                                (false, filter) => format!(
+                                    "{}里没有匹配「{}」的",
+                                    filter.label(),
                                     self.mods_filter.trim()
-                                ))
-                                .size(15.0)
-                                .family(bold_family()),
-                            );
+                                ),
+                                (true, filter) => {
+                                    format!("没有{}的{}", filter.label(), kind.label())
+                                }
+                            };
+                            ui.label(egui::RichText::new(title).size(15.0).family(bold_family()));
                             ui.add_space(8.0);
-                            if action_link(ui, "清除筛选").clicked() {
+                            if action_link(ui, "清除筛选，看全部").clicked() {
                                 self.mods_filter.clear();
+                                self.mods_status = StatusFilter::All;
                                 self.mods_delete_confirm = None;
                             }
                         });
@@ -7806,13 +8419,14 @@ impl App {
                                 size,
                                 candidate.map(|c| c.latest.version_number.as_str()),
                                 confirming,
+                                self.mods_recent.contains(&entry.file),
                                 index + 1 == entries.len(),
                             );
                             if let Some(enabled) = action.toggle {
                                 toggles.push((entry.clone(), enabled));
                             }
-                            if action.open {
-                                open_dir = true;
+                            if action.reveal {
+                                reveal = Some(installed::path_of(&game_dir, entry));
                             }
                             if action.ask_delete {
                                 self.mods_delete_confirm = Some(entry.file.clone());
@@ -7857,18 +8471,16 @@ impl App {
             update_one = None;
             open_rollback = false;
         }
-        if import && let Some(path) = pick_content_file(kind) {
-            if let Err(e) = rollback::backup_extra(&game_dir, "导入内容前", &loader_files) {
-                self.mods_error = Some(format!("无法创建恢复点: {e}"));
-            } else {
-                match installed::import_local(&game_dir, kind, &path) {
-                    Ok(entry) => {
-                        self.mods_notice = Some(format!("已导入 {}", entry.name));
-                        self.mods_error = None;
-                        self.start_mods_scan();
-                    }
-                    Err(e) => self.mods_error = Some(e.to_string()),
-                }
+        if import {
+            let files = pick_content_files(kind);
+            if !files.is_empty() {
+                // 从对话框选的，类别就是当前页：资源包也可能是 .jar。
+                let plan = DropPlan {
+                    target: self.drop_target(),
+                    items: files.into_iter().map(|file| (file, kind)).collect(),
+                    ..Default::default()
+                };
+                self.import_dropped(plan);
             }
         }
         if rescan {
@@ -7879,7 +8491,12 @@ impl App {
             self.start_mods_update_check();
         }
         if open_dir {
-            open_folder(&game_dir.join(kind.folder()));
+            let dir = game_dir.join(kind.folder());
+            let _ = std::fs::create_dir_all(&dir);
+            open_folder(&dir);
+        }
+        if let Some(path) = reveal {
+            reveal_file(&path);
         }
         for (entry, enabled) in toggles {
             let mut copy = entry.clone();
@@ -8997,7 +9614,7 @@ impl App {
         let bench = matches!(self.busy, Some(Task::Bench));
         let title = match self.busy {
             Some(Task::Mods) => "正在下载内容",
-            Some(Task::Bench) => "正在实测调参",
+            Some(Task::Bench) => "正在测试",
             _ => "正在安装",
         };
         let width = ui.available_width().min(520.0);
@@ -9011,7 +9628,7 @@ impl App {
         let compact_h = ui.ctx().content_rect().height() < 680.0;
         let ring_h: f32 = if compact_h { 200.0 } else { 260.0 };
         let files = if bench {
-            "测试会打开游戏窗口自动飞行，请不要操作它".to_string()
+            "后台跑模拟负载，不开游戏窗口；期间电脑会比较忙".to_string()
         } else if p.files_total > 0 {
             format!("{} / {} 个文件", p.files_done, p.files_total)
         } else {
@@ -9098,7 +9715,7 @@ impl App {
                     ui.add_space(4.0);
                     ui.label(
                         egui::RichText::new(if bench {
-                            "测试用的是单独的实例，不会碰你的存档和设置"
+                            "不碰任何版本、存档和设置；停止后之前的结论保持不变"
                         } else {
                             "已完成的部分会保留，下次只补缺失文件"
                         })
@@ -9126,40 +9743,30 @@ impl eframe::App for App {
             ui.ctx().request_repaint_after(Duration::from_secs(5));
             self.maybe_auto_backup();
         }
-        let dropped = ui
+        let dropped: Vec<PathBuf> = ui
             .ctx()
-            .input_mut(|i| std::mem::take(&mut i.raw.dropped_files));
-        for file in dropped {
-            let path = file.path().to_path_buf();
-            let is_pack = path
-                .extension()
-                .map(|e| {
-                    let ext = e.to_string_lossy();
-                    ext.eq_ignore_ascii_case("mrpack") || ext.eq_ignore_ascii_case("zip")
-                })
-                .unwrap_or(false);
-            let is_mod = path
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("jar"));
-            if is_pack {
+            .input_mut(|i| std::mem::take(&mut i.raw.dropped_files))
+            .into_iter()
+            .map(|file| file.path().to_path_buf())
+            .collect();
+        // 安装页有自己的整合包拖放区，那里只认整合包。
+        if !dropped.is_empty() {
+            self.drop_preview = None;
+            let plan = self.plan_drop(&dropped);
+            if self.show_install && plan.items.is_empty() && plan.packs.len() == 1 {
                 if self.busy.is_none() {
-                    self.start_modpack(path);
-                } else {
-                    self.error = Some(
-                        if matches!(self.busy, Some(Task::Launch)) {
-                            "游戏运行中，退出游戏后再导入整合包"
-                        } else {
-                            "正在安装，请等当前任务结束"
-                        }
-                        .into(),
-                    );
+                    self.start_modpack(plan.packs[0].clone());
                 }
-            } else if is_mod {
-                self.import_local_mod(path);
             } else {
-                self.error = Some("支持整合包 .mrpack/.zip，或单个 Mod .jar".into());
+                self.import_dropped(plan);
             }
         }
+        // 回到窗口时，文件管理器里做的改动直接反映出来，不用点「重新扫描」。
+        let focused = ui.ctx().input(|i| i.focused);
+        if focused && !self.window_focused {
+            self.rescan_if_changed();
+        }
+        self.window_focused = focused;
         if self.busy.is_some()
             || self.login_busy
             || self.saves_rx.is_some()
@@ -9218,6 +9825,7 @@ impl eframe::App for App {
                 if matches!(page, 2..=8) {
                     self.message_bar(ui);
                 }
+                self.drop_overlay(ui);
                 // 用一层底色做淡入：嵌套面板各有画笔，逐个调透明度并不可靠。
                 let veil = 1.0 - eased;
                 if veil > 0.001 {
@@ -9230,6 +9838,7 @@ impl eframe::App for App {
         self.bench_overlay(ui.ctx());
         self.rollback_overlay(ui.ctx());
         self.install_review_overlay(ui.ctx());
+        self.log_overlay(ui.ctx());
         motion::focus_ring(ui.ctx());
     }
 }
@@ -9724,14 +10333,72 @@ fn ghost_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
     )
 }
 
-fn pick_content_file(kind: mods::ContentKind) -> Option<PathBuf> {
-    let dialog = rfd::FileDialog::new().set_title(format!("选择{}文件", kind.label()));
+fn pick_content_files(kind: mods::ContentKind) -> Vec<PathBuf> {
+    let dialog = rfd::FileDialog::new().set_title(format!("选择{}文件（可多选）", kind.label()));
     match kind {
-        mods::ContentKind::Mod => dialog.add_filter("Mod", &["jar"]).pick_file(),
+        mods::ContentKind::Mod => dialog.add_filter("Mod", &["jar"]),
         mods::ContentKind::ResourcePack | mods::ContentKind::Shader => {
-            dialog.add_filter("内容包", &["zip", "jar"]).pick_file()
+            dialog.add_filter("内容包", &["zip", "jar"])
         }
     }
+    .pick_files()
+    .unwrap_or_default()
+}
+
+/// 例如「3 个 Mod」「2 个 Mod、1 个资源包」。
+fn count_kinds(kinds: impl Iterator<Item = mods::ContentKind>) -> String {
+    let mut counts: Vec<(mods::ContentKind, usize)> = Vec::new();
+    for kind in kinds {
+        match counts.iter_mut().find(|(k, _)| *k == kind) {
+            Some((_, n)) => *n += 1,
+            None => counts.push((kind, 1)),
+        }
+    }
+    counts
+        .iter()
+        .map(|(kind, n)| {
+            let label = kind.label();
+            if label.is_ascii() {
+                format!("{n} 个 {label}")
+            } else {
+                format!("{n} 个{label}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("、")
+}
+
+/// 三个内容目录的文件名、大小和修改时间合成一个数，用来发现外面的改动。
+fn content_signature(game_dir: &std::path::Path) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for kind in [
+        mods::ContentKind::Mod,
+        mods::ContentKind::ResourcePack,
+        mods::ContentKind::Shader,
+    ] {
+        let mut items: Vec<(String, u64, u64)> = std::fs::read_dir(game_dir.join(kind.folder()))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|entry| {
+                let meta = entry.metadata().ok()?;
+                let modified = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map_or(0, |d| d.as_secs());
+                Some((
+                    entry.file_name().to_string_lossy().to_string(),
+                    meta.len(),
+                    modified,
+                ))
+            })
+            .collect();
+        items.sort();
+        items.hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 fn pick_modpack() -> Option<PathBuf> {
@@ -9924,6 +10591,59 @@ fn open_folder(path: &std::path::Path) {
     let _ = std::process::Command::new("xdg-open").arg(path).spawn();
 }
 
+/// 在文件管理器里打开所在目录并选中这个文件；做不到时退回打开目录。
+fn reveal_file(path: &std::path::Path) {
+    #[cfg(target_os = "windows")]
+    {
+        let mut arg = std::ffi::OsString::from("/select,");
+        arg.push(path);
+        let _ = std::process::Command::new("explorer").arg(arg).spawn();
+    }
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open")
+        .arg("-R")
+        .arg(path)
+        .spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        // freedesktop 的 FileManager1 接口能选中文件（Dolphin、Nautilus、Nemo 都支持）。
+        let uri = format!("file://{}", percent_path(path));
+        let shown = std::process::Command::new("dbus-send")
+            .args([
+                "--session",
+                "--print-reply",
+                "--dest=org.freedesktop.FileManager1",
+                "--type=method_call",
+                "/org/freedesktop/FileManager1",
+                "org.freedesktop.FileManager1.ShowItems",
+                &format!("array:string:{uri}"),
+                "string:",
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success());
+        if !shown && let Some(parent) = path.parent() {
+            open_folder(parent);
+        }
+    }
+}
+
+/// 文件 URI 里的路径要百分号编码：中文目录名和空格都很常见。
+#[cfg(all(unix, not(target_os = "macos")))]
+fn percent_path(path: &std::path::Path) -> String {
+    use std::os::unix::ffi::OsStrExt;
+    let mut out = String::new();
+    for &byte in path.as_os_str().as_bytes() {
+        if byte.is_ascii_alphanumeric() || b"/-_.~".contains(&byte) {
+            out.push(byte as char);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
+}
+
 fn human_size(bytes: u64) -> String {
     const KIB: f64 = 1024.0;
     let size = bytes as f64;
@@ -10106,7 +10826,7 @@ fn toggle_switch(ui: &mut egui::Ui, on: bool) -> egui::Response {
 #[derive(Default)]
 struct RowAction {
     toggle: Option<bool>,
-    open: bool,
+    reveal: bool,
     ask_delete: bool,
     cancel_delete: bool,
     delete: bool,
@@ -10119,6 +10839,7 @@ fn installed_row(
     size: Option<u64>,
     update: Option<&str>,
     confirming: bool,
+    recent: bool,
     last: bool,
 ) -> RowAction {
     let mut action = RowAction::default();
@@ -10162,6 +10883,9 @@ fn installed_row(
                 .truncate(),
             );
             let mut meta = Vec::new();
+            if recent {
+                meta.push("刚导入".to_string());
+            }
             if !entry.enabled {
                 meta.push("已禁用".to_string());
             }
@@ -10179,7 +10903,7 @@ fn installed_row(
                 egui::Label::new(
                     egui::RichText::new(short_text(&meta.join(" · "), 92))
                         .size(13.0)
-                        .color(t::sub()),
+                        .color(if recent { t::accent() } else { t::sub() }),
                 )
                 .truncate(),
             );
@@ -10203,8 +10927,8 @@ fn installed_row(
             );
             let _ = menu.ui(ui, |ui| {
                 ui.set_min_width(150.0);
-                if ui.button("打开所在目录").clicked() {
-                    action.open = true;
+                if ui.button("在文件夹中显示").clicked() {
+                    action.reveal = true;
                     ui.close();
                 }
                 if ui
@@ -10485,6 +11209,105 @@ fn text_field(ui: &mut egui::Ui, text: &mut String, hint: &str, width: f32) -> e
                     .inner_margin(egui::Margin::symmetric(9, 4)),
             ),
     )
+}
+
+/// 搜索框：左边一个放大镜，有内容时右边一个清除按钮。
+fn search_field(ui: &mut egui::Ui, text: &mut String, hint: &str, width: f32) -> egui::Response {
+    let response = ui.add(
+        egui::TextEdit::singleline(text)
+            .hint_text(hint)
+            .desired_width(width)
+            .frame(
+                egui::Frame::new()
+                    .fill(t::surface())
+                    .stroke(egui::Stroke::new(1.0, t::hairline()))
+                    .corner_radius(motion::R)
+                    .inner_margin(egui::Margin {
+                        left: 28,
+                        right: 24,
+                        top: 5,
+                        bottom: 5,
+                    }),
+            ),
+    );
+    let rect = response.rect;
+    let color = if response.has_focus() {
+        t::sub()
+    } else {
+        t::dim()
+    };
+    let c = egui::pos2(rect.left() + 14.0, rect.center().y - 1.0);
+    let painter = ui.painter();
+    painter.circle_stroke(c, 4.5, egui::Stroke::new(1.3, color));
+    painter.line_segment(
+        [c + egui::vec2(3.3, 3.3), c + egui::vec2(6.6, 6.6)],
+        egui::Stroke::new(1.5, color),
+    );
+    if !text.is_empty() {
+        let clear = egui::Rect::from_center_size(
+            egui::pos2(rect.right() - 12.0, rect.center().y),
+            egui::vec2(18.0, 18.0),
+        );
+        if ui
+            .put(
+                clear,
+                egui::Button::new(egui::RichText::new("×").size(14.0).color(t::dim())).frame(false),
+            )
+            .on_hover_text("清除（Esc）")
+            .clicked()
+        {
+            text.clear();
+        }
+    }
+    response
+}
+
+/// 状态筛选胶囊：「已禁用 3」。有颜色的数字提醒这里有事，点了就只看这些。
+fn status_chip(
+    ui: &mut egui::Ui,
+    label: &str,
+    count: usize,
+    selected: bool,
+    tone: Option<egui::Color32>,
+) -> egui::Response {
+    let (fill, border) = if selected {
+        (t::wash(), t::control())
+    } else {
+        (egui::Color32::TRANSPARENT, t::hairline())
+    };
+    let mut job = egui::text::LayoutJob::default();
+    job.append(
+        label,
+        0.0,
+        egui::TextFormat::simple(
+            egui::FontId::proportional(13.0),
+            if selected { t::ink() } else { t::sub() },
+        ),
+    );
+    job.append(
+        &count.to_string(),
+        6.0,
+        egui::TextFormat::simple(
+            egui::FontId::new(13.0, bold_family()),
+            tone.filter(|_| count > 0)
+                .unwrap_or(if selected { t::ink() } else { t::sub() }),
+        ),
+    );
+    let response = ui.add(
+        egui::Button::new(job)
+            .fill(fill)
+            .stroke(egui::Stroke::new(1.0, border))
+            .corner_radius(motion::R)
+            .min_size(egui::vec2(0.0, 28.0)),
+    );
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    response.on_hover_text(if selected {
+        "再点一次看全部"
+    } else {
+        "只看这些"
+    })
 }
 
 /// 内存：「自动」加 1 GB 步进。自动时显示算出来的值，按加减就转成手动。

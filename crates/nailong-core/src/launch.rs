@@ -68,22 +68,6 @@ pub struct Prepared {
 }
 
 impl Prepared {
-    /// 版本参数里带快速进入单人世界（1.20 起才有）。
-    pub fn supports_quick_play(&self, root: &Root) -> bool {
-        let Ok(resolved) = manifest::resolve(root, &self.version_id, &Context::current()) else {
-            return false;
-        };
-        resolved.arguments.game.iter().any(|arg| match arg {
-            Argument::Plain(text) => text.contains("quickPlaySingleplayer"),
-            Argument::Ruled { value, .. } => match value {
-                StringOrList::One(text) => text.contains("quickPlaySingleplayer"),
-                StringOrList::Many(list) => {
-                    list.iter().any(|t| t.contains("quickPlaySingleplayer"))
-                }
-            },
-        })
-    }
-
     /// 启动用的命令；标准输出和错误由调用方决定接到哪里。
     pub fn command(&self) -> Command {
         let mut cmd = Command::new(&self.java.path);
@@ -291,6 +275,10 @@ pub fn prepare(root: &Root, profile: &str, opts: &LaunchOptions) -> Result<Prepa
         &format!("-Dminecraft.client.jar={}", resolved.client_jar.display()),
     );
     plan.apply(&mut jvm);
+    // 每局都记下回收日志，退出后从里面学这个版本真正需要多少内存。
+    if let Some(arg) = crate::learned::jvm_arg(&java_rt) {
+        jvm.push(arg);
+    }
     if let Some(logging) = &resolved.logging {
         let p = root.assets().join("log_configs").join(&logging.file.id);
         if p.exists() {
@@ -356,16 +344,14 @@ pub fn launch(root: &Root, profile: &str, opts: &LaunchOptions) -> Result<i32> {
     }
 
     println!("→ 启动游戏…（日志会输出到终端）");
-    let log_path = root
-        .cache()
-        .join("logs")
-        .join(format!("launch-{}.log", prepared.version_id));
+    let log_path = log_path(root, &prepared.version_id);
     if let Some(parent) = log_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| io(parent, e))?;
     }
     let log_file = std::fs::File::create(&log_path).map_err(|e| io(&log_path, e))?;
     let log = Arc::new(Mutex::new(log_file));
 
+    crate::learned::prepare(&prepared.game_dir);
     let mut cmd = prepared.command();
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = cmd
@@ -387,6 +373,21 @@ pub fn launch(root: &Root, profile: &str, opts: &LaunchOptions) -> Result<i32> {
         let _ = t.join();
     }
     let code = status.code().unwrap_or(-1);
+    if let Some(session) = crate::learned::record(
+        root,
+        profile,
+        &prepared.game_dir,
+        prepared.plan.heap_mb,
+        prepared.plan.collector,
+    ) {
+        match session.live_mb {
+            Some(live) => println!(
+                "→ 这局存活数据最多 {}，下次「自动」内存按实测算",
+                tuning::gb(live)
+            ),
+            None => println!("→ 这局没有发生老年代回收，存活数据未知"),
+        }
+    }
     if code == 0 {
         println!("✓ 游戏正常退出");
     } else {
@@ -396,6 +397,138 @@ pub fn launch(root: &Root, profile: &str, opts: &LaunchOptions) -> Result<i32> {
         );
     }
     Ok(code)
+}
+
+/// 游戏输出（标准输出和错误）写到这里，界面的日志窗口读的也是它。
+pub fn log_path(root: &Root, version_id: &str) -> PathBuf {
+    root.cache()
+        .join("logs")
+        .join(format!("launch-{version_id}.log"))
+}
+
+/// 从游戏输出里认出几种常见的失败，给一句玩家能看懂、能照着做的话。
+/// 认不出时为 None，界面就只显示日志里的错误行。
+pub fn diagnose(text: &str) -> Option<String> {
+    let has = |needle: &str| text.contains(needle);
+    let after = |needle: &str| {
+        text.lines()
+            .find_map(|line| line.split_once(needle).map(|(_, rest)| rest.trim()))
+            .map(|rest| rest.trim_matches(|c| c == '\'' || c == '"').to_string())
+    };
+    if has("java.lang.OutOfMemoryError") {
+        return Some("内存不够：游戏用完了分到的内存。在设置里调大内存，或关掉一些 Mod".into());
+    }
+    if has("Could not reserve enough space")
+        || has("Failed to commit")
+        || has("Cannot allocate memory")
+    {
+        return Some("Java 申请不到这么多内存：电脑空闲内存不够，调小内存或关掉别的程序".into());
+    }
+    if let Some(option) = after("Unrecognized VM option") {
+        return Some(format!(
+            "这个 Java 不认识参数 {option}：在设置里删掉额外 JVM 参数里的它"
+        ));
+    }
+    if has("UnsupportedClassVersionError") || has("has been compiled by a more recent version") {
+        return Some("Java 版本太旧：这个版本或某个 Mod 需要更新的 Java".into());
+    }
+    if has("Incompatible mods found") || has("Incompatible mod set") || has("incompatible mod set")
+    {
+        return Some("Mod 之间不兼容或缺少前置：日志里写了是哪几个".into());
+    }
+    if let Some(missing) = missing_dependencies(text) {
+        return Some(missing);
+    }
+    if has("Missing or unsupported mandatory dependencies") || has("MissingModsException") {
+        return Some("缺少前置 Mod：日志里写了缺哪个".into());
+    }
+    if has("DuplicateModsFoundException")
+        || has("Duplicate mods found")
+        || has("Found duplicate mods")
+    {
+        return Some("装了重复的 Mod：到「内容」里筛「重复」删掉一份".into());
+    }
+    if has("Mixin apply failed") || has("MixinApplyError") || has("InvalidInjectionException") {
+        return Some("有 Mod 注入失败，通常是 Mod 和游戏版本或其他 Mod 冲突".into());
+    }
+    if has("GLFW error") && (has("65542") || has("65543") || has("WGL")) {
+        return Some("显卡驱动不支持需要的 OpenGL：更新显卡驱动".into());
+    }
+    None
+}
+
+/// `key` 后面第一对单引号里的内容。
+fn quoted_after<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+    let rest = &line[line.find(key)? + key.len()..];
+    let start = rest.find('\'')? + 1;
+    let len = rest[start..].find('\'')?;
+    Some(&rest[start..start + len])
+}
+
+/// 缺了哪些前置、谁要它们。认得 NeoForge/Forge 和 Fabric 的写法。
+fn missing_dependencies(text: &str) -> Option<String> {
+    let mut found: Vec<(String, String)> = Vec::new();
+    for line in text.lines() {
+        // NeoForge/Forge：`Mod ID: 'flywheel', Requested by: 'create', ... '[MISSING]'`
+        if let (Some(id), Some(by)) = (
+            quoted_after(line, "Mod ID:"),
+            quoted_after(line, "Requested by:"),
+        ) && (line.contains("MISSING") || line.contains("Actual version"))
+        {
+            found.push((id.to_string(), by.to_string()));
+            continue;
+        }
+        // NeoForge：`Mod 'create' requires mod 'flywheel' which is not installed`
+        if let Some(id) = quoted_after(line, "requires mod")
+            && let Some(by) = quoted_after(line, "Mod ")
+        {
+            found.push((id.to_string(), by.to_string()));
+            continue;
+        }
+        // Fabric：`Mod 'Create' (create) 0.5.1 requires any version of mod 'Flywheel' (flywheel), which is missing!`
+        if line.contains("which is missing")
+            && let Some(id) = quoted_after(line, "of mod")
+            && let Some(by) = quoted_after(line, "Mod ")
+        {
+            found.push((id.to_string(), by.to_string()));
+        }
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    found.retain(|(id, _)| seen.insert(id.clone()));
+    let (id, by) = found.first()?;
+    let more = if found.len() > 1 {
+        format!(" 等 {} 个", found.len())
+    } else {
+        String::new()
+    };
+    Some(format!(
+        "缺少前置 Mod「{id}」{more}（{by} 需要它）：去「内容 › 发现」搜它装上"
+    ))
+}
+
+/// 日志里值得先看的行：错误、异常和它们的原因，最多 `limit` 行，取最后出现的。
+pub fn error_lines(text: &str, limit: usize) -> Vec<String> {
+    let mut found: Vec<String> = text
+        .lines()
+        .filter(|line| is_error_line(line))
+        .map(|line| line.trim().chars().take(240).collect())
+        .collect();
+    found.dedup();
+    let skip = found.len().saturating_sub(limit);
+    found.split_off(skip)
+}
+
+/// 一行是不是错误：日志级别是 ERROR/FATAL，或者是异常和它的原因。
+pub fn is_error_line(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    line.contains("/ERROR]")
+        || line.contains("/FATAL]")
+        || line.contains("[ERROR]")
+        || line.contains(" ERROR ")
+        || trimmed.starts_with("Caused by:")
+        || trimmed.starts_with("Exception in thread")
+        || (trimmed.contains("Exception:") && !trimmed.starts_with("at "))
+        || trimmed.starts_with("Error:")
 }
 
 fn pump<R: std::io::Read + Send + 'static>(reader: R, log: Arc<Mutex<std::fs::File>>) {
@@ -503,7 +636,8 @@ fn tuning_plan(
         min_memory_mb: opts.min_memory_mb,
         gc: opts.gc,
         extra: opts.jvm_args.clone(),
-        measured: crate::bench::measured(root, profile, game_dir, java.major),
+        bench: crate::bench::verdict(root, java),
+        learned: crate::learned::load(root, profile, game_dir),
     };
     tuning::plan(&Machine::detect(), &work, &settings)
 }
@@ -652,6 +786,38 @@ mod tests {
         assert_eq!(guess_java("1.20.1"), 17);
         assert_eq!(guess_java("1.21.1"), 21);
         assert_eq!(guess_java("26.3"), 25);
+    }
+
+    #[test]
+    fn diagnoses_common_failures() {
+        let neoforge = "\
+[21:10:05] [main/ERROR] [net.neoforged.fml.loading.ModSorter/LOADING]: Missing or unsupported mandatory dependencies:
+\tMod ID: 'flywheel', Requested by: 'create', Expected range: '[1.0.0,1.1)', Actual version: '[MISSING]'
+[21:10:05] [main/ERROR] [net.neoforged.fml.loading.ModSorter/LOADING]: Mod 'create' requires mod 'flywheel' which is not installed";
+        let reason = diagnose(neoforge).unwrap();
+        assert!(reason.contains("「flywheel」"), "{reason}");
+        assert!(reason.contains("create 需要它"), "{reason}");
+        let fabric = "Mod 'Create' (create) 0.5.1 requires any version of mod 'Flywheel' (flywheel), which is missing!";
+        assert!(diagnose(fabric).unwrap().contains("「Flywheel」"));
+        assert!(
+            diagnose("Exception in thread \"main\" java.lang.OutOfMemoryError: Java heap space")
+                .unwrap()
+                .starts_with("内存不够")
+        );
+        assert!(
+            diagnose(
+                "Unrecognized VM option 'UseFoo'\nError: Could not create the Java Virtual Machine."
+            )
+            .unwrap()
+            .contains("UseFoo")
+        );
+        assert!(diagnose("[main/INFO]: Setting user: Player").is_none());
+        let errors = error_lines(neoforge, 5);
+        assert_eq!(errors.len(), 2);
+        assert!(!is_error_line(
+            "[main/INFO] [x/]: loading ErrorProne helper"
+        ));
+        assert!(is_error_line("Caused by: java.lang.RuntimeException: boom"));
     }
 
     #[test]

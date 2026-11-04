@@ -43,6 +43,11 @@ fn content_dir(game_dir: &Path, kind: ContentKind) -> PathBuf {
     game_dir.join(kind.folder())
 }
 
+/// 这一项在磁盘上的文件（禁用的带 `.disabled`）。
+pub fn path_of(game_dir: &Path, entry: &InstalledEntry) -> PathBuf {
+    actual_path(game_dir, entry)
+}
+
 fn actual_path(game_dir: &Path, entry: &InstalledEntry) -> PathBuf {
     let suffix = if entry.enabled { "" } else { DISABLED_SUFFIX };
     content_dir(game_dir, entry.kind).join(format!("{}{suffix}", entry.file))
@@ -420,6 +425,68 @@ fn source_key(source: Option<Source>) -> &'static str {
     }
 }
 
+/// 拖进窗口的文件是什么。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Dropped {
+    Content(ContentKind),
+    Modpack,
+    /// 认不出来的 zip：可能是资源包也可能是光影，由当前页面决定。
+    Archive,
+    Unknown,
+}
+
+/// 按扩展名和压缩包里的文件认出拖进来的东西。只读目录，不解压。
+pub fn classify(path: &Path) -> Dropped {
+    let ext = path
+        .extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    match ext.as_str() {
+        "jar" => return Dropped::Content(ContentKind::Mod),
+        "mrpack" => return Dropped::Modpack,
+        "zip" => {}
+        _ => return Dropped::Unknown,
+    }
+    let Ok(file) = fs::File::open(path) else {
+        return Dropped::Unknown;
+    };
+    let Ok(mut zip) = zip::ZipArchive::new(file) else {
+        return Dropped::Unknown;
+    };
+    let names: Vec<String> = (0..zip.len())
+        .filter_map(|i| {
+            let entry = zip.by_index_raw(i).ok()?;
+            entry.name().ok().map(|name| name.to_string())
+        })
+        .collect();
+    // 整合包：Modrinth、MCBBS、CurseForge、Prism/MultiMC 的清单都在根目录。
+    if names.iter().any(|name| {
+        matches!(
+            name.as_str(),
+            "modrinth.index.json"
+                | "mcbbs.packmeta"
+                | "manifest.json"
+                | "mmc-pack.json"
+                | "instance.cfg"
+        )
+    }) {
+        return Dropped::Modpack;
+    }
+    if names.iter().any(|name| name.starts_with("shaders/")) {
+        return Dropped::Content(ContentKind::Shader);
+    }
+    if names.iter().any(|name| name == "pack.mcmeta") {
+        return Dropped::Content(ContentKind::ResourcePack);
+    }
+    Dropped::Archive
+}
+
+/// 这个文件（启用或禁用）是否已经在内容目录里。
+pub fn contains(game_dir: &Path, kind: ContentKind, file: &str) -> bool {
+    let dir = content_dir(game_dir, kind);
+    dir.join(file).exists() || dir.join(format!("{file}{DISABLED_SUFFIX}")).exists()
+}
+
 pub fn import_local(game_dir: &Path, kind: ContentKind, source: &Path) -> Result<InstalledEntry> {
     let file = source
         .file_name()
@@ -428,8 +495,8 @@ pub fn import_local(game_dir: &Path, kind: ContentKind, source: &Path) -> Result
     let dir = content_dir(game_dir, kind);
     fs::create_dir_all(&dir).map_err(|e| crate::error::io(&dir, e))?;
     let dest = dir.join(&file);
-    if dest.exists() {
-        return Err(Error::Install(format!("{} 已存在", dest.display())));
+    if contains(game_dir, kind, &file) {
+        return Err(Error::Install(format!("{file} 已经装过了")));
     }
     fs::copy(source, &dest).map_err(|e| crate::error::io(&dest, e))?;
     let mut index = load(game_dir);
@@ -476,6 +543,51 @@ mod tests {
         zip.write_all(format!(r#"{{"id":"{id}","name":"{name}","version":"1.0"}}"#).as_bytes())
             .unwrap();
         zip.finish().unwrap();
+    }
+
+    #[test]
+    fn classifies_dropped_files() {
+        let dir = temp_dir("classify");
+        let zip_with = |name: &str, entry: &str| {
+            let path = dir.join(name);
+            let mut zip = zip::ZipWriter::new(fs::File::create(&path).unwrap());
+            zip.start_file(entry, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(b"{}").unwrap();
+            zip.finish().unwrap();
+            path
+        };
+        assert_eq!(
+            classify(&zip_with("a.zip", "pack.mcmeta")),
+            Dropped::Content(ContentKind::ResourcePack)
+        );
+        assert_eq!(
+            classify(&zip_with("b.zip", "shaders/final.fsh")),
+            Dropped::Content(ContentKind::Shader)
+        );
+        assert_eq!(
+            classify(&zip_with("c.zip", "manifest.json")),
+            Dropped::Modpack
+        );
+        assert_eq!(classify(&zip_with("d.zip", "readme.txt")), Dropped::Archive);
+        assert_eq!(
+            classify(&dir.join("x.jar")),
+            Dropped::Content(ContentKind::Mod)
+        );
+        assert_eq!(classify(&dir.join("x.mrpack")), Dropped::Modpack);
+        assert_eq!(classify(&dir.join("notes.txt")), Dropped::Unknown);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn import_refuses_a_file_that_is_installed_but_disabled() {
+        let dir = temp_dir("import-disabled");
+        let source = dir.join("cool.jar");
+        write_mod(&source, "cool", "Cool");
+        fs::write(dir.join("mods/cool.jar.disabled"), b"x").unwrap();
+        assert!(contains(&dir, ContentKind::Mod, "cool.jar"));
+        assert!(import_local(&dir, ContentKind::Mod, &source).is_err());
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

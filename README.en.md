@@ -8,7 +8,7 @@ A small, native Minecraft: Java Edition launcher written in Rust. Windows ships 
 
 [简体中文](README.md) | **English**
 
-> Current version: **0.35.0** (preview)
+> Current version: **0.36.0** (preview)
 >
 > Goals: small binaries, few dependencies, visible install progress, and a repair path after interruption. See [implementation status](docs/design/14-implementation-status.md) for exact boundaries.
 
@@ -27,7 +27,16 @@ It is not a universal launcher, and it is not 1.0 yet. What works and what does 
 
 ## Interface
 
-0.35 adds a tuning benchmark: one click in Settings builds a separate test instance for the current version, quick-plays into a built-in test world, flies in spectator mode to keep generating terrain, and runs 2–3 rounds (measure memory, verify G1, compare ZGC). From GC logs and CPU time it works out how much heap the version really needs and which collector pauses less. The result is stored in the data directory and Auto launches with it from then on; changing mods marks it stale. No input needed, and saves are never touched. Works for 1.20 and later, including 26.x; the CLI is `nailong bench <version>`. See [20 · tuning benchmark](docs/design/20-tuning-benchmark.md) (Chinese).
+0.36 answers the two tuning questions separately and fixes several places where the interface showed something without letting you act on it.
+
+- **Test this computer**: no more per-version test instances or game windows. Click "Test" in Settings and the launcher runs a small built-in Java program (7 KB, Java 8 bytecode) that mimics the game: resident data, a chunk cache, worldgen threads, server ticks and an uncapped render thread. For every Java 21+ on the machine it compares G1 and ZGC in a standard and a large-modpack tier by average FPS, 1% lows, visible hitches and CPU. About 90 seconds per Java, no window, and the verdict is shared by every version. The CLI is `nailong bench`.
+- **Memory learned from play**: every session writes its GC log to `logs/nailong-gc.log` in the game directory; after exit the launcher reads how much data really stays live once you are in the world and sizes Auto memory from it next time, adding headroom after full collections. Versions you have not played yet still use the formula.
+- **Content page**: counts such as "Disabled 3" or "Duplicates 4" are filters you can click; a real search box (`Ctrl+F`) combines with them; "Open folder" and "Show in folder" for every item; drag mods, resource packs and shaders straight from the file manager, many at once, with a hover hint saying where they will go; changes made outside the launcher show up when you switch back.
+- **Logs**: "View log" after a failed launch opens this run's game output directly, with any recognised cause on top (for example which required mod is missing), errors in red, an errors-only filter, search, copy and show-in-folder. `Ctrl+L` opens it any time.
+
+See [20 · test this computer, learn memory from play](docs/design/20-tuning-benchmark.md) and [21 · handling](docs/design/21-handling.md) (Chinese).
+
+0.35 added a tuning benchmark that built a test instance per version and flew through a test world; 0.36 replaces it with the approach above.
 
 0.34.1 fixes 26.x: version files from 26.1 on carry `default-user-jvm`, which used to break installation, and the natives directory gained an extra level so LWJGL was not found. 26.x now installs and runs, and Auto follows the official defaults Mojang puts in the version file (ZGC, compact object headers and so on). Java selection now picks the lowest sufficient major version and prefers OpenJDK over GraalVM within a version.
 
@@ -146,7 +155,7 @@ Drag a `.mrpack` or `.zip` into the window to start an import. A single mod `.ja
 | Platform | File | Size | Requirements |
 |---|---|---:|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | ~8 MB | Windows 10/11, Java 21 |
-| Linux x64 (deb) | [nailong_0.35.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.35.0_amd64.deb) | ~3.4 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
+| Linux x64 (deb) | [nailong_0.36.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.36.0_amd64.deb) | ~3.4 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
 
 Checksums: [SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS).
 
@@ -163,7 +172,7 @@ Java 21 must be installed. nailong searches for it automatically and shows a war
 ### Linux (Debian / Ubuntu)
 
 ```bash
-sudo apt install ./nailong_0.35.0_amd64.deb
+sudo apt install ./nailong_0.36.0_amd64.deb
 nailong
 ```
 

@@ -8,7 +8,7 @@
 
 **简体中文** | [English](README.en.md)
 
-> 当前版本：**0.35.0**（预览版）
+> 当前版本：**0.36.0**（预览版）
 >
 > 目标：小体积、少依赖、安装过程可见、中断可补。功能边界见 [实现状态](docs/design/14-implementation-status.md)。
 
@@ -27,7 +27,16 @@ nailong 的思路很直：
 
 ## 界面
 
-0.35 加入「实测调优」：在设置里点一下，启动器会给当前版本建一个单独的测试实例，自动进入内置的测试世界，以旁观模式持续飞行生成新地形，跑 2–3 轮（测量内存、验证 G1、对比 ZGC），从 GC 日志和 CPU 时间里量出这个版本真正需要多少内存、哪个回收器停顿更少。结果存进数据目录，之后「自动」按实测值启动；换了 Mod 会提示过期。全程不用操作，也不碰存档。支持 1.20 及以后的版本（包括 26.x），命令行是 `nailong bench <版本>`。设计见 [20 · 实测调优](docs/design/20-tuning-benchmark.md)。
+0.36 把调参的两个问题分开回答，并理顺了几处「看得见却点不了」的地方。
+
+- **测一下这台电脑**：不再给每个版本复制测试实例、开游戏飞行。设置里点「测一下」，启动器在后台跑一个内置的小 Java 程序（7 KB，Java 8 字节码），照游戏的样子造负载：常驻数据、区块缓存、生成线程、服务端 tick 和不封顶的渲染线程。对这台电脑上每个 Java 21+ 分常规和大型整合包两档比较 G1 和 ZGC 的平均帧率、1% 低帧、顿和 CPU，每个 Java 约 1 分半，不开窗口，结论所有版本共用。命令行是 `nailong bench`。
+- **内存从游戏里学**：每局都把回收日志写进游戏目录的 `logs/nailong-gc.log`，退出后读出进世界以后真正常驻的数据，下次「自动」内存按它算；出现整堆回收就加大。没玩过的版本仍按公式。
+- **内容页**：「已禁用 3」「重复 4」这些数字可以点，点了就只看这些；带放大镜的搜索框（`Ctrl+F`）和状态筛选可以叠加；「打开文件夹」和每一项的「在文件夹中显示」；Mod、资源包、光影可以直接从文件管理器拖进窗口，一次拖很多个，悬停时就说会装到哪；在外面改了文件，回到窗口自动刷新。
+- **日志**：启动失败后的「查看日志」一步打开这次的游戏输出，能认出的原因写在最上面（例如缺哪个前置 Mod），错误行标红，可以只看错误、搜索、复制、在文件夹中显示；`Ctrl+L` 随时打开。
+
+设计见 [20 · 测一下这台电脑，内存从游戏里学](docs/design/20-tuning-benchmark.md) 和 [21 · 手感](docs/design/21-handling.md)。
+
+0.35 加入「实测调优」：给当前版本建测试实例、进测试世界飞行，量出内存和回收器。0.36 已换成上面的做法。
 
 0.34.1 修复 26.x：26.1 起的版本文件多了 `default-user-jvm`，以前会安装失败；natives 目录也会多套一层导致启动时找不到 LWJGL。现在 26.x 能装能玩，「自动」也改为跟随 Mojang 写在版本文件里的官方默认（ZGC、紧凑对象头等）。Java 改为选「够用里最低的」，同版本优先 OpenJDK 而不是 GraalVM。
 
@@ -147,7 +156,7 @@ nailong 的思路很直：
 | 平台 | 文件 | 大小 | 要求 |
 |---|---|---:|---|
 | Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | 约 8 MB | Windows 10/11，Java 21 |
-| Linux x64 (deb) | [nailong_0.35.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.35.0_amd64.deb) | 约 3.4 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
+| Linux x64 (deb) | [nailong_0.36.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.36.0_amd64.deb) | 约 3.4 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
 
 校验值：[SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS)。
 
@@ -164,7 +173,7 @@ nailong 的思路很直：
 ### Linux（Debian / Ubuntu）
 
 ```bash
-sudo apt install ./nailong_0.35.0_amd64.deb
+sudo apt install ./nailong_0.36.0_amd64.deb
 nailong
 ```
 

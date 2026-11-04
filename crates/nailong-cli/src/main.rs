@@ -40,13 +40,8 @@ enum Commands {
         #[command(subcommand)]
         target: InstallTarget,
     },
-    /// 实测调参：用测试世界自动跑几轮游戏，量出这个版本需要多少内存、用哪个回收器
-    Bench {
-        profile: String,
-        /// 游戏目录；不填时按版本是否隔离决定
-        #[arg(long)]
-        game_dir: Option<PathBuf>,
-    },
+    /// 测一下这台电脑：用模拟游戏负载在每个 Java 21+ 上比较 G1 和 ZGC，所有版本共用结论
+    Bench,
     /// 启动
     Launch {
         profile: String,
@@ -136,8 +131,7 @@ fn main() -> anyhow::Result<()> {
                 println!("  ● {id}");
             }
         }
-        Commands::Bench { profile, game_dir } => {
-            let game_dir = game_dir.unwrap_or_else(|| default_game_dir(&root, &profile));
+        Commands::Bench => {
             let last = Arc::new(Mutex::new(String::new()));
             let sink = from_fn(move |p: Progress| {
                 let line = format!("  {} {:>3}%", p.stage, (p.fraction() * 100.0) as u32);
@@ -147,40 +141,45 @@ fn main() -> anyhow::Result<()> {
                     *last = line;
                 }
             });
-            let record = bench::run(&root, &profile, &game_dir, &sink)?;
-            println!();
-            println!(
-                "{:<22} {:>8} {:>8} {:>7} {:>6} {:>8} {:>8} {:>6}",
-                "轮次", "堆", "加载", "tick/s", "CPU核", "停顿合计", "最长停顿", "超一帧"
-            );
-            for run in &record.runs {
+            bench::run(&root, &sink)?;
+            let store = bench::load(&root).context("读不回刚保存的测试结果")?;
+            for java in &store.javas {
+                println!("\n{}", java.label());
                 println!(
-                    "{:<22} {:>8} {:>7.0}s {:>7.1} {:>6} {:>7.0}ms {:>7.2}ms {:>6}",
-                    run.label,
-                    tuning::gb(run.heap_mb),
-                    run.load_secs,
-                    run.tps,
-                    run.cpu_cores
-                        .map(|c| format!("{c:.1}"))
-                        .unwrap_or_else(|| "-".into()),
-                    run.gc.total_ms,
-                    run.gc.max_ms,
-                    run.gc.over_frame
+                    "  {:<12} {:<4} {:>7} {:>7} {:>8} {:>9} {:>9} {:>6}",
+                    "档位", "回收", "堆", "平均帧", "1%低帧", "顿/分钟", "tick P95", "CPU核"
                 );
+                for tier in &java.tiers {
+                    for run in [&tier.g1, &tier.zgc] {
+                        println!(
+                            "  {:<12} {:<4} {:>7} {:>7.0} {:>8.0} {:>9.1} {:>7.1}ms {:>6}",
+                            tier.label,
+                            run.collector.label(),
+                            tuning::gb(run.heap_mb),
+                            run.fps,
+                            run.low_fps,
+                            run.hitches_per_min,
+                            run.tick_p95_ms,
+                            run.cpu_cores
+                                .map(|c| format!("{c:.1}"))
+                                .unwrap_or_else(|| "-".into())
+                        );
+                    }
+                    println!(
+                        "  → {}档：一般版本 {}，官方默认 ZGC 的版本 {}",
+                        tier.label,
+                        tier.collector.label(),
+                        tier.official.label()
+                    );
+                }
+                for note in &java.notes {
+                    println!("  {note}");
+                }
             }
-            println!();
-            for note in &record.notes {
-                println!("  {note}");
+            for note in &store.skipped {
+                println!("  跳过 {note}");
             }
-            let heap = match record.collector {
-                tuning::Collector::Zgc => record.zgc_heap_mb.unwrap_or(record.g1_heap_mb),
-                tuning::Collector::G1 => record.g1_heap_mb,
-            };
-            println!(
-                "\n✓ 实测结论：{} · {}，之后「自动」按这个启动",
-                record.collector.label(),
-                tuning::gb(heap)
-            );
+            println!("\n✓ 结论已保存，所有版本的「自动」回收器按它选");
         }
         Commands::Java => {
             let all = java::find_all();

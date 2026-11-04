@@ -1,7 +1,7 @@
-# 14 · 原型实现状态（0.1 → 0.35.0）
+# 14 · 原型实现状态（0.1 → 0.36.0）
 
 > 日期：2026-11-04
-> 对应发布：GitHub Release `v0.35.0` 的 `nailong.exe`、`nailong_0.35.0_amd64.deb`
+> 对应发布：GitHub Release `v0.36.0` 的 `nailong.exe`、`nailong_0.36.0_amd64.deb`
 > 目的：把「设计稿」和「已经跑起来的代码」分开记账，避免把计划当成已完成。
 
 ## 1. 一句话结论
@@ -47,6 +47,8 @@
 0.34.0 加入 JVM 自动调参（`tuning.rs`，规范见 `docs/design/19-jvm-tuning.md`）：内存默认自动，按物理内存、逻辑处理器、Java 版本、加载器和 Mod 数量算出堆大小，配官方启动器那套 G1 参数并按堆放大 Region；Java 25 加紧凑对象头；大整合包配强机器时自动换分代 ZGC。设置里显示结果、依据和完整参数，可手动指定内存、回收器或追加 JVM 参数；CLI 增加 `--gc`、`--jvm-arg`，`--dry-run` 打印计算过程。生成的参数在本机 OpenJDK 11/17/21/25 和 GraalVM 21 上逐一启动验证。顺带修复 CLI 传相对 `--game-dir` 时游戏目录被解析两次的问题。
 
 0.34.1 修复 26.x 无法安装和启动：版本文件 `default-user-jvm` 的首条没有 `rules`，解析失败；`${natives_directory}` 误指向 `java` 子目录，`java.library.path` 变成 `.../java/java`。实测 26.1、26.3 原版可安装并进入世界。调参在版本文件带官方默认时跟随官方（26.x 为 ZGC + 紧凑对象头 + 预先占用 + 字符串去重，初始堆 2 GB）。Java 选择改为够用里最低的大版本，同版本优先 64 位 OpenJDK。
+
+0.36.0 把调参拆成两半（规范见 `docs/design/20-tuning-benchmark.md`）。回收器：`bench.rs` 不再建测试实例，改为运行嵌入的 `assets/jvmbench/NailongBench.class`（Java 8 字节码，7 KB），模拟常驻数据、区块缓存、生成线程、服务端 tick 和不封顶渲染，对每个 64 位非 GraalVM 的 Java 21+ 分常规（存活 1 GB）和大型整合包（3 GB）两档各跑 G1、ZGC 一轮（预热 3–4 秒、测量 12 秒、`AlwaysPreTouch`），比平均帧率、1% 低帧、顿、tick P95、生成速度和 CPU，分别给出一般版本和官方默认 ZGC 版本的结论，存进 `jvm-bench.json`（线程数和内存变了就失效），所有版本共用。内存：`learned.rs` 每次启动加 `-Xlog:gc:file=logs/nailong-gc.log:uptime:filecount=0`（Java 9+、非 OpenJ9），退出后取启动 3 分钟后的老年代回收后的最大占用作存活数据，按版本 + 游戏目录存最近 5 局进 `learned.json`（Mod 指纹变了清空），整堆回收或晋升失败时下次至少加 1/4。GC 日志解析独立成 `gclog.rs`。界面：内容页状态胶囊筛选（全部/已启用/已禁用/可更新/重复）与搜索叠加、`Ctrl+F`、打开文件夹、在文件夹中显示、按内容识别的拖放导入（整批一个恢复点、跳过已装）和悬停提示、回到窗口自动重扫；新日志窗口（游戏输出/崩溃报告/启动器，原因识别 `launch::diagnose`，`Ctrl+L`）。实机：`nailong bench` 在 16 线程 16 GB、OpenJDK 21 和 25 上约 2 分 15 秒跑完，两次结论一致（常规档 G1、大型整合包档 ZGC，官方默认版本都沿用 ZGC），数字见 20 号文档；结论在读取时按当前规则重新判；真实启动 NeoForge 1.21.1 带 GC 日志参数正常、退出后记下一局；Xvfb 里用 GTK 拖拽源真实拖放 3 个文件，悬停提示和导入结果正确。
 
 0.35.0 加入实测调优（`bench.rs`，规范见 `docs/design/20-tuning-benchmark.md`）：复制版本的 Mod、配置和资源包成测试实例，用内置的 1.20.1 / 26.1 世界模板（26.x 按目标 `world_version` 改写 NBT 数据版本，避免升级备份提示）和数据包，通过 `--quickPlaySingleplayer` 进入世界后以旁观模式每 tick 前进一格；从标准输出的标记计时，从 GC 日志和进程 CPU 时间算出存活数据、停顿和 CPU。三轮：低 IHOP 的 G1 测量、正式 G1 验证（整堆回收或晋升失败时加 1/4 重测）、ZGC 对比。结果按版本 + 游戏目录存进 `bench.json`，指纹含 Mod 列表、Java 大版本和内存，之后「自动」优先用实测值。`launch` 拆成 `prepare` 和启动两步供测试复用；CLI 的 `launch` 不写 `--game-dir` 时也按版本隔离选目录。Xvfb + llvmpipe 实测：NeoForge 1.21.1 存活约 0.5 GB → G1 2 GB（CLI 和界面各跑一次，结果一致）；26.3 原版 2 GB 出现 3 次晋升失败，加到 2.5 GB 后 G1 仍每分钟 6 次超过一帧，ZGC 3.5 GB 无停顿、CPU 不多 → ZGC；1.20.1 原版存活 1.0 GB → G1 2 GB（Java 17，不测 ZGC）。没有测帧率：原版无法把帧率写进日志。
 
@@ -139,7 +141,7 @@
 | 大文件分段下载 | `core::http` | 完成 | client jar 4 段并行、段续传、源回退 |
 | 重复安装快速路径 | `core::install::forge` / `neoforge` | 完成 | health 通过则 0 下载、0 processor |
 | Windows 交叉编译 | `x86_64-pc-windows-gnu` | 通过 | 无 MinGW DLL 依赖，仅系统 DLL |
-| 发布包 | GitHub Release `v0.35.0` | 完成（CI 构建） | 单 exe 约 8 MB / deb 约 3.4 MB |
+| 发布包 | GitHub Release `v0.36.0` | 完成（CI 构建） | 单 exe 约 8 MB / deb 约 3.4 MB |
 
 ### 2.1 实测记录
 

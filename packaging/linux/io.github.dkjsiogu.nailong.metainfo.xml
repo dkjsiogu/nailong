@@ -25,6 +25,11 @@
   <url type="bugtracker">https://github.com/dkjsiogu/nailong/issues</url>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.36.0" date="2026-11-04">
+      <description>
+        <p>Tuning is split in two. A one-click machine test runs a small built-in Java workload that mimics the game, without a game window, and compares G1 and ZGC on every Java 21+ in a standard and a large-modpack tier; the verdict is shared by every version. Memory is learned from real play: each session's GC log tells the launcher how much data stays live in your world. The content page gains clickable status filters, a real search box, drag and drop from the file manager, and Open folder; a new log window opens this run's game output directly with the likely cause on top.</p>
+      </description>
+    </release>
     <release version="0.35.0" date="2026-11-04">
       <description>
         <p>Tuning benchmark: one click builds a separate test instance, quick-plays into a built-in test world and flies through freshly generated terrain for two or three rounds to measure how much memory the version really needs and whether G1 or ZGC pauses less. Auto then launches with the measured values until mods, Java or installed memory change. Works for Minecraft 1.20 and later, including 26.x, without touching saves.</p>
