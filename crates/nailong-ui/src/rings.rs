@@ -104,6 +104,11 @@ pub fn tip(data: &Data, layer: Layer) -> Tip {
             data.progress_detail.clone(),
             "",
         ),
+        (Layer::Files, State::Running) => (
+            "文件完整".into(),
+            "运行期间不会改动游戏文件。".into(),
+            "点击查看版本详情",
+        ),
         (Layer::Files, _) => (
             "文件完整".into(),
             "客户端、运行库和资源都没有缺失。".into(),
@@ -119,8 +124,8 @@ pub fn tip(data: &Data, layer: Layer) -> Tip {
         ),
         (Layer::Mods, State::Running) => (
             format!("{} 个 Mod", data.mods.len()),
-            "退出游戏后再修改内容。".into(),
-            "",
+            "运行中可以查看，退出游戏后才能修改。".into(),
+            "点击查看内容",
         ),
         (Layer::Mods, _) if !data.update_names.is_empty() => (
             format!("{} 个可更新", data.update_names.len()),
@@ -145,12 +150,6 @@ pub fn tip(data: &Data, layer: Layer) -> Tip {
                 .unwrap_or_default(),
             "点击打开存档",
         ),
-    };
-    // 游戏运行时启动器不允许切页，只有中心圆点还能点。
-    let action = if data.state == State::Running && layer != Layer::Core {
-        ""
-    } else {
-        action
     };
     Tip {
         title,

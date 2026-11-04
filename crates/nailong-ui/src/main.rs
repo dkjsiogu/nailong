@@ -392,6 +392,8 @@ struct App {
     catalog_rx: Option<mpsc::Receiver<Msg>>,
     /// 这次启动游戏的开始时间，用来显示已运行时长。
     launch_started: Option<Instant>,
+    /// 正在运行的游戏用的是哪个版本；运行期间这个版本的内容和存档不能改。
+    running_row: Option<String>,
 }
 
 /// 玩家名与内存存在数据目录的 `ui.json`，随设置弹窗关闭落盘。
@@ -559,6 +561,7 @@ impl App {
             rx: None,
             catalog_rx: None,
             launch_started: None,
+            running_row: None,
         };
         app.refresh();
         #[cfg(debug_assertions)]
@@ -742,6 +745,86 @@ impl App {
             app.show_saves = false;
         }
         app
+    }
+
+    /// 安装和下载会占住进度页；游戏运行不会，玩的时候照样能看内容和存档。
+    fn page_locked(&self) -> bool {
+        matches!(self.busy, Some(Task::Install) | Some(Task::Mods)) || self.login_busy
+    }
+
+    /// 现在不能改这个版本的原因；`None` 表示可以改。
+    fn write_block(&self, row_id: Option<&str>) -> Option<&'static str> {
+        match self.busy {
+            Some(Task::Install) | Some(Task::Mods) => Some("正在安装，完成后再试"),
+            Some(Task::Launch) if row_id.is_some() && self.running_row.as_deref() == row_id => {
+                Some("游戏正在使用这个版本，退出游戏后再修改")
+            }
+            _ => None,
+        }
+    }
+
+    /// 页面底部的一行提示：错误、完成通知，以及“查看日志”。
+    fn message_bar(&mut self, ui: &mut egui::Ui) {
+        let (text, color, is_error) = match (&self.error, &self.notice) {
+            (Some(error), _) => (error.clone(), t::danger(), true),
+            (None, Some(notice)) => (notice.clone(), t::ok(), false),
+            (None, None) => return,
+        };
+        let full = ui.max_rect();
+        let bar = egui::Rect::from_min_max(
+            egui::pos2(full.left(), full.bottom() - 40.0),
+            full.right_bottom(),
+        );
+        ui.painter().rect_filled(bar, 0.0, t::surface());
+        ui.painter().line_segment(
+            [bar.left_top(), bar.right_top()],
+            egui::Stroke::new(1.0, t::hairline()),
+        );
+        let mut close = false;
+        let mut show_log = false;
+        let mut child = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(bar.shrink2(egui::vec2(24.0, 0.0)))
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
+        child.add(egui::Label::new(egui::RichText::new(text).size(13.0).color(color)).truncate());
+        child.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui
+                .add(egui::Button::new(egui::RichText::new("×").size(15.0)).frame(false))
+                .on_hover_text("关闭提示")
+                .clicked()
+            {
+                close = true;
+            }
+            if is_error
+                && ui
+                    .add(
+                        egui::Button::new(
+                            egui::RichText::new("查看日志").size(13.0).color(t::sub()),
+                        )
+                        .frame(false),
+                    )
+                    .clicked()
+            {
+                show_log = true;
+            }
+        });
+        if close {
+            self.error = None;
+            self.notice = None;
+        }
+        if show_log {
+            self.show_log = true;
+            self.show_settings = true;
+        }
+    }
+
+    /// 按钮不可用时给出的说明。
+    fn busy_reason(&self) -> &'static str {
+        match self.busy {
+            Some(Task::Launch) => "游戏运行中，退出游戏后再安装",
+            _ => "正在安装，完成后再试",
+        }
     }
 
     fn page_id(&self) -> u8 {
@@ -1761,7 +1844,7 @@ impl App {
                             .size(13.0)
                             .color(t::sub()),
                         )
-                        .default_open(self.show_log)
+                        .open(std::mem::take(&mut self.show_log).then_some(true))
                         .show(ui, |ui| {
                             egui::Frame::new()
                                 .fill(t::bg())
@@ -2482,13 +2565,21 @@ impl App {
             return;
         };
         if row.health.missing > 0 {
-            self.error = Some("资源不完整，请先补全".into());
+            self.error = Some("这个版本缺少文件，先补全再启动".into());
             return;
+        }
+        if !self.java_ok {
+            self.refresh_java();
+            if !self.java_ok {
+                self.error = Some("没有找到 Java 21 或更高版本，可以在设置里打开下载页".into());
+                return;
+            }
         }
         self.error = None;
         self.notice = None;
         self.busy = Some(Task::Launch);
         self.launch_started = Some(Instant::now());
+        self.running_row = Some(row.id.clone());
         self.log.push(format!("启动 {}", row.id));
         let root = self.root.clone();
         let username = self.username.clone();
@@ -2536,7 +2627,7 @@ impl App {
     }
 
     fn enter_mods(&mut self, row: Option<Row>) {
-        if self.busy.is_some() {
+        if self.page_locked() {
             return;
         }
         let game_dir = row.as_ref().map(|row| {
@@ -3861,6 +3952,7 @@ impl App {
                 }
                 Msg::SavesDone(result) => {
                     self.saves_busy = false;
+                    self.home_cache = None;
                     self.saves_rx = None;
                     if self.auto_backup_running {
                         self.auto_backup_running = false;
@@ -3920,15 +4012,22 @@ impl App {
                 }
                 Msg::LaunchDone(code) => {
                     self.busy = None;
+                    self.running_row = None;
+                    // 每玩完一局就给世界留一份快照，比按时间间隔更贴近“坏了能救”。
+                    if self.backup_cfg.enabled && !self.saves_busy {
+                        self.start_auto_backup();
+                    }
                     self.rx = None;
                     if code == 0 {
                         self.notice = Some("游戏已退出".into());
                     } else {
-                        self.error = Some(format!("游戏异常退出（{code}）"));
+                        self.error =
+                            Some(format!("游戏异常退出（代码 {code}），可以查看日志找原因"));
                     }
                 }
                 Msg::LaunchFailed(e) => {
                     self.busy = None;
+                    self.running_row = None;
                     self.rx = None;
                     self.show_log = true;
                     self.error = Some(format!("启动失败：{e}"));
@@ -3954,7 +4053,7 @@ impl App {
     }
 
     fn nav_go(&mut self, nav: Nav) {
-        if self.busy.is_some() || self.login_busy {
+        if self.page_locked() {
             return;
         }
         if self.nav_active() == nav {
@@ -4004,7 +4103,7 @@ impl App {
 
     /// 内容只有一页：发现和已安装是同一页的两种模式。
     fn open_content(&mut self, installed: bool) {
-        if self.busy.is_some() {
+        if self.page_locked() {
             return;
         }
         let Some(row) = self
@@ -4048,7 +4147,7 @@ impl App {
     }
 
     fn open_saves_page(&mut self) {
-        if self.busy.is_some() || self.login_busy {
+        if self.page_locked() {
             return;
         }
         let Some(row) = self
@@ -4074,7 +4173,7 @@ impl App {
         let linked = self.account.is_some();
         let busy = self.busy.is_some();
         let login_busy = self.login_busy;
-        let enabled = !busy && !login_busy;
+        let enabled = !self.page_locked();
         let mut go: Option<Nav> = None;
         let mut account_clicked = false;
         let mut settings_clicked = false;
@@ -4120,9 +4219,29 @@ impl App {
                 }
 
                 // 底部用显式留白定位：嵌套 bottom_up 在侧边栏里会缩成内容高度。
-                let footer = if busy || login_busy { 40.0 } else { 78.0 };
+                let playing = matches!(self.busy, Some(Task::Launch));
+                let locked = (busy && !playing) || login_busy;
+                let footer = if locked {
+                    40.0
+                } else if playing {
+                    112.0
+                } else {
+                    78.0
+                };
                 ui.add_space((ui.available_height() - footer).max(10.0));
-                if busy || login_busy {
+                if playing {
+                    ui.horizontal(|ui| {
+                        ui.add_space(if wide { 14.0 } else { 18.0 });
+                        status_dot(ui, true);
+                        if wide {
+                            ui.label(egui::RichText::new("游戏运行中").size(13.0).color(t::sub()));
+                        }
+                    })
+                    .response
+                    .on_hover_text("游戏运行中：可以查看各页，正在玩的版本退出后才能修改");
+                    ui.add_space(8.0);
+                }
+                if locked {
                     ui.horizontal(|ui| {
                         if wide {
                             ui.add_space(12.0);
@@ -4595,13 +4714,24 @@ impl App {
                             ui.label(egui::RichText::new(note).size(13.0).color(t::ok()));
                             ui.add_space(6.0);
                         }
-                        if let Some(err) = &self.error {
-                            ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(err).size(13.0).color(t::danger()),
-                                )
-                                .wrap(),
-                            );
+                        if let Some(err) = self.error.clone() {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label(egui::RichText::new(err).size(13.0).color(t::danger()));
+                                if ui
+                                    .add(
+                                        egui::Button::new(
+                                            egui::RichText::new("查看日志")
+                                                .size(13.0)
+                                                .color(t::sub()),
+                                        )
+                                        .frame(false),
+                                    )
+                                    .clicked()
+                                {
+                                    self.show_log = true;
+                                    self.show_settings = true;
+                                }
+                            });
                             ui.add_space(6.0);
                         }
 
@@ -4694,20 +4824,23 @@ impl App {
                 self.start_launch();
             }
         }
-        if !running {
-            if open_manage {
-                self.nav_go(Nav::Versions);
-            }
-            if open_saves {
-                self.open_saves(row.clone());
-            }
-            if open_content {
-                self.open_content(true);
-            }
+        if open_manage {
+            self.nav_go(Nav::Versions);
+        }
+        if open_saves {
+            self.open_saves(row.clone());
+        }
+        if open_content {
+            self.open_content(true);
         }
     }
 
     fn delete_row(&mut self, row: &Row) {
+        if let Some(reason) = self.write_block(Some(&row.id)) {
+            self.error = Some(reason.into());
+            self.delete_confirm = None;
+            return;
+        }
         let result = if let Some(id) = row.id.strip_prefix("instance:") {
             self.root.remove_instance(id)
         } else {
@@ -5039,6 +5172,9 @@ impl App {
 
     /// 切换下载中心的安装目标；None = 只浏览。
     fn set_mods_target(&mut self, row: Option<Row>) {
+        if let Some(row) = &row {
+            self.selected = Some(row.id.clone());
+        }
         self.mods_row = row.clone();
         self.mods_game_dir = row.as_ref().map(|row| {
             row.game_dir
@@ -5479,6 +5615,7 @@ impl App {
         let summary_chars = ((width * 0.2) as usize).clamp(40, 62);
         let installed = self.mods_installed_keys.contains(&key);
         let quick = self.mods_quick.as_deref() == Some(key.as_str());
+        let busy_reason = self.busy_reason();
         let busy = self.busy.is_some();
         let (rect, response) =
             ui.allocate_exact_size(egui::vec2(width, 146.0), egui::Sense::click());
@@ -5609,6 +5746,7 @@ impl App {
                         .min_size(egui::vec2(22.0, 22.0)),
                     )
                     .on_hover_text("安装到当前版本")
+                    .on_disabled_hover_text(busy_reason)
                     .clicked()
                 {
                     install = Some(project.clone());
@@ -5640,6 +5778,7 @@ impl App {
         let loader = self.mods_loader;
         let error = self.mods_error.clone();
         let notice = self.mods_notice.clone();
+        let busy_reason = self.busy_reason();
         let busy = self.busy.is_some();
         let catalog = self
             .catalog
@@ -5940,6 +6079,12 @@ impl App {
                                     motion::PrimaryGlyph::Download,
                                 ) {
                                     install = true;
+                                }
+                                if busy {
+                                    ui.add_space(5.0);
+                                    ui.label(
+                                        egui::RichText::new(busy_reason).size(13.0).color(t::dim()),
+                                    );
                                 }
                                 if let Some(note) = &notice {
                                     ui.add_space(5.0);
@@ -6301,9 +6446,10 @@ impl App {
     }
 
     fn open_saves(&mut self, row: Row) {
-        if self.busy.is_some() {
+        if self.page_locked() {
             return;
         }
+        self.selected = Some(row.id.clone());
         self.saves_row = Some(row);
         self.show_saves = true;
         self.show_manage = false;
@@ -6877,6 +7023,21 @@ impl App {
             self.saves_confirm = None;
             self.saves_confirm_backup = None;
         }
+        if (new_snapshot.is_some() || restore.is_some() || delete_world.is_some() || backup_all)
+            && let Some(reason) =
+                self.write_block(self.saves_row.as_ref().map(|row| row.id.as_str()))
+        {
+            self.saves_notice = None;
+            self.saves_error = Some(if reason.starts_with("游戏") {
+                "游戏正在使用这些世界，退出游戏后再备份或恢复".into()
+            } else {
+                reason.into()
+            });
+            new_snapshot = None;
+            restore = None;
+            delete_world = None;
+            backup_all = false;
+        }
         if let Some(world) = new_snapshot {
             self.start_snapshot(world);
         }
@@ -7266,6 +7427,25 @@ impl App {
             .as_ref()
             .map(|row| loader_state_files(&self.root, row, &game_dir))
             .unwrap_or_default();
+        let wants_write = import
+            || !toggles.is_empty()
+            || !deletes.is_empty()
+            || update_all.is_some()
+            || update_one.is_some()
+            || open_rollback;
+        if wants_write
+            && let Some(reason) =
+                self.write_block(self.mods_row.as_ref().map(|row| row.id.as_str()))
+        {
+            self.mods_notice = None;
+            self.mods_error = Some(reason.into());
+            import = false;
+            toggles.clear();
+            deletes.clear();
+            update_all = None;
+            update_one = None;
+            open_rollback = false;
+        }
         if import && let Some(path) = pick_content_file(kind) {
             if let Err(e) = rollback::backup_extra(&game_dir, "导入内容前", &loader_files) {
                 self.mods_error = Some(format!("无法创建恢复点: {e}"));
@@ -8548,7 +8728,14 @@ impl eframe::App for App {
                 if self.busy.is_none() {
                     self.start_modpack(path);
                 } else {
-                    self.error = Some("正在安装，请等当前任务结束".into());
+                    self.error = Some(
+                        if matches!(self.busy, Some(Task::Launch)) {
+                            "游戏运行中，退出游戏后再导入整合包"
+                        } else {
+                            "正在安装，请等当前任务结束"
+                        }
+                        .into(),
+                    );
                 }
             } else if is_mod {
                 self.import_local_mod(path);
@@ -8605,6 +8792,10 @@ impl eframe::App for App {
                     self.install_view(ui);
                 } else {
                     self.main_view(ui);
+                }
+                // 版本、内容、存档页没有放全局提示的位置，统一放在底部。
+                if matches!(page, 2..=8) {
+                    self.message_bar(ui);
                 }
                 // 用一层底色做淡入：嵌套面板各有画笔，逐个调透明度并不可靠。
                 let veil = 1.0 - eased;

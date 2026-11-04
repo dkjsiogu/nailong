@@ -128,7 +128,8 @@ Drag a `.mrpack` or `.zip` into the window to start an import. A single mod `.ja
 - Settings: the sidebar footer opens one dialog for player name, memory, Java status, game/data folders and logs; player name and memory persist in `ui.json`.
 - Versions: base versions required by a loader are hidden from the main picker and protected from deletion; this page only launches, repairs, reveals the folder and deletes. Content and saves live in their own sidebar places.
 - Saves: a first-class page with a version picker at the top; list worlds with size and modified time. Backups are **git-style snapshots**: content-defined chunking stores only changed chunks, so a second backup usually adds a few MB; restore, delete and prune by count.
-- Automatic backups: every 15/30/60/120 minutes, keeping 5/10/20/50 snapshots per world; settings live in `backups.json` under the data directory and run while the launcher is open.
+- Automatic backups: when enabled, every time you quit the game a snapshot of that version's worlds is taken, plus an optional run every 15/30/60/120 minutes; 5/10/20/50 snapshots are kept per world, and settings live in `backups.json` under the data directory.
+- The launcher stays usable while you play: every page can be browsed, and only the version in use is locked against content changes, save restores and deletion until the game exits.
 - Resource packs and shaders get the same enable/disable, delete, file-size and open-folder affordances as mods.
 - Install progress: stage, percentage, downloaded / total bytes, and file count.
 - GUI and CLI share the same core; the CLI is useful for scripts and debugging.
