@@ -27,6 +27,8 @@ pub struct LaunchOptions {
     pub height: u32,
     pub demo: bool,
     pub game_dir: Option<PathBuf>,
+    /// 指定用哪个 Java；None 时按版本要求自动选。
+    pub java: Option<PathBuf>,
     pub dry_run: bool,
     pub print_plan: bool,
 }
@@ -47,6 +49,7 @@ impl Default for LaunchOptions {
             height: 720,
             demo: false,
             game_dir: None,
+            java: None,
             dry_run: false,
             print_plan: false,
         }
@@ -91,6 +94,27 @@ impl Prepared {
         cmd
     }
 
+    /// 给人看的命令：每个参数一行，类路径只写数量，令牌打码。
+    pub fn display_lines(&self) -> Vec<String> {
+        let mut lines = vec![self.java.path.display().to_string()];
+        lines.extend(self.jvm.iter().map(|a| redact(a)));
+        lines.push(format!("-cp <{} 个文件>", self.classpath.len()));
+        lines.push(self.main_class.clone());
+        lines.extend(redact_game_args(&self.game));
+        lines
+    }
+
+    /// 能直接粘贴到终端运行的完整命令（令牌打码，离线账户不受影响）。
+    pub fn command_line(&self) -> String {
+        let mut parts = vec![quote(&self.java.path.display().to_string())];
+        parts.extend(self.jvm.iter().map(|a| quote(&redact(a))));
+        parts.push("-cp".into());
+        parts.push(quote(&join_paths(&self.classpath)));
+        parts.push(quote(&self.main_class));
+        parts.extend(redact_game_args(&self.game).iter().map(|a| quote(a)));
+        parts.join(" ")
+    }
+
     fn print(&self) {
         println!("\nJava: {}", self.java.path.display());
         println!("Classpath ({}):", self.classpath.len());
@@ -122,19 +146,58 @@ impl Prepared {
     }
 }
 
+/// 准备启动：解压 natives、建好游戏目录，返回完整命令。
 pub fn prepare(root: &Root, profile: &str, opts: &LaunchOptions) -> Result<Prepared> {
+    build(root, profile, opts, true)
+}
+
+/// 只算出会用的命令，不碰磁盘：界面在启动前预览参数用。
+pub fn preview(root: &Root, profile: &str, opts: &LaunchOptions) -> Result<Prepared> {
+    build(root, profile, opts, false)
+}
+
+/// 这个版本需要的最低 Java 大版本。
+pub fn required_java_for(root: &Root, profile: &str) -> Result<u32> {
+    Ok(required_java(&manifest::resolve(
+        root,
+        profile,
+        &Context::current(),
+    )?))
+}
+
+/// 用户指定了 Java 就用它（版本不够时说清楚），否则按版本要求自动选。
+pub fn choose_java(required: u32, chosen: Option<&std::path::Path>) -> Result<java::JavaRuntime> {
+    match chosen {
+        Some(path) => {
+            let runtime = java::probe(path)
+                .map_err(|_| Error::Launch(format!("找不到指定的 Java：{}", path.display())))?;
+            if runtime.major < required {
+                return Err(Error::Launch(format!(
+                    "这个版本需要 Java {required} 或更新，指定的是 Java {}：{}",
+                    runtime.major,
+                    path.display()
+                )));
+            }
+            Ok(runtime)
+        }
+        None => java::select(required, &java::find_all()),
+    }
+}
+
+fn build(root: &Root, profile: &str, opts: &LaunchOptions, write: bool) -> Result<Prepared> {
     let mut ctx = Context::current();
     ctx.features.custom_resolution = true;
     ctx.features.demo = opts.demo;
     let resolved = manifest::resolve(root, profile, &ctx)?;
     let required = required_java(&resolved);
-    let javas = java::find_all();
-    let java_rt = java::select(required, &javas)?;
-    println!(
-        "→ 版本 {}，使用 {}（需要 Java {required}）",
-        resolved.id,
-        java_rt.label()
-    );
+    let java_rt = choose_java(required, opts.java.as_deref())?;
+    if write {
+        println!(
+            "→ 版本 {}，使用 {}（需要 Java {required}）",
+            resolved.id,
+            java_rt.label()
+        );
+    }
 
     let game_dir = opts
         .game_dir
@@ -142,14 +205,22 @@ pub fn prepare(root: &Root, profile: &str, opts: &LaunchOptions) -> Result<Prepa
         .unwrap_or_else(|| root.dir().to_path_buf());
     // 游戏以这个目录为工作目录启动，--gameDir 再给相对路径就会被解析两次。
     let game_dir = std::path::absolute(&game_dir).unwrap_or(game_dir);
-    std::fs::create_dir_all(&game_dir).map_err(|e| io(&game_dir, e))?;
+    if write {
+        std::fs::create_dir_all(&game_dir).map_err(|e| io(&game_dir, e))?;
+    }
     let plan = tuning_plan(root, profile, &java_rt, &resolved, &game_dir, opts);
-    println!("→ JVM {}", plan.headline());
-    for warning in &plan.warnings {
-        println!("  ! {warning}");
+    if write {
+        println!("→ JVM {}", plan.headline());
+        for warning in &plan.warnings {
+            println!("  ! {warning}");
+        }
     }
 
-    let natives = prepare_natives(root, &resolved, &ctx)?;
+    let natives = if write {
+        prepare_natives(root, &resolved, &ctx)?
+    } else {
+        root.natives(&resolved.id)
+    };
     let asset_id = resolved
         .asset_index
         .as_ref()
@@ -224,7 +295,7 @@ pub fn prepare(root: &Root, profile: &str, opts: &LaunchOptions) -> Result<Prepa
             ":".into()
         },
     );
-    vars.insert("launcher_name".to_string(), "nailong".to_string());
+    vars.insert("launcher_name".to_string(), "cairn".to_string());
     vars.insert(
         "launcher_version".to_string(),
         env!("CARGO_PKG_VERSION").to_string(),
@@ -262,7 +333,7 @@ pub fn prepare(root: &Root, profile: &str, opts: &LaunchOptions) -> Result<Prepa
     push_default(
         &mut jvm,
         "-Dminecraft.launcher.brand=",
-        "-Dminecraft.launcher.brand=nailong",
+        "-Dminecraft.launcher.brand=cairn",
     );
     push_default(
         &mut jvm,
@@ -546,6 +617,42 @@ fn pump<R: std::io::Read + Send + 'static>(reader: R, log: Arc<Mutex<std::fs::Fi
     }
 }
 
+/// 游戏参数里的访问令牌打码。
+fn redact_game_args(game: &[String]) -> Vec<String> {
+    let mut out = Vec::with_capacity(game.len());
+    let mut hide = false;
+    for arg in game {
+        if hide {
+            out.push(if arg == "0" {
+                arg.clone()
+            } else {
+                "***".into()
+            });
+            hide = false;
+            continue;
+        }
+        hide = arg == "--accessToken";
+        out.push(arg.clone());
+    }
+    out
+}
+
+/// 按当前系统的写法给参数加引号，粘贴到终端能直接跑。
+fn quote(arg: &str) -> String {
+    let plain = !arg.is_empty()
+        && arg
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_=./:,+@%\\".contains(c));
+    if plain {
+        return arg.to_string();
+    }
+    if cfg!(windows) {
+        format!("\"{}\"", arg.replace('"', "\\\""))
+    } else {
+        format!("'{}'", arg.replace('\'', "'\\''"))
+    }
+}
+
 fn join_paths(paths: &[PathBuf]) -> String {
     let sep = if cfg!(windows) { ";" } else { ":" };
     paths
@@ -786,6 +893,40 @@ mod tests {
         assert_eq!(guess_java("1.20.1"), 17);
         assert_eq!(guess_java("1.21.1"), 21);
         assert_eq!(guess_java("26.3"), 25);
+    }
+
+    #[test]
+    fn command_lines_are_pasteable_and_hide_tokens() {
+        let game = [
+            "--username",
+            "Steve",
+            "--accessToken",
+            "secret-token",
+            "--demo",
+        ]
+        .map(String::from)
+        .to_vec();
+        assert_eq!(
+            redact_game_args(&game),
+            ["--username", "Steve", "--accessToken", "***", "--demo"]
+        );
+        let offline = ["--accessToken", "0"].map(String::from).to_vec();
+        assert_eq!(redact_game_args(&offline)[1], "0");
+        assert_eq!(quote("-Xmx4096m"), "-Xmx4096m");
+        let spaced = quote("/home/me/My Games/java");
+        assert!(spaced.starts_with('\'') || spaced.starts_with('"'));
+        assert!(spaced.contains("My Games"));
+    }
+
+    #[test]
+    fn a_too_old_java_is_refused_with_a_reason() {
+        let missing = choose_java(21, Some(std::path::Path::new("/nonexistent/bin/java")));
+        assert!(
+            missing
+                .unwrap_err()
+                .to_string()
+                .contains("找不到指定的 Java")
+        );
     }
 
     #[test]

@@ -20,13 +20,13 @@
 
 **内存：** 不用做任何事。没玩过的版本卡片里写「内存现在按公式估算；正常玩一局后改按游戏里的实测」，玩过之后依据变成「按最近 3 局游戏实测：存活数据最多 2.1 GB」。
 
-命令行：`nailong bench`，打印每个 Java、每一档的数字和结论。
+命令行：`cairn-cli bench`，打印每个 Java、每一档的数字和结论。
 
 ## 2. 通用测试
 
 ### 2.1 负载程序
 
-`NailongBench.java` 编译成 Java 8 字节码（`javac --release 8`），一个 7 KB 的 class 文件嵌在启动器里，所以 Java 8 到 25 都能跑，构建启动器也不需要 JDK。运行时写到 `cache/nailong/jvmbench/`，`java -cp . NailongBench …`，不开窗口。
+`NailongBench.java` 编译成 Java 8 字节码（`javac --release 8`），一个 7 KB 的 class 文件嵌在启动器里，所以 Java 8 到 25 都能跑，构建启动器也不需要 JDK。运行时写到 `cache/cairn/jvmbench/`，`java -cp . NailongBench …`，不开窗口。
 
 它照 Minecraft 客户端的特征造负载：
 
@@ -76,7 +76,7 @@
 
 ## 3. 从真实游戏里学内存
 
-每次启动都加 `-Xlog:gc:file=logs/nailong-gc.log:uptime:filecount=0`（Java 9 起、HotSpot；Java 8 和 OpenJ9 只按公式）。路径相对游戏目录：游戏以游戏目录为工作目录启动，相对路径里没有 Windows 盘符的冒号，不会和 `-Xlog` 的分隔符冲突；`logs/` 在启动前建好，否则 JVM 打不开文件会拒绝启动。`filecount=0` 让每局覆盖写、不轮转，一局只有几百 KB。
+每次启动都加 `-Xlog:gc:file=logs/cairn-gc.log:uptime:filecount=0`（Java 9 起、HotSpot；Java 8 和 OpenJ9 只按公式）。路径相对游戏目录：游戏以游戏目录为工作目录启动，相对路径里没有 Windows 盘符的冒号，不会和 `-Xlog` 的分隔符冲突；`logs/` 在启动前建好，否则 JVM 打不开文件会拒绝启动。`filecount=0` 让每局覆盖写、不轮转，一局只有几百 KB。
 
 游戏退出后：
 
@@ -93,7 +93,7 @@
 
 单元测试覆盖结果行解析、嵌入的字节码版本（52）、Java 挑选、回收器决策（含一次顿算噪声、本机两次实测的数字）、按路径和大版本找结论、两档的挑选、GC 日志解析（G1、ZGC、JDK 11 单独一行的 To-space exhausted、默认装饰）、从游戏日志读一局、加载阶段不算、按版本记录和换 Mod 后清空、存活和压力对堆的影响。
 
-实机（Linux、i5-13490F 16 线程、16 GB、Ubuntu OpenJDK 21 和 25），`nailong bench` 一次约 2 分 15 秒。第二次的数字：
+实机（Linux、i5-13490F 16 线程、16 GB、Ubuntu OpenJDK 21 和 25），`cairn-cli bench` 一次约 2 分 15 秒。第二次的数字：
 
 | Java | 档位 | G1：平均 / 1% 低 / 顿每分 / tick P95 | ZGC：平均 / 1% 低 / 顿每分 / tick P95 | 一般版本 | 官方 ZGC 版本 |
 |---|---|---|---|---|---|
@@ -104,6 +104,6 @@
 
 两次测得的趋势一致：常规档两边都很顺，大档 G1 每分钟顿 15–25 次而 ZGC 不顿、平均帧率还高 5%–8%。第二次也暴露了一处规则问题：一开始拿 tick P95 和 G1 比相对值，3.8 → 5.0 ms 就被判成拖慢，大档因此留在 G1；tick 的预算是 50 ms，现在 P95 在 25 ms 以内都算跟得上。读结果时按当前规则从测到的数字重新判，所以这类修正不需要重测。
 
-真实启动 NeoForge 1.21.1（Xvfb + llvmpipe）：带 GC 日志参数正常进主菜单，`logs/nailong-gc.log` 正常写出，退出后记下一局。Java 11、17、21、25 和 GraalVM 21 都确认 `filecount=0` 覆盖写、不轮转，生成的参数在每个 Java 上都能启动。
+真实启动 NeoForge 1.21.1（Xvfb + llvmpipe）：带 GC 日志参数正常进主菜单，`logs/cairn-gc.log` 正常写出，退出后记下一局。Java 11、17、21、25 和 GraalVM 21 都确认 `filecount=0` 覆盖写、不轮转，生成的参数在每个 Java 上都能启动。
 
 **局限：** 负载是模拟的，反映的是这台电脑和 JVM 的特性，不能用来比较具体的 Mod；Windows 实机还没跑过；学内存至少要玩一局三分钟以上、而且发生过老年代回收才有数据。

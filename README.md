@@ -1,22 +1,22 @@
-# nailong
+# Cairn
 
 [![CI](https://github.com/dkjsiogu/nailong/actions/workflows/ci.yml/badge.svg)](https://github.com/dkjsiogu/nailong/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/dkjsiogu/nailong?label=release)](https://github.com/dkjsiogu/nailong/releases/latest)
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
 
-轻量、原生的 Minecraft: Java Edition 启动器，使用 Rust 编写。Windows 只有一个 exe，Linux 只有一个 deb；不捆绑 Java 运行时，Windows 端也不需要安装器。
+轻量、原生的 Minecraft: Java Edition 启动器，使用 Rust 编写。0.37 起改名 **Cairn**（原名 nailong）。Windows 只有一个 exe，Linux 只有一个 deb；不捆绑 Java 运行时，Windows 端也不需要安装器。
 
 **简体中文** | [English](README.en.md)
 
-> 当前版本：**0.36.0**（预览版）
+> 当前版本：**0.37.0**（预览版）
 >
 > 目标：小体积、少依赖、安装过程可见、中断可补。功能边界见 [实现状态](docs/design/14-implementation-status.md)。
 
-## 为什么是 nailong
+## 为什么是 Cairn
 
 装 Minecraft 本身不难，难的是装完以后干干净净：版本 JSON、资源索引、加载器 processor、Java 参数、整合包里的几百个文件，任何一环出错，玩家看到的都只是“启动失败”。
 
-nailong 的思路很直：
+Cairn 是登山者叠在路边的石堆：它不帮你走路，只标出回去的路。启动器也该这样——装得干净，坏了能退回去。思路很直：
 
 - Rust 编写，启动器自身不运行在 JVM 上；Windows 是单文件，Linux 是一个 deb。
 - 安装过程拆成可见的阶段；中途断了，重新打开会检查缺什么再补，不用从头再来。
@@ -27,10 +27,21 @@ nailong 的思路很直：
 
 ## 界面
 
+0.37 改名 Cairn，并按实测反馈理顺启动前后的体验：
+
+- **启动前就看得见、改得了**：启动台「开始游戏」下面一排参数——用哪个 Java、多大内存、哪个回收器、多大窗口、几个额外 JVM 参数。点任何一个打开「启动参数」：按版本单独设置，Java 可以选本机任意一个或手动指定，没改的跟随全局；下面是完整命令行预览，和真正启动时由同一段代码生成，一键复制。
+- **截图墙**：启动台下方像商店游戏页那样排出这个版本的截图，最新的在前。左键从缩略图放大成大图（←/→ 翻页），右键直接把整张图片复制到剪贴板，缩略图上有「已复制」反馈；缩略图后台生成并缓存，空闲 CPU 仍为 0。
+- **版本名完整显示**：按宽度自动缩小字号，太长换成两行，不再截成「新：模拟大都…」；设置和版本页里的长路径从中间省略，悬停看全路径，点一下复制。
+- **已安装内容秒开**：先显示上次的列表，后台只重读大小或修改时间变了的文件；启动台的 Mod 数也在后台核对，不再显示过期的 0。
+- **exe 带图标和版本信息**，窗口和任务栏也有图标。修好了系统剪贴板（0.36 的复制其实到不了系统剪贴板，输入框也不能粘贴外面的文字）。
+- **改名**：Linux 的数据目录会从 `~/.local/share/nailong` 自动搬到 `~/.local/share/cairn`，什么都不丢；Windows 仍是程序旁边的 `.minecraft`。deb 包改叫 `cairn`，直接装会替换旧的 `nailong` 包。
+
+为什么下载 exe 时浏览器会提示「通常不会下载」、HMCL 却不会，见 [22 · Windows 下载提示](docs/design/22-windows-trust.md)。
+
 0.36 把调参的两个问题分开回答，并理顺了几处「看得见却点不了」的地方。
 
-- **测一下这台电脑**：不再给每个版本复制测试实例、开游戏飞行。设置里点「测一下」，启动器在后台跑一个内置的小 Java 程序（7 KB，Java 8 字节码），照游戏的样子造负载：常驻数据、区块缓存、生成线程、服务端 tick 和不封顶的渲染线程。对这台电脑上每个 Java 21+ 分常规和大型整合包两档比较 G1 和 ZGC 的平均帧率、1% 低帧、顿和 CPU，每个 Java 约 1 分半，不开窗口，结论所有版本共用。命令行是 `nailong bench`。
-- **内存从游戏里学**：每局都把回收日志写进游戏目录的 `logs/nailong-gc.log`，退出后读出进世界以后真正常驻的数据，下次「自动」内存按它算；出现整堆回收就加大。没玩过的版本仍按公式。
+- **测一下这台电脑**：不再给每个版本复制测试实例、开游戏飞行。设置里点「测一下」，启动器在后台跑一个内置的小 Java 程序（7 KB，Java 8 字节码），照游戏的样子造负载：常驻数据、区块缓存、生成线程、服务端 tick 和不封顶的渲染线程。对这台电脑上每个 Java 21+ 分常规和大型整合包两档比较 G1 和 ZGC 的平均帧率、1% 低帧、顿和 CPU，每个 Java 约 1 分半，不开窗口，结论所有版本共用。命令行是 `cairn-cli bench`。
+- **内存从游戏里学**：每局都把回收日志写进游戏目录的 `logs/cairn-gc.log`（0.36 叫 `nailong-gc.log`），退出后读出进世界以后真正常驻的数据，下次「自动」内存按它算；出现整堆回收就加大。没玩过的版本仍按公式。
 - **内容页**：「已禁用 3」「重复 4」这些数字可以点，点了就只看这些；带放大镜的搜索框（`Ctrl+F`）和状态筛选可以叠加；「打开文件夹」和每一项的「在文件夹中显示」；Mod、资源包、光影可以直接从文件管理器拖进窗口，一次拖很多个，悬停时就说会装到哪；在外面改了文件，回到窗口自动刷新。
 - **日志**：启动失败后的「查看日志」一步打开这次的游戏输出，能认出的原因写在最上面（例如缺哪个前置 Mod），错误行标红，可以只看错误、搜索、复制、在文件夹中显示；`Ctrl+L` 随时打开。
 
@@ -155,42 +166,42 @@ nailong 的思路很直：
 
 | 平台 | 文件 | 大小 | 要求 |
 |---|---|---:|---|
-| Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | 约 8 MB | Windows 10/11，Java 21 |
-| Linux x64 (deb) | [nailong_0.36.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.36.0_amd64.deb) | 约 3.4 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
+| Windows x64 | [cairn.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/cairn.exe) | 约 9 MB | Windows 10/11，Java 21 |
+| Linux x64 (deb) | [cairn_0.37.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/cairn_0.37.0_amd64.deb) | 约 3.7 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
 
 校验值：[SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS)。
 
 ### Windows
 
-1. 下载 `nailong.exe`，放到任意目录，双击运行。
+1. 下载 `cairn.exe`，放到任意目录，双击运行。以前用 `nailong.exe` 的，把 `cairn.exe` 放到同一个目录就能接着用原来的 `.minecraft`。
 2. 第一次打开是三步引导：确认 Java、确认目录，再点“安装第一个版本”；选 Minecraft 版本和 Fabric / NeoForge / Forge / 原版，点“安装”。
 3. 进度走完后回到主页，点“启动游戏”。
 
 需要系统里有 **Java 21**。启动器会自动查找；没找到时界面会提示。
 
-> exe 没有代码签名，Windows SmartScreen 可能提示“未知发布者”。选择“更多信息 → 仍要运行”即可。杀毒软件误报也偶有发生。
+> exe 还没有代码签名。新版本刚发布、下载的人还少时，浏览器可能提示「通常不会下载」，Windows 可能提示「未知发布者」：浏览器里选「保留 → 仍然保留」，运行时选「更多信息 → 仍要运行」。可以用 SHA256SUMS 核对文件。原因和打算见 [22 · Windows 下载提示](docs/design/22-windows-trust.md)。
 
 ### Linux（Debian / Ubuntu）
 
 ```bash
-sudo apt install ./nailong_0.36.0_amd64.deb
-nailong
+sudo apt install ./cairn_0.37.0_amd64.deb
+cairn
 ```
 
-也可以双击 deb 用软件中心安装。安装后应用菜单里会有 **nailong**。
+也可以双击 deb 用软件中心安装。安装后应用菜单里会有 **Cairn**。装过旧的 `nailong` 包也没关系，`cairn` 会替换它。
 
 卸载：
 
 ```bash
-sudo apt remove nailong
+sudo apt remove cairn
 ```
 
 > deb 在 Ubuntu 26.04 / amd64 上构建，要求 glibc ≥ 2.39；Ubuntu 24.04+ 可以直接安装，22.04 等更旧的系统暂时装不上。
 
 ### 数据目录
 
-- Windows：`nailong.exe` 同目录下的 `.minecraft`（便携）。
-- Linux：`~/.local/share/nailong/.minecraft`。
+- Windows：`cairn.exe` 同目录下的 `.minecraft`（便携）。
+- Linux：`~/.local/share/cairn/.minecraft`。第一次启动 0.37 时，旧的 `~/.local/share/nailong` 会整个改名过来。
 
 可以用 `--root` 指定其他目录。
 
@@ -227,13 +238,13 @@ sudo apt remove nailong
 deb 只装 GUI；自己构建会同时得到 CLI：
 
 ```bash
-./target/release/nailong --root /path/to/.minecraft list
-./target/release/nailong --root /path/to/.minecraft install neoforge 1.21.1 21.1.209
-./target/release/nailong --root /path/to/.minecraft install modpack ~/Downloads/pack.mrpack
-./target/release/nailong --root /path/to/.minecraft install modpack ~/Downloads/pack.zip
-./target/release/nailong --root /path/to/.minecraft launch neoforge-21.1.209 --username Steve --memory 4096
+./target/release/cairn-cli --root /path/to/.minecraft list
+./target/release/cairn-cli --root /path/to/.minecraft install neoforge 1.21.1 21.1.209
+./target/release/cairn-cli --root /path/to/.minecraft install modpack ~/Downloads/pack.mrpack
+./target/release/cairn-cli --root /path/to/.minecraft install modpack ~/Downloads/pack.zip
+./target/release/cairn-cli --root /path/to/.minecraft launch neoforge-21.1.209 --username Steve --memory 4096
 # 不写 --memory 就自动算；--dry-run 会打印调参过程
-./target/release/nailong --root /path/to/.minecraft launch neoforge-21.1.209 --gc zgc --jvm-arg=-XX:+AlwaysPreTouch --dry-run
+./target/release/cairn-cli --root /path/to/.minecraft launch neoforge-21.1.209 --gc zgc --jvm-arg=-XX:+AlwaysPreTouch --dry-run
 ```
 
 ## 从源码构建
@@ -257,7 +268,7 @@ Linux 构建 deb：
 
 ```bash
 ./scripts/build-deb.sh
-# 产物: dist/nailong_<version>_<arch>.deb
+# 产物: dist/cairn_<version>_<arch>.deb
 ```
 
 Windows 发布版由 GitHub Actions 使用 MSVC + 静态 CRT 构建；也可以用 `x86_64-pc-windows-gnu` 交叉编译做本地检查。

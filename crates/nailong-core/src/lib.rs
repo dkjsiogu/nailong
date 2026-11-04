@@ -10,6 +10,7 @@ pub mod install;
 pub mod installed;
 pub mod java;
 pub mod launch;
+pub mod launchcfg;
 pub mod learned;
 pub mod manifest;
 pub mod mods;

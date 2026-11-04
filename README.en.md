@@ -1,36 +1,47 @@
-# nailong
+# Cairn
 
 [![CI](https://github.com/dkjsiogu/nailong/actions/workflows/ci.yml/badge.svg)](https://github.com/dkjsiogu/nailong/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/dkjsiogu/nailong?label=release)](https://github.com/dkjsiogu/nailong/releases/latest)
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
 
-A small, native Minecraft: Java Edition launcher written in Rust. Windows ships as a single executable, Linux as a single `.deb`. No bundled Java runtime, and no installer needed on Windows either.
+A small, native Minecraft: Java Edition launcher written in Rust. Renamed to **Cairn** in 0.37 (formerly nailong). Windows ships as a single executable, Linux as a single `.deb`. No bundled Java runtime, and no installer needed on Windows either.
 
 [简体中文](README.md) | **English**
 
-> Current version: **0.36.0** (preview)
+> Current version: **0.37.0** (preview)
 >
 > Goals: small binaries, few dependencies, visible install progress, and a repair path after interruption. See [implementation status](docs/design/14-implementation-status.md) for exact boundaries.
 
-## Why nailong
+## Why Cairn
 
 Installing Minecraft is not the hard part — doing it cleanly is. Version JSON, asset indexes, loader processors, JVM flags, and a few hundred files per modpack: one mistake anywhere and the player just sees “launch failed”.
 
-nailong tries to do one thing simply:
+A cairn is the pile of stones hikers leave by a trail: it does not walk for you, it marks the way back. A launcher should do the same: install cleanly, and let you go back when something breaks. In practice:
 
 - Written in Rust; the launcher itself does not run on a JVM. One file on Windows, one package on Linux.
 - Installation is split into visible stages; if interrupted, the next run checks what is missing and resumes instead of restarting.
 - Forge/NeoForge client processors run directly — the official installer is never invoked or left on disk.
-- Drop in a modpack and nailong detects the format, installs the loader, downloads files, and applies overrides.
+- Drop in a modpack and Cairn detects the format, installs the loader, downloads files, and applies overrides.
 
 It is not a universal launcher, and it is not 1.0 yet. What works and what does not is laid out below.
 
 ## Interface
 
+0.37 renames the launcher to Cairn and smooths out what happens before and after you press Launch:
+
+- **Launch settings before you launch**: a row under **Launch** on Home shows the Java, memory, collector, window size and extra JVM flags this version will use. Click any of them to open per-version launch settings: pick any detected Java or a custom one, override memory, collector, flags and window size, and leave the rest following the global defaults. A full command-line preview, built by the same code that launches the game, can be copied in one click.
+- **Screenshot wall**: Home shows this version's screenshots like a store page, newest first. Left-click zooms the thumbnail into a full viewer (←/→ to browse); right-click copies the image itself to the clipboard, with a "Copied" badge. Thumbnails are generated in the background and cached; idle CPU stays at zero.
+- **Full version names**: long names shrink to fit and wrap onto two lines instead of being cut off; long paths in Settings are elided in the middle, show in full on hover and copy on click.
+- **Installed content opens instantly**: the last list shows at once while a background pass re-reads only files whose size or modification time changed. The mod count on Home is verified in the background as well.
+- **The exe has an icon and version info**, and so do the window and taskbar. The system clipboard works now (in 0.36 copies never reached it and text fields could not paste from other apps).
+- **Rename**: on Linux the data directory moves from `~/.local/share/nailong` to `~/.local/share/cairn` automatically, with nothing lost; Windows still uses `.minecraft` next to the exe. The deb package is now `cairn` and replaces the old `nailong` package.
+
+Why browsers say the exe "is not commonly downloaded" while HMCL does not trigger it: see [22 · Windows download warnings](docs/design/22-windows-trust.md) (Chinese).
+
 0.36 answers the two tuning questions separately and fixes several places where the interface showed something without letting you act on it.
 
-- **Test this computer**: no more per-version test instances or game windows. Click "Test" in Settings and the launcher runs a small built-in Java program (7 KB, Java 8 bytecode) that mimics the game: resident data, a chunk cache, worldgen threads, server ticks and an uncapped render thread. For every Java 21+ on the machine it compares G1 and ZGC in a standard and a large-modpack tier by average FPS, 1% lows, visible hitches and CPU. About 90 seconds per Java, no window, and the verdict is shared by every version. The CLI is `nailong bench`.
-- **Memory learned from play**: every session writes its GC log to `logs/nailong-gc.log` in the game directory; after exit the launcher reads how much data really stays live once you are in the world and sizes Auto memory from it next time, adding headroom after full collections. Versions you have not played yet still use the formula.
+- **Test this computer**: no more per-version test instances or game windows. Click "Test" in Settings and the launcher runs a small built-in Java program (7 KB, Java 8 bytecode) that mimics the game: resident data, a chunk cache, worldgen threads, server ticks and an uncapped render thread. For every Java 21+ on the machine it compares G1 and ZGC in a standard and a large-modpack tier by average FPS, 1% lows, visible hitches and CPU. About 90 seconds per Java, no window, and the verdict is shared by every version. The CLI is `cairn-cli bench`.
+- **Memory learned from play**: every session writes its GC log to `logs/cairn-gc.log` in the game directory (`nailong-gc.log` in 0.36); after exit the launcher reads how much data really stays live once you are in the world and sizes Auto memory from it next time, adding headroom after full collections. Versions you have not played yet still use the formula.
 - **Content page**: counts such as "Disabled 3" or "Duplicates 4" are filters you can click; a real search box (`Ctrl+F`) combines with them; "Open folder" and "Show in folder" for every item; drag mods, resource packs and shaders straight from the file manager, many at once, with a hover hint saying where they will go; changes made outside the launcher show up when you switch back.
 - **Logs**: "View log" after a failed launch opens this run's game output directly, with any recognised cause on top (for example which required mod is missing), errors in red, an errors-only filter, search, copy and show-in-folder. `Ctrl+L` opens it any time.
 
@@ -42,7 +53,7 @@ See [20 · test this computer, learn memory from play](docs/design/20-tuning-ben
 
 0.34 adds automatic JVM tuning: memory defaults to Auto, and the heap size comes from RAM, CPU threads, the Java version and the mod count, with tuned G1 flags and generational ZGC for large modpacks on strong machines. The initial heap follows free memory at launch so a busy machine still starts. Settings shows the result, the reasoning and the full flag list, and everything can be overridden. In the same world with 100 s of sprinting, GC runs dropped from 15 to 8 and total pause time by about a third. See [19 · JVM tuning](docs/design/19-jvm-tuning.md).
 
-0.33 rebuilds the interface in nailong's own **Fog Blue** style and stops imitating Minecraft: minimal and matte, with dark and light themes that follow the system by default. A status ring on Home shows file integrity, every mod and your world snapshots. It carries no text at rest; hovering a layer brings a small animation and an explanation, clicking jumps to the matching page, and it also works from the keyboard. A single muted accent replaces glow and gradients, and idle CPU stays at 0.0%. See the [design spec](docs/design/18-ui-fog.md).
+0.33 rebuilds the interface in its own **Fog Blue** style and stops imitating Minecraft: minimal and matte, with dark and light themes that follow the system by default. A status ring on Home shows file integrity, every mod and your world snapshots. It carries no text at rest; hovering a layer brings a small animation and an explanation, clicking jumps to the matching page, and it also works from the keyboard. A single muted accent replaces glow and gradients, and idle CPU stays at 0.0%. See the [design spec](docs/design/18-ui-fog.md).
 
 0.32 tears out the 0.31 aurora glass and rebuilds the launcher in a Minecraft-native **Deepslate** pixel language: the bundled Fusion Pixel 12 px CJK face, zero rounded corners, two-pixel hard borders, beveled block buttons, pixel icons and a deepslate brick shell. Home's centrepiece is an isometric voxel island assembled block by block in Rust: grass, a tree, a pond, ore, a tiny explorer on the edge, four stepped dirt/stone layers and floating gold blocks. Every page and dialog uses the same block components; the four-column content grid is back at 1120 px, while 900×620 hides the latest-world slot and status strip and makes Settings scroll. The backdrop is generated per size and cached as a texture; the island is painted as flat integer-aligned polygons. Idle CPU is still 0.0%.
 
@@ -154,42 +165,42 @@ Drag a `.mrpack` or `.zip` into the window to start an import. A single mod `.ja
 
 | Platform | File | Size | Requirements |
 |---|---|---:|---|
-| Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | ~8 MB | Windows 10/11, Java 21 |
-| Linux x64 (deb) | [nailong_0.36.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.36.0_amd64.deb) | ~3.4 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
+| Windows x64 | [cairn.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/cairn.exe) | ~9 MB | Windows 10/11, Java 21 |
+| Linux x64 (deb) | [cairn_0.37.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/cairn_0.37.0_amd64.deb) | ~3.4 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
 
 Checksums: [SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS).
 
 ### Windows
 
-1. Download `nailong.exe`, put it anywhere, and double-click it.
+1. Download `cairn.exe`, put it anywhere, and double-click it. If you used `nailong.exe` before, put `cairn.exe` in the same folder to keep using the same `.minecraft`.
 2. The first screen is the setup page: choose a Minecraft version, then Fabric / NeoForge / Forge / vanilla, and click **Install**.
 3. When the progress finishes, return to the main screen and click **Launch**.
 
-Java 21 must be installed. nailong searches for it automatically and shows a warning if none is found.
+Java 21 must be installed. Cairn searches for it automatically and shows a warning if none is found.
 
-> The executable is not code-signed, so SmartScreen may show “Unknown publisher”. Choose **More info → Run anyway**. Antivirus false positives can also happen.
+> The executable is not code-signed yet. Right after a release, while few people have downloaded it, the browser may say it "is not commonly downloaded" and Windows may show "Unknown publisher": choose **Keep → Keep anyway** in the browser and **More info → Run anyway** when running it. You can verify the file against SHA256SUMS. See [22 · Windows download warnings](docs/design/22-windows-trust.md) for why and what is planned.
 
 ### Linux (Debian / Ubuntu)
 
 ```bash
-sudo apt install ./nailong_0.36.0_amd64.deb
-nailong
+sudo apt install ./cairn_0.37.0_amd64.deb
+cairn
 ```
 
-You can also double-click the deb in a software center. After installation, **nailong** appears in the application menu.
+You can also double-click the deb in a software center. After installation, **Cairn** appears in the application menu. An installed `nailong` package is replaced automatically.
 
 Uninstall:
 
 ```bash
-sudo apt remove nailong
+sudo apt remove cairn
 ```
 
 > The deb is built on Ubuntu 26.04 / amd64 and requires glibc ≥ 2.39. Ubuntu 24.04+ works; older systems such as 22.04 cannot install it yet.
 
 ### Data directory
 
-- Windows: `.minecraft` next to `nailong.exe` (portable).
-- Linux: `~/.local/share/nailong/.minecraft`.
+- Windows: `.minecraft` next to `cairn.exe` (portable).
+- Linux: `~/.local/share/cairn/.minecraft`. The first 0.37 start renames an existing `~/.local/share/nailong` to it.
 
 Use `--root` to point at another directory.
 
@@ -198,7 +209,7 @@ Use `--root` to point at another directory.
 Official releases include a project key, so CurseForge packs use the official API automatically and **regular users do not configure anything**. It is an application-level key, not a CurseForge account password.
 
 - The official API returns the file name, size, SHA1, and download URL, so downloads can be verified.
-- If the author has disabled third-party distribution, the import stops and lists the affected files. nailong does not synthesize CDN URLs to bypass that setting.
+- If the author has disabled third-party distribution, the import stops and lists the affected files. Cairn does not synthesize CDN URLs to bypass that setting.
 - Maintainers can override the built-in key with the `CURSEFORGE_API_KEY` environment variable, so rotating it does not require a code change.
 - The key is lightly XOR-obfuscated so a casual `strings` scan does not reveal it. **This is not encryption**: it can still be recovered from the binary and is only a shared default quota, not a secret.
 - A local build without an injected key still imports packs through the no-key cfwidget + official-page fallback, without official SHA1.
@@ -225,13 +236,13 @@ Not verified yet:
 The deb only contains the GUI; building from source also produces the CLI:
 
 ```bash
-./target/release/nailong --root /path/to/.minecraft list
-./target/release/nailong --root /path/to/.minecraft install neoforge 1.21.1 21.1.209
-./target/release/nailong --root /path/to/.minecraft install modpack ~/Downloads/pack.mrpack
-./target/release/nailong --root /path/to/.minecraft install modpack ~/Downloads/pack.zip
-./target/release/nailong --root /path/to/.minecraft launch neoforge-21.1.209 --username Steve --memory 4096
+./target/release/cairn-cli --root /path/to/.minecraft list
+./target/release/cairn-cli --root /path/to/.minecraft install neoforge 1.21.1 21.1.209
+./target/release/cairn-cli --root /path/to/.minecraft install modpack ~/Downloads/pack.mrpack
+./target/release/cairn-cli --root /path/to/.minecraft install modpack ~/Downloads/pack.zip
+./target/release/cairn-cli --root /path/to/.minecraft launch neoforge-21.1.209 --username Steve --memory 4096
 # Omit --memory for automatic sizing; --dry-run prints the tuning steps
-./target/release/nailong --root /path/to/.minecraft launch neoforge-21.1.209 --gc zgc --jvm-arg=-XX:+AlwaysPreTouch --dry-run
+./target/release/cairn-cli --root /path/to/.minecraft launch neoforge-21.1.209 --gc zgc --jvm-arg=-XX:+AlwaysPreTouch --dry-run
 ```
 
 ## Build from source
@@ -255,7 +266,7 @@ Build the Linux deb:
 
 ```bash
 ./scripts/build-deb.sh
-# output: dist/nailong_<version>_<arch>.deb
+# output: dist/cairn_<version>_<arch>.deb
 ```
 
 Windows release builds use MSVC with the static CRT in GitHub Actions. `x86_64-pc-windows-gnu` can also be used for a local cross-compile check.

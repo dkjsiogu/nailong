@@ -1,12 +1,12 @@
 [Desktop Entry]
 Type=Application
-Name=nailong
+Name=Cairn
 GenericName=Minecraft Launcher
 Comment=Lightweight Minecraft launcher with NeoForge support
-Exec=nailong
-Icon=io.github.dkjsiogu.nailong
+Exec=cairn
+Icon=io.github.dkjsiogu.cairn
 Terminal=false
 Categories=Game;
-Keywords=minecraft;launcher;neoforge;
+Keywords=minecraft;launcher;neoforge;fabric;forge;nailong;
 StartupNotify=true
-StartupWMClass=nailong
+StartupWMClass=cairn

@@ -4,7 +4,7 @@ members = ["crates/nailong-core", "crates/nailong-cli", "crates/nailong-ui"]
 
 [workspace.package]
 edition = "2024"
-version = "0.36.0"
+version = "0.37.0"
 license = "GPL-3.0-or-later"
 rust-version = "1.95"
 
@@ -26,7 +26,8 @@ thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 indicatif = "0.18"
-eframe = { version = "0.37", default-features = false, features = ["glow", "default_fonts", "system_fonts", "x11"] }
+# clipboard：复制日志、截图和输入框粘贴要用系统剪贴板，0.36 关掉默认特性时漏了它。
+eframe = { version = "0.37", default-features = false, features = ["glow", "default_fonts", "system_fonts", "x11", "clipboard"] }
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 

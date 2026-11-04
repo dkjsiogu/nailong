@@ -1,6 +1,6 @@
 //! 从真实游戏里学这个版本需要多少内存。
 //!
-//! 每次启动都让 JVM 把回收记录写进游戏目录的 `logs/nailong-gc.log`（一局只有几百 KB）。
+//! 每次启动都让 JVM 把回收记录写进游戏目录的 `logs/cairn-gc.log`（一局只有几百 KB）。
 //! 游戏退出后读出清理过老年代的回收之后剩下多少——这就是这套 Mod、这个世界、
 //! 这个视距下真正常驻的数据。下次启动「自动」内存按它算，比按 Mod 数量估准。
 //!
@@ -19,7 +19,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// 相对游戏目录。游戏以游戏目录为工作目录启动，相对路径里没有盘符的冒号，
 /// 不会和 `-Xlog` 自己的分隔符冲突。
-pub const GC_LOG: &str = "logs/nailong-gc.log";
+pub const GC_LOG: &str = "logs/cairn-gc.log";
 const STORE: &str = "learned.json";
 /// 每个版本只记最近几局。
 const KEEP: usize = 5;

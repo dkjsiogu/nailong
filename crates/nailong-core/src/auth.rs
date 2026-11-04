@@ -678,7 +678,7 @@ fn parse_callback(request: &str) -> Callback {
 
 fn respond(stream: &mut std::net::TcpStream, status: u16, message: &str) {
     let body = format!(
-        "<!doctype html><meta charset=\"utf-8\"><title>nailong</title><body style=\"font-family:sans-serif;padding:40px\">{message}</body>"
+        "<!doctype html><meta charset=\"utf-8\"><title>Cairn</title><body style=\"font-family:sans-serif;padding:40px\">{message}</body>"
     );
     let _ = write!(
         stream,

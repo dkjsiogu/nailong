@@ -44,7 +44,10 @@ impl Http {
             let _ = rustls::crypto::ring::default_provider().install_default();
         });
         let client = reqwest::blocking::Client::builder()
-            .user_agent(format!("nailong/{}", env!("CARGO_PKG_VERSION")))
+            .user_agent(format!(
+                "cairn/{} (+https://github.com/dkjsiogu/nailong)",
+                env!("CARGO_PKG_VERSION")
+            ))
             .timeout(Duration::from_secs(180))
             .connect_timeout(Duration::from_secs(15))
             .build()

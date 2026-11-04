@@ -10,12 +10,12 @@ use std::sync::{Arc, Mutex};
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "nailong",
+    name = "cairn-cli",
     version,
     about = "轻量的 Minecraft 启动器（neoForge 预览版）"
 )]
 struct Cli {
-    /// 游戏数据目录（默认 ~/.local/share/nailong/.minecraft 或 %APPDATA%\\nailong\\.minecraft）
+    /// 游戏数据目录（默认 ~/.local/share/cairn/.minecraft；Windows 默认在程序旁边的 .minecraft）
     #[arg(long, global = true)]
     root: Option<PathBuf>,
 
@@ -101,8 +101,9 @@ fn default_game_dir(root: &Root, profile: &str) -> PathBuf {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let root = Root::new(cli.root.clone().unwrap_or_else(Root::default_root));
+    root.migrate_legacy_cache();
     println!(
-        "nailong {} · 数据目录: {}",
+        "Cairn {} · 数据目录: {}",
         env!("CARGO_PKG_VERSION"),
         root.dir().display()
     );

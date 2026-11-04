@@ -52,19 +52,21 @@ jobs:
 
       - name: Show package
         run: |
-          ls -lh dist/nailong_*.deb
-          dpkg-deb --info dist/nailong_*.deb | sed -n '1,18p'
+          ls -lh dist/cairn_*.deb
+          dpkg-deb --info dist/cairn_*.deb | sed -n '1,18p'
 
       - uses: actions/upload-artifact@v4
         with:
-          name: nailong-linux-deb
-          path: dist/nailong_*.deb
+          name: cairn-linux-deb
+          path: dist/cairn_*.deb
           if-no-files-found: error
           retention-days: 7
 
   windows:
     name: Windows exe
     runs-on: windows-latest
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
     env:
       # Keep the exe self-contained: no VCRUNTIME140.dll / UCRT dependency.
       RUSTFLAGS: -C target-feature=+crt-static
@@ -80,25 +82,58 @@ jobs:
           key: release-windows-static-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Build GUI
-        run: cargo build --release -p nailong-ui
+        run: cargo build --release -p nailong-ui --bin cairn
 
       - name: Stage single exe
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item target/release/nailong-ui.exe dist/nailong.exe
-          Get-Item dist/nailong.exe | Format-List Name,Length,VersionInfo
+          Copy-Item target/release/cairn.exe dist/cairn.exe
+          $info = (Get-Item dist/cairn.exe).VersionInfo
+          $info | Format-List ProductName,FileDescription,FileVersion,OriginalFilename
+          # 图标和版本信息由 crates/nailong-ui/build.rs 写进 exe；没写进去就别发版。
+          if ($info.ProductName -ne "Cairn") { throw "exe 里没有版本信息资源" }
+
+      - uses: actions/upload-artifact@v4
+        id: upload
+        with:
+          name: cairn-windows-exe
+          path: dist/cairn.exe
+          if-no-files-found: error
+          retention-days: 7
+
+  # 代码签名（预留）：在仓库设置里配好 SignPath Foundation 的变量和令牌后才会运行，
+  # 否则整个任务跳过，发布未签名的 exe。见 docs/design/22-windows-trust.md。
+  #   Variables: SIGNPATH_ORGANIZATION_ID、SIGNPATH_PROJECT_SLUG、SIGNPATH_POLICY_SLUG
+  #   Secrets:   SIGNPATH_API_TOKEN
+  sign:
+    name: Sign Windows exe
+    needs: [windows]
+    if: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG }}
+          github-artifact-id: ${{ needs.windows.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed
 
       - uses: actions/upload-artifact@v4
         with:
-          name: nailong-windows-exe
-          path: dist/nailong.exe
+          name: cairn-windows-exe-signed
+          path: signed/cairn.exe
           if-no-files-found: error
           retention-days: 7
 
   publish:
     name: Publish release
-    needs: [linux, windows]
+    needs: [linux, windows, sign]
+    # 签名任务被跳过（没配签名）时照样发布；签名失败则不发布。
+    if: ${{ always() && needs.linux.result == 'success' && needs.windows.result == 'success' && (needs.sign.result == 'success' || needs.sign.result == 'skipped') }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -113,10 +148,15 @@ jobs:
       - name: Assemble assets
         run: |
           mkdir -p release
-          cp artifacts/nailong-linux-deb/*.deb release/
-          cp artifacts/nailong-windows-exe/nailong.exe release/
+          cp artifacts/cairn-linux-deb/*.deb release/
+          if [ -f artifacts/cairn-windows-exe-signed/cairn.exe ]; then
+            echo "使用已签名的 exe"
+            cp artifacts/cairn-windows-exe-signed/cairn.exe release/
+          else
+            cp artifacts/cairn-windows-exe/cairn.exe release/
+          fi
           cd release
-          sha256sum nailong.exe ./*.deb > SHA256SUMS
+          sha256sum cairn.exe ./*.deb > SHA256SUMS
           cat SHA256SUMS
 
       - name: Create or update GitHub release
@@ -126,6 +166,6 @@ jobs:
           else
             gh release create "$TAG" release/* \
               --repo "$GITHUB_REPOSITORY" \
-              --title "nailong ${TAG#v}" \
+              --title "Cairn ${TAG#v}" \
               --generate-notes
           fi

@@ -12,7 +12,7 @@ cc_bin=${CC:-cc}
 
 version=$(awk -F'"' '/^version = /{print $2; exit}' Cargo.toml)
 arch=$(dpkg --print-architecture)
-package="nailong"
+package="cairn"
 out_dir="$root/dist"
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
@@ -26,41 +26,41 @@ mkdir -p "$compat_dir"
 
 echo "==> building GUI binary (release)"
 RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=$compat_obj -C link-arg=-Wl,--wrap=atan2f" \
-  "$cargo_bin" build --release -p nailong-ui
+  "$cargo_bin" build --release -p nailong-ui --bin cairn
 
-bin="$root/target/release/nailong-ui"
+bin="$root/target/release/cairn"
 glibc_req=$(objdump -T "$bin" | grep -o 'GLIBC_[0-9.]*' | sed 's/^GLIBC_//' | sort -V | tail -1)
 if [ -z "$glibc_req" ]; then
   echo "could not determine glibc requirement" >&2
   exit 1
 fi
 
-install -Dm755 "$bin" "$stage/usr/bin/nailong"
-install -Dm644 packaging/linux/io.github.dkjsiogu.nailong.desktop \
-  "$stage/usr/share/applications/io.github.dkjsiogu.nailong.desktop"
-install -Dm644 packaging/linux/io.github.dkjsiogu.nailong.metainfo.xml \
-  "$stage/usr/share/metainfo/io.github.dkjsiogu.nailong.metainfo.xml"
-install -Dm644 packaging/linux/io.github.dkjsiogu.nailong.svg \
-  "$stage/usr/share/icons/hicolor/scalable/apps/io.github.dkjsiogu.nailong.svg"
-install -Dm644 packaging/linux/copyright "$stage/usr/share/doc/nailong/copyright"
-install -Dm644 README.md "$stage/usr/share/doc/nailong/README.md"
-install -Dm644 LICENSE "$stage/usr/share/doc/nailong/LICENSE"
+install -Dm755 "$bin" "$stage/usr/bin/cairn"
+install -Dm644 packaging/linux/io.github.dkjsiogu.cairn.desktop \
+  "$stage/usr/share/applications/io.github.dkjsiogu.cairn.desktop"
+install -Dm644 packaging/linux/io.github.dkjsiogu.cairn.metainfo.xml \
+  "$stage/usr/share/metainfo/io.github.dkjsiogu.cairn.metainfo.xml"
+install -Dm644 packaging/linux/io.github.dkjsiogu.cairn.svg \
+  "$stage/usr/share/icons/hicolor/scalable/apps/io.github.dkjsiogu.cairn.svg"
+install -Dm644 packaging/linux/copyright "$stage/usr/share/doc/cairn/copyright"
+install -Dm644 README.md "$stage/usr/share/doc/cairn/README.md"
+install -Dm644 LICENSE "$stage/usr/share/doc/cairn/LICENSE"
 install -Dm644 THIRD_PARTY_NOTICES.md \
-  "$stage/usr/share/doc/nailong/THIRD_PARTY_NOTICES.md"
+  "$stage/usr/share/doc/cairn/THIRD_PARTY_NOTICES.md"
 
 for size in 16 24 32 48 64 128 256 512; do
-  install -Dm644 "packaging/linux/icons/io.github.dkjsiogu.nailong-${size}.png" \
-    "$stage/usr/share/icons/hicolor/${size}x${size}/apps/io.github.dkjsiogu.nailong.png"
+  install -Dm644 "packaging/linux/icons/io.github.dkjsiogu.cairn-${size}.png" \
+    "$stage/usr/share/icons/hicolor/${size}x${size}/apps/io.github.dkjsiogu.cairn.png"
 done
 
-cat > "$stage/usr/share/doc/nailong/changelog.Debian" <<EOF
-nailong ($version) unstable; urgency=medium
+cat > "$stage/usr/share/doc/cairn/changelog.Debian" <<EOF
+cairn ($version) unstable; urgency=medium
 
   * Initial public preview.
 
  -- dkjsiogu <123802475+dkjsiogu@users.noreply.github.com>  $(date -R)
 EOF
-gzip -9n "$stage/usr/share/doc/nailong/changelog.Debian"
+gzip -9n "$stage/usr/share/doc/cairn/changelog.Debian"
 
 chmod 755 "$stage"
 mkdir -p "$stage/DEBIAN"
@@ -77,8 +77,12 @@ Maintainer: dkjsiogu <123802475+dkjsiogu@users.noreply.github.com>
 Depends: libc6 (>= $glibc_req), libgcc-s1, libgl1, libegl1, libx11-6, libxext6, libxcursor1, libxi6, libxrandr2, libxkbcommon0
 Recommends: openjdk-21-jre | default-jre, fonts-noto-cjk
 Homepage: https://github.com/dkjsiogu/nailong
+Replaces: nailong
+Conflicts: nailong
+Provides: nailong
 Description: Lightweight Minecraft launcher
- nailong is a lightweight Minecraft: Java Edition launcher written in Rust.
+ Cairn (formerly nailong) is a lightweight Minecraft: Java Edition launcher
+ written in Rust.
  .
  It can install Minecraft with Fabric, NeoForge, Forge or no loader, shows
  download progress, repairs incomplete files, and launches offline.

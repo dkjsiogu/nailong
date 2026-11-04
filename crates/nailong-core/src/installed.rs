@@ -27,6 +27,22 @@ pub struct InstalledEntry {
     pub project_id: Option<String>,
     pub version_id: Option<String>,
     pub version_number: Option<String>,
+    /// 上次扫描时磁盘上的大小和修改时间（Unix 纳秒）。都没变就不再打开压缩包读元数据，
+    /// 几百个 Mod 的目录也只需要读一遍目录。旧索引没有这两项，第一次会完整扫一遍。
+    #[serde(default)]
+    pub size: Option<u64>,
+    #[serde(default)]
+    pub modified: Option<u64>,
+}
+
+/// 文件的大小和修改时间（纳秒），读不到时为 None。
+fn stamp(meta: &fs::Metadata) -> (Option<u64>, Option<u64>) {
+    let modified = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos() as u64);
+    (Some(meta.len()), modified)
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -122,7 +138,10 @@ fn scan_into(index: &mut ContentIndex, game_dir: &Path, kind: ContentKind) -> Re
     if let Ok(entries) = fs::read_dir(&dir) {
         for item in entries.flatten() {
             let path = item.path();
-            if !path.is_file() {
+            let Ok(disk) = fs::metadata(&path) else {
+                continue;
+            };
+            if !disk.is_file() {
                 continue;
             }
             let raw = item.file_name().to_string_lossy().to_string();
@@ -133,25 +152,42 @@ fn scan_into(index: &mut ContentIndex, game_dir: &Path, kind: ContentKind) -> Re
             if !is_content_file(&file, kind) {
                 continue;
             }
-            let meta = inspect_archive(&path, kind, &file);
+            let (size, modified) = stamp(&disk);
             let existing = index
                 .entries
                 .iter()
                 .find(|entry| entry.kind == kind && entry.file == file);
+            // 大小和修改时间都对得上：文件没变，沿用上次读到的名字和 ID。
+            if let Some(existing) = existing
+                && existing.size.is_some()
+                && existing.modified.is_some()
+                && existing.size == size
+                && existing.modified == modified
+            {
+                let mut entry = existing.clone();
+                entry.enabled = enabled;
+                seen.insert(file, entry);
+                continue;
+            }
+            let meta = inspect_archive(&path, kind, &file);
             let entry = InstalledEntry {
                 kind,
                 file: file.clone(),
                 enabled,
+                // 从平台下载的保留平台上的名字；本地文件以文件里写的为准。
                 name: existing
+                    .filter(|entry| entry.source.is_some())
                     .map(|entry| entry.name.clone())
                     .unwrap_or(meta.name),
-                mod_id: existing
-                    .and_then(|entry| entry.mod_id.clone())
-                    .or(meta.mod_id),
+                mod_id: meta
+                    .mod_id
+                    .or_else(|| existing.and_then(|entry| entry.mod_id.clone())),
                 source: existing.and_then(|entry| entry.source),
                 project_id: existing.and_then(|entry| entry.project_id.clone()),
                 version_id: existing.and_then(|entry| entry.version_id.clone()),
                 version_number: existing.and_then(|entry| entry.version_number.clone()),
+                size,
+                modified,
             };
             seen.insert(file, entry);
         }
@@ -309,6 +345,8 @@ pub fn record_versions(
             project_id: Some(version.project_id.clone()),
             version_id: Some(version.id.clone()),
             version_number: Some(version.version_number.clone()),
+            size: None,
+            modified: None,
         };
         if let Some(existing) = index
             .entries
@@ -511,6 +549,8 @@ pub fn import_local(game_dir: &Path, kind: ContentKind, source: &Path) -> Result
         project_id: None,
         version_id: None,
         version_number: None,
+        size: None,
+        modified: None,
     };
     index.entries.push(entry.clone());
     save(game_dir, &index)?;
@@ -543,6 +583,67 @@ mod tests {
         zip.write_all(format!(r#"{{"id":"{id}","name":"{name}","version":"1.0"}}"#).as_bytes())
             .unwrap();
         zip.finish().unwrap();
+    }
+
+    #[test]
+    fn rescans_only_files_that_changed() {
+        let dir = temp_dir("stamp");
+        let jar = dir.join("mods/cool.jar");
+        write_mod(&jar, "cool", "Cool");
+        let first = scan(&dir, ContentKind::Mod).unwrap();
+        assert_eq!(first[0].name, "Cool");
+        assert!(first[0].size.is_some() && first[0].modified.is_some());
+        // 改掉索引里的名字：文件没变时沿用索引，说明没有重新打开压缩包。
+        let mut index = load(&dir);
+        index.entries[0].name = "Cached".into();
+        save(&dir, &index).unwrap();
+        assert_eq!(scan(&dir, ContentKind::Mod).unwrap()[0].name, "Cached");
+        // 禁用只是改名，大小和时间不变，状态要跟上。
+        fs::rename(&jar, dir.join("mods/cool.jar.disabled")).unwrap();
+        let disabled = scan(&dir, ContentKind::Mod).unwrap();
+        assert!(!disabled[0].enabled);
+        // 文件换了：重新读出元数据里的 ID。
+        fs::rename(dir.join("mods/cool.jar.disabled"), &jar).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        write_mod(&jar, "other", "Other Mod With Longer Name");
+        let changed = scan(&dir, ContentKind::Mod).unwrap();
+        assert_eq!(changed[0].mod_id.as_deref(), Some("other"));
+        // 外面删掉的文件从列表里消失。
+        fs::remove_file(&jar).unwrap();
+        assert!(scan(&dir, ContentKind::Mod).unwrap().is_empty());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// 150 个、每个 300 个条目的 jar：第一次要打开每个压缩包，之后只看大小和修改时间。
+    #[test]
+    #[ignore = "计时用，手动跑"]
+    fn scan_speed_with_many_mods() {
+        let dir = temp_dir("speed");
+        for i in 0..150 {
+            let file = fs::File::create(dir.join(format!("mods/mod-{i}.jar"))).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            for j in 0..300 {
+                zip.start_file(
+                    format!("assets/m{i}/f{j}.json"),
+                    zip::write::SimpleFileOptions::default(),
+                )
+                .unwrap();
+                zip.write_all(&[b'x'; 512]).unwrap();
+            }
+            zip.start_file("fabric.mod.json", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(format!(r#"{{"id":"m{i}","name":"Mod {i}"}}"#).as_bytes())
+                .unwrap();
+            zip.finish().unwrap();
+        }
+        let started = std::time::Instant::now();
+        assert_eq!(scan_all(&dir).unwrap().entries.len(), 150);
+        let first = started.elapsed();
+        let started = std::time::Instant::now();
+        assert_eq!(scan_all(&dir).unwrap().entries.len(), 150);
+        let second = started.elapsed();
+        println!("first scan {first:?}, cached scan {second:?}");
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -632,6 +733,8 @@ mod tests {
             project_id: Some("P".into()),
             version_id: Some(file.into()),
             version_number: None,
+            size: None,
+            modified: None,
         };
         let groups = duplicates(&[entry("a.jar"), entry("b.jar")]);
         assert_eq!(groups.len(), 1);
@@ -661,6 +764,8 @@ mod tests {
             project_id: None,
             version_id: None,
             version_number: None,
+            size: None,
+            modified: None,
         };
         save(
             &dir,

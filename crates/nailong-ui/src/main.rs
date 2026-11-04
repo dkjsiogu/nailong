@@ -6,6 +6,7 @@ use nailong_core::bench;
 use nailong_core::install::{catalog, fabric, forge, health, modpack, neoforge, vanilla};
 use nailong_core::installed;
 use nailong_core::launch::{self, LaunchOptions};
+use nailong_core::launchcfg::{self, MemoryPick, VersionLaunch};
 use nailong_core::learned;
 use nailong_core::mods;
 use nailong_core::progress::{Progress, Sink, from_fn};
@@ -14,14 +15,16 @@ use nailong_core::saves;
 use nailong_core::snapshots;
 use nailong_core::tuning;
 use nailong_core::{Error, Root, cancel, java};
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
+mod launchview;
 mod logview;
 mod motion;
 mod rings;
+mod shots;
 mod theme;
 
 use theme as t;
@@ -160,6 +163,23 @@ impl StatusFilter {
             Self::Duplicates => "重复",
         }
     }
+}
+
+/// 命令行预览：给人看的逐行写法和能复制的整条命令，或者生成失败的原因。
+type CommandPreview = Result<(Vec<String>, String), String>;
+
+/// 启动参数窗口的状态：在改哪个版本、草稿，以及命令行预览。
+struct LaunchEdit {
+    row_id: String,
+    draft: VersionLaunch,
+    /// 自定义窗口大小的输入框。
+    width: String,
+    height: String,
+    /// 预览对应的设置；和当前草稿不一样就重新算。
+    preview_key: String,
+    preview_rx: Option<mpsc::Receiver<CommandPreview>>,
+    preview: Option<CommandPreview>,
+    copied_at: Option<f64>,
 }
 
 /// 拖进来的文件分好类之后要做的事。
@@ -341,6 +361,14 @@ struct App {
     bench_confirm: bool,
     /// 「测一下这台电脑」的结果，所有版本共用。
     bench_store: Option<bench::Store>,
+    /// 每个版本单独的启动参数，键是版本行的 id。
+    launch_cfgs: BTreeMap<String, VersionLaunch>,
+    /// 启动参数窗口。
+    launch_edit: Option<LaunchEdit>,
+    /// 在启动参数里手动选过、但自动检测没找到的 Java。
+    extra_javas: Vec<java::JavaRuntime>,
+    /// 启动台截图墙，跟着当前版本的游戏目录。
+    shots: Option<shots::Shots>,
     reduce_motion: bool,
     theme_pref: t::Preference,
     java_ok: bool,
@@ -358,6 +386,8 @@ struct App {
     mods_status: StatusFilter,
     /// 这次导入的文件，列表里标「刚导入」，换页就清掉。
     mods_recent: HashSet<String>,
+    /// `mods_installed` 是哪个游戏目录的；换目录时先显示那个目录上次的索引。
+    mods_installed_dir: Option<PathBuf>,
     /// 下一帧把焦点交给搜索框（Ctrl+F）。
     focus_search: bool,
     /// 内容目录上次扫描时的样子；窗口重新拿到焦点时比一比，变了就自动重扫。
@@ -456,6 +486,10 @@ struct App {
     rollback_rx: Option<mpsc::Receiver<Msg>>,
     pending_install: Option<PendingInstall>,
     home_cache: Option<HomeCache>,
+    /// 启动台在后台核对内容目录：(版本行 id, 结果)。索引可能是旧的或从没扫过。
+    home_scan: Option<(String, mpsc::Receiver<Vec<installed::InstalledEntry>>)>,
+    /// 这一轮缓存里已经核对过的版本行。
+    home_verified: Option<String>,
     version_cache: Option<(String, (usize, usize, usize, usize))>,
     page_key: u8,
     page_enter_at: f64,
@@ -553,6 +587,10 @@ impl App {
             tuning_cache: HashMap::new(),
             bench_confirm: false,
             bench_store: None,
+            launch_cfgs: BTreeMap::new(),
+            launch_edit: None,
+            extra_javas: Vec::new(),
+            shots: None,
             reduce_motion: prefs.reduce_motion,
             theme_pref: prefs.theme,
             java_ok,
@@ -569,6 +607,7 @@ impl App {
             mods_status: StatusFilter::All,
             mods_recent: HashSet::new(),
             focus_search: false,
+            mods_installed_dir: None,
             mods_dir_sig: 0,
             window_focused: true,
             drop_preview: None,
@@ -660,6 +699,8 @@ impl App {
             rollback_rx: None,
             pending_install: None,
             home_cache: None,
+            home_scan: None,
+            home_verified: None,
             version_cache: None,
             page_key: 255,
             page_enter_at: 0.0,
@@ -670,6 +711,7 @@ impl App {
             launch_started: None,
             running_row: None,
         };
+        app.launch_cfgs = launchcfg::load_all(&app.root);
         app.refresh();
         app.bench_store = bench::load(&app.root);
         {
@@ -999,6 +1041,8 @@ impl App {
             || self.pending_install.is_some()
             || self.show_rollback
             || self.log_view.is_some()
+            || self.launch_edit.is_some()
+            || self.shots.as_ref().is_some_and(|shots| shots.viewing())
         {
             return;
         }
@@ -1078,42 +1122,118 @@ impl App {
         self.tuning_cache.clear();
     }
 
-    fn tuning_settings(&self) -> tuning::Settings {
+    /// 这个版本单独的启动参数；没设置过时全部跟随全局。
+    fn version_cfg(&self, row_id: &str) -> VersionLaunch {
+        self.launch_cfgs.get(row_id).cloned().unwrap_or_default()
+    }
+
+    /// 全局设置叠上这个版本自己的设置。
+    fn tuning_settings(&self, cfg: &VersionLaunch) -> tuning::Settings {
         tuning::Settings {
-            memory_mb: self.memory,
+            memory_mb: cfg.memory.map_or(self.memory, MemoryPick::memory_mb),
             min_memory_mb: None,
-            gc: self.gc,
-            extra: tuning::split_args(&self.jvm_args),
+            gc: cfg.gc.unwrap_or(self.gc),
+            extra: tuning::split_args(cfg.jvm_args.as_deref().unwrap_or(&self.jvm_args)),
             ..Default::default()
         }
     }
 
+    /// 指定路径的 Java：先在检测到的里找，找不到再读一次它的版本。
+    fn java_at(&mut self, path: &std::path::Path) -> Option<java::JavaRuntime> {
+        let same = |runtime: &java::JavaRuntime| {
+            runtime.path == path
+                || std::fs::canonicalize(&runtime.path).ok() == std::fs::canonicalize(path).ok()
+        };
+        if let Some(found) = self.javas.iter().chain(&self.extra_javas).find(|r| same(r)) {
+            return Some(found.clone());
+        }
+        let runtime = java::probe(path).ok()?;
+        self.extra_javas.push(runtime.clone());
+        Some(runtime)
+    }
+
     /// 这个版本启动时会用的堆和 GC 参数，和 `launch` 的算法相同；只在缓存失效时读盘。
     fn tuning_for(&mut self, row: &Row) -> Option<tuning::Plan> {
-        if !self.tuning_cache.contains_key(&row.id) {
+        let cfg = self.version_cfg(&row.id);
+        self.plan_for(row, &cfg).map(|(plan, _)| plan)
+    }
+
+    /// 缓存按「版本 + 指定的 Java」区分：启动参数窗口里换 Java 时不会串。
+    fn tuning_key(row_id: &str, cfg: &VersionLaunch) -> String {
+        format!("{row_id}\u{1f}{:?}", cfg.java)
+    }
+
+    /// 按给定的启动参数（可以是还没保存的草稿）算出会用的 JVM 参数和 Java。
+    fn plan_for(
+        &mut self,
+        row: &Row,
+        cfg: &VersionLaunch,
+    ) -> Option<(tuning::Plan, java::JavaRuntime)> {
+        let key = Self::tuning_key(&row.id, cfg);
+        if !self.tuning_cache.contains_key(&key) {
             let game_dir = row
                 .game_dir
                 .clone()
                 .unwrap_or_else(|| self.root.dir().to_path_buf());
-            let entry = tuning::workload(&self.root, &row.profile, &game_dir, &self.javas)
+            let chosen = cfg.java.as_deref().and_then(|path| self.java_at(path));
+            let entry = if cfg.java.is_some() && chosen.is_none() {
+                None
+            } else {
+                tuning::workload(
+                    &self.root,
+                    &row.profile,
+                    &game_dir,
+                    &self.javas,
+                    chosen.as_ref(),
+                )
                 .ok()
                 .map(|(work, java)| {
                     let learned = learned::load(&self.root, &row.profile, &game_dir);
                     (work, java, learned)
-                });
+                })
+            };
             self.machine = tuning::Machine::detect();
-            self.tuning_cache.insert(row.id.clone(), entry);
+            self.tuning_cache.insert(key.clone(), entry);
         }
-        let (work, java, learned) = self.tuning_cache.get(&row.id)?.as_ref()?;
+        let (work, java, learned) = self.tuning_cache.get(&key)?.as_ref()?;
         let settings = tuning::Settings {
             bench: self
                 .bench_store
                 .as_ref()
                 .and_then(|store| store.verdict(java)),
             learned: learned.clone(),
-            ..self.tuning_settings()
+            ..self.tuning_settings(cfg)
         };
-        Some(tuning::plan(&self.machine, work, &settings))
+        Some((tuning::plan(&self.machine, work, &settings), java.clone()))
+    }
+
+    /// 缓存里这个版本当前设置对应的那一条。
+    fn tuning_entry(&self, row_id: &str) -> Option<&TuningEntry> {
+        let key = Self::tuning_key(row_id, &self.version_cfg(row_id));
+        self.tuning_cache.get(&key)?.as_ref()
+    }
+
+    /// 启动台下方的截图墙：游戏真正写截图的目录（和启动时的游戏目录一致）。
+    fn screenshot_strip(&mut self, ui: &mut egui::Ui, row: &Row, width: f32) {
+        let dir = row
+            .game_dir
+            .clone()
+            .unwrap_or_else(|| self.root.dir().to_path_buf())
+            .join("screenshots");
+        if self.shots.as_ref().is_none_or(|shots| shots.dir() != dir) {
+            self.shots = Some(shots::Shots::new(
+                ui.ctx(),
+                dir.clone(),
+                self.root.cache().join("thumbs"),
+            ));
+        }
+        let Some(shots) = &mut self.shots else {
+            return;
+        };
+        if shots.strip(ui, width) {
+            let _ = std::fs::create_dir_all(&dir);
+            open_folder(&dir);
+        }
     }
 
     /// 例如「内存 5 GB（自动）」。
@@ -1274,17 +1394,25 @@ impl App {
                     return;
                 };
                 let entry = self
-                    .tuning_cache
-                    .get(&row.id)
-                    .and_then(|entry| entry.as_ref())
+                    .tuning_entry(&row.id)
                     .map(|(work, java, learned)| (work.clone(), java.clone(), learned.clone()));
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(plan.headline()).size(14.0));
-                    ui.label(
-                        egui::RichText::new(short_text(&row.label, 24))
-                            .size(13.0)
-                            .color(t::dim()),
+                    // 版本名占剩下的地方，太长就省略，不和右边的链接重叠。
+                    let room = (ui.available_width() - 72.0).max(40.0);
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(room, 20.0),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(&row.label).size(13.0).color(t::dim()),
+                                )
+                                .truncate(),
+                            )
+                            .on_hover_text(&row.label);
+                        },
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let label = if self.show_tuning {
@@ -1298,6 +1426,40 @@ impl App {
                     });
                 });
                 ui.label(egui::RichText::new(&plan.basis).size(13.0).color(t::dim()));
+                // 这里是全局默认；这个版本自己改过的项以启动参数为准，说清楚免得以为没生效。
+                let cfg = self.version_cfg(&row.id);
+                if !cfg.is_default() {
+                    let mut own = Vec::new();
+                    if cfg.java.is_some() {
+                        own.push("Java");
+                    }
+                    if cfg.memory.is_some() {
+                        own.push("内存");
+                    }
+                    if cfg.gc.is_some() {
+                        own.push("回收器");
+                    }
+                    if cfg.jvm_args.is_some() {
+                        own.push("JVM 参数");
+                    }
+                    if cfg.window.is_some() {
+                        own.push("窗口");
+                    }
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "这个版本单独设置了{}，以启动参数为准",
+                                own.join("、")
+                            ))
+                            .size(13.0)
+                            .color(t::accent()),
+                        );
+                        if action_link(ui, "去看看").clicked() {
+                            self.show_settings = false;
+                            self.open_launch_edit(&row);
+                        }
+                    });
+                }
                 for warning in &plan.warnings {
                     ui.label(egui::RichText::new(warning).size(13.0).color(t::warn()));
                 }
@@ -1483,6 +1645,7 @@ impl App {
 
     fn refresh(&mut self) {
         self.home_cache = None;
+        self.home_verified = None;
         self.tuning_cache.clear();
         self.version_cache = None;
         let required_by = profile_dependents(&self.root);
@@ -2292,59 +2455,15 @@ impl App {
                             .show(ui, |ui| {
                                 ui.set_width(442.0);
                                 ui.horizontal(|ui| {
-                                    ui.label(
-                                        egui::RichText::new("游戏目录").size(13.0).color(t::sub()),
-                                    );
-                                    ui.with_layout(
-                                        egui::Layout::right_to_left(egui::Align::Center),
-                                        |ui| {
-                                            if motion::secondary_sized(
-                                                ui, "打开", true, 54.0, 24.0, 10.0,
-                                            )
-                                            .clicked()
-                                            {
-                                                open_dir = Some(game_dir.clone());
-                                            }
-                                            ui.add(
-                                                egui::Label::new(
-                                                    egui::RichText::new(
-                                                        game_dir.display().to_string(),
-                                                    )
-                                                    .size(13.0)
-                                                    .color(t::sub()),
-                                                )
-                                                .truncate(),
-                                            );
-                                        },
-                                    );
+                                    if path_row(ui, "游戏目录", &game_dir) {
+                                        open_dir = Some(game_dir.clone());
+                                    }
                                 });
                                 ui.add_space(6.0);
                                 ui.horizontal(|ui| {
-                                    ui.label(
-                                        egui::RichText::new("数据目录").size(13.0).color(t::sub()),
-                                    );
-                                    ui.with_layout(
-                                        egui::Layout::right_to_left(egui::Align::Center),
-                                        |ui| {
-                                            if motion::secondary_sized(
-                                                ui, "打开", true, 54.0, 24.0, 10.0,
-                                            )
-                                            .clicked()
-                                            {
-                                                open_dir = Some(self.root.dir().to_path_buf());
-                                            }
-                                            ui.add(
-                                                egui::Label::new(
-                                                    egui::RichText::new(
-                                                        self.root.dir().display().to_string(),
-                                                    )
-                                                    .size(13.0)
-                                                    .color(t::sub()),
-                                                )
-                                                .truncate(),
-                                            );
-                                        },
-                                    );
+                                    if path_row(ui, "数据目录", self.root.dir()) {
+                                        open_dir = Some(self.root.dir().to_path_buf());
+                                    }
                                 });
                             });
                         ui.add_space(12.0);
@@ -3138,11 +3257,36 @@ impl App {
             self.error = Some("这个版本缺少文件，先补全再启动".into());
             return;
         }
-        if !self.java_ok {
-            self.refresh_java();
-            if !self.java_ok {
-                self.error = Some("没有找到 Java 21 或更高版本，可以在设置里打开下载页".into());
-                return;
+        let cfg = self.version_cfg(&row.id);
+        let required = launch::required_java_for(&self.root, &row.profile).unwrap_or(8);
+        match &cfg.java {
+            Some(path) => match self.java_at(path) {
+                Some(java) if java.major < required => {
+                    self.error = Some(format!(
+                        "这个版本需要 Java {required}，启动参数里指定的是 Java {}；在启动参数里换一个",
+                        java.major
+                    ));
+                    return;
+                }
+                Some(_) => {}
+                None => {
+                    self.error = Some(format!(
+                        "启动参数里指定的 Java 不见了：{}；在启动参数里换一个",
+                        path.display()
+                    ));
+                    return;
+                }
+            },
+            None => {
+                if !self.javas.iter().any(|java| java.major >= required) {
+                    self.refresh_java();
+                }
+                if !self.javas.iter().any(|java| java.major >= required) {
+                    self.error = Some(format!(
+                        "这个版本需要 Java {required} 或更新，没有找到；可以在设置里打开下载页"
+                    ));
+                    return;
+                }
             }
         }
         self.error = None;
@@ -3161,7 +3305,8 @@ impl App {
             started: std::time::SystemTime::now(),
             outcome: logview::Outcome::Running,
         });
-        self.tuning_cache.remove(&row.id);
+        self.tuning_cache
+            .retain(|key, _| !key.starts_with(&format!("{}\u{1f}", row.id)));
         if let Some(plan) = self.tuning_for(&row) {
             self.log
                 .push(format!("JVM {}，{}", plan.headline(), plan.basis));
@@ -3170,7 +3315,9 @@ impl App {
         }
         let root = self.root.clone();
         let username = self.username.clone();
-        let tuning = self.tuning_settings();
+        let tuning = self.tuning_settings(&cfg);
+        let [width, height] = cfg.window();
+        let java_path = cfg.java.clone();
         let account = self.account.clone();
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
@@ -3181,6 +3328,9 @@ impl App {
                 gc: tuning.gc,
                 jvm_args: tuning.extra,
                 game_dir: row.game_dir.clone(),
+                java: java_path,
+                width,
+                height,
                 ..Default::default()
             };
             if let Some(account) = account {
@@ -3247,6 +3397,7 @@ impl App {
         self.mods_kind = kind;
         self.mods_show_installed = false;
         self.mods_installed.clear();
+        self.mods_installed_dir = None;
         self.mods_installed_loading = false;
         self.mods_updates_loading = false;
         self.mods_updates.clear();
@@ -3548,6 +3699,7 @@ impl App {
             self.start_mods_scan();
         } else {
             self.home_cache = None;
+            self.home_verified = None;
             self.tuning_cache.clear();
         }
     }
@@ -3628,12 +3780,19 @@ impl App {
 
     fn start_mods_scan(&mut self) {
         self.home_cache = None;
+        self.home_verified = None;
         self.tuning_cache.clear();
         self.version_cache = None;
         let Some(game_dir) = self.mods_game_dir.clone() else {
             return;
         };
-        self.mods_installed_loading = true;
+        // 先把上次的索引摆出来（读一个 JSON，几毫秒），后台再核对磁盘；
+        // 核对只重读大小或修改时间变了的文件，结果回来就替换，所以不会一直显示旧的。
+        if self.mods_installed_dir.as_ref() != Some(&game_dir) {
+            self.mods_installed = installed::load(&game_dir).entries;
+            self.mods_installed_dir = Some(game_dir.clone());
+        }
+        self.mods_installed_loading = self.mods_installed.is_empty();
         self.mods_error = None;
         self.mods_dir_sig = content_signature(&game_dir);
         let (tx, rx) = mpsc::channel();
@@ -4821,6 +4980,7 @@ impl App {
                 Msg::SavesDone(result) => {
                     self.saves_busy = false;
                     self.home_cache = None;
+                    self.home_verified = None;
                     self.tuning_cache.clear();
                     self.saves_rx = None;
                     if self.auto_backup_running {
@@ -5117,7 +5277,7 @@ impl App {
                     ui.horizontal(|ui| {
                         ui.add_space(12.0);
                         ui.label(
-                            egui::RichText::new("nailong")
+                            egui::RichText::new("Cairn")
                                 .size(21.0)
                                 .family(light_family())
                                 .color(t::ink()),
@@ -5126,7 +5286,7 @@ impl App {
                 } else {
                     ui.vertical_centered(|ui| {
                         ui.label(
-                            egui::RichText::new("n")
+                            egui::RichText::new("C")
                                 .size(24.0)
                                 .family(light_family())
                                 .color(t::ink()),
@@ -5227,7 +5387,7 @@ impl App {
                         ui.horizontal_top(|ui| {
                             ui.vertical(|ui| {
                                 ui.label(
-                                    egui::RichText::new("欢迎使用 nailong")
+                                    egui::RichText::new("欢迎使用 Cairn")
                                         .size(36.0)
                                         .family(light_family())
                                         .color(t::ink()),
@@ -5513,7 +5673,10 @@ impl App {
             .game_dir
             .clone()
             .unwrap_or_else(|| self.root.version_dir(&row.profile));
-        let cache = self.home_cache_for(&row, &game_dir);
+        let mut cache = self.home_cache_for(&row, &game_dir);
+        if self.verify_home_content(ui.ctx(), &row) {
+            cache = self.home_cache_for(&row, &game_dir);
+        }
         let ring_data = self.ring_data(&row, &cache);
         let running = ring_data.state == rings::State::Running;
         let title = row
@@ -5562,7 +5725,7 @@ impl App {
                                 .max_rect(left)
                                 .layout(egui::Layout::top_down(egui::Align::LEFT)),
                         );
-                        child.add_space((hero_h - 168.0).max(0.0) / 2.0);
+                        child.add_space((hero_h - 206.0).max(0.0) / 2.0);
                         let status = match ring_data.state {
                             rings::State::Running => "游戏运行中".to_string(),
                             rings::State::Missing => {
@@ -5583,19 +5746,17 @@ impl App {
                                     t::sub()
                                 }),
                         );
-                        child.add(
-                            egui::Label::new(
-                                egui::RichText::new(&title)
-                                    .size(if title.chars().count() > 12 {
-                                        40.0
-                                    } else {
-                                        64.0
-                                    })
-                                    .family(light_family())
-                                    .color(t::ink()),
-                            )
-                            .truncate(),
+                        // 版本名完整显示：放得下用大字，放不下按宽度缩小，太长才换成两行。
+                        let (size, wrap) = fit_title(&child, &title, left.width());
+                        let label = egui::Label::new(
+                            egui::RichText::new(&title)
+                                .size(size)
+                                .family(light_family())
+                                .color(t::ink()),
                         );
+                        child
+                            .add(if wrap { label.wrap() } else { label.extend() })
+                            .on_hover_text(&row.label);
                         child.add_space(14.0);
                         child.horizontal(|ui| {
                             let (label, glyph) = match ring_data.state {
@@ -5631,6 +5792,14 @@ impl App {
                                 chosen = Some(picked);
                             }
                         });
+                        child.add_space(12.0);
+                        self.launch_pills(&mut child, &row);
+                        // 名字换成两行、窄窗口参数折行时，左边可能比预留的高：把多出来的让出来，
+                        // 不压到下面的摘要。
+                        let overflow = child.min_rect().bottom() - hero.bottom();
+                        if overflow > 0.0 {
+                            ui.add_space(overflow + 8.0);
+                        }
 
                         ui.add_space(if compact_h { 10.0 } else { 18.0 });
                         if let Some(note) = &self.notice {
@@ -5703,26 +5872,7 @@ impl App {
                             }
                         }
 
-                        if !compact_h {
-                            ui.add_space(14.0);
-                            let memory = self.memory_label(&row);
-                            let java = if self.java_ok {
-                                "Java 21 已就绪"
-                            } else {
-                                "Java 21 未检测到"
-                            };
-                            ui.label(
-                                egui::RichText::new(format!(
-                                    "{java}    {memory}    Mod、资源包、整合包都可以直接拖进窗口"
-                                ))
-                                .size(13.0)
-                                .color(if self.java_ok {
-                                    t::dim()
-                                } else {
-                                    t::warn()
-                                }),
-                            );
-                        }
+                        self.screenshot_strip(ui, &row, width);
                         ui.add_space(16.0);
                     });
                 });
@@ -6136,6 +6286,7 @@ impl App {
         self.mods_updates_loading = false;
         self.refresh_installed_keys();
         self.mods_installed.clear();
+        self.mods_installed_dir = None;
         if self.mods_show_installed {
             if self.mods_game_dir.is_some() {
                 self.start_mods_scan();
@@ -8409,7 +8560,7 @@ impl App {
                     .inner_margin(egui::Margin::symmetric(6, 4))
                     .show(ui, |ui| {
                         for (index, entry) in entries.iter().enumerate() {
-                            let size = content_size(&game_dir, kind, entry);
+                            let size = entry.size.or_else(|| content_size(&game_dir, kind, entry));
                             let candidate = updates.iter().find(|c| c.entry.file == entry.file);
                             let confirming =
                                 self.mods_delete_confirm.as_deref() == Some(entry.file.as_str());
@@ -8718,6 +8869,7 @@ impl App {
                         |ui| {
                             ui.horizontal_top(|ui| {
                                 ui.vertical(|ui| {
+                                    // 长名字换行完整显示，不截断。
                                     ui.add(
                                         egui::Label::new(
                                             egui::RichText::new(&row.label)
@@ -8725,7 +8877,7 @@ impl App {
                                                 .family(display_family())
                                                 .color(t::ink()),
                                         )
-                                        .truncate(),
+                                        .wrap(),
                                     );
                                 });
                             });
@@ -8864,33 +9016,9 @@ impl App {
                                     .clone()
                                     .unwrap_or_else(|| self.root.version_dir(&row.profile));
                                 ui.horizontal(|ui| {
-                                    ui.label(
-                                        egui::RichText::new("游戏目录").size(13.0).color(t::sub()),
-                                    );
-                                    ui.with_layout(
-                                        egui::Layout::right_to_left(egui::Align::Center),
-                                        |ui| {
-                                            if ui
-                                                .add(
-                                                    egui::Button::new(
-                                                        egui::RichText::new("打开").size(13.0),
-                                                    )
-                                                    .fill(t::bg())
-                                                    .stroke(egui::Stroke::new(1.0, t::hairline()))
-                                                    .corner_radius(motion::R)
-                                                    .min_size(egui::vec2(52.0, 24.0)),
-                                                )
-                                                .clicked()
-                                            {
-                                                open_dir = Some(dir.clone());
-                                            }
-                                            ui.label(
-                                                egui::RichText::new(dir.display().to_string())
-                                                    .size(13.0)
-                                                    .color(t::sub()),
-                                            );
-                                        },
-                                    );
+                                    if path_row(ui, "游戏目录", &dir) {
+                                        open_dir = Some(dir.clone());
+                                    }
                                 });
                                 ui.add_space(8.0);
                                 if row.required_by > 0 {
@@ -9048,6 +9176,65 @@ impl App {
         };
         self.home_cache = Some(cache.clone());
         cache
+    }
+
+    /// 启动台先用索引里的数字，后台核对一遍内容目录（只看大小和修改时间，没变的不打开），
+    /// 结果回来就更新。返回 true 表示刚更新过缓存。
+    fn verify_home_content(&mut self, ctx: &egui::Context, row: &Row) -> bool {
+        if let Some((id, rx)) = &self.home_scan {
+            match rx.try_recv() {
+                Ok(entries) => {
+                    let id = id.clone();
+                    self.home_scan = None;
+                    if let Some(cache) = &mut self.home_cache
+                        && cache.row_id == id
+                    {
+                        let count = |kind: mods::ContentKind| {
+                            entries.iter().filter(|entry| entry.kind == kind).count()
+                        };
+                        cache.mods = count(mods::ContentKind::Mod);
+                        cache.packs = count(mods::ContentKind::ResourcePack);
+                        cache.mod_entries = entries
+                            .iter()
+                            .filter(|entry| entry.kind == mods::ContentKind::Mod)
+                            .map(|entry| (entry.file.clone(), entry.name.clone(), entry.enabled))
+                            .collect();
+                        self.home_verified = Some(id);
+                        return true;
+                    }
+                }
+                Err(mpsc::TryRecvError::Empty) => return false,
+                Err(mpsc::TryRecvError::Disconnected) => self.home_scan = None,
+            }
+        }
+        let fresh = self
+            .home_cache
+            .as_ref()
+            .is_some_and(|cache| cache.row_id == row.id)
+            && self.home_verified.as_deref() == Some(row.id.as_str());
+        if fresh || self.busy.is_some() {
+            return false;
+        }
+        let dir = row
+            .game_dir
+            .clone()
+            .unwrap_or_else(|| self.root.version_dir(&row.profile));
+        let (tx, rx) = mpsc::channel();
+        self.home_scan = Some((row.id.clone(), rx));
+        self.home_verified = Some(row.id.clone());
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let entries = if dir.is_dir() {
+                installed::scan_all(&dir)
+                    .map(|index| index.entries)
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            let _ = tx.send(entries);
+            ctx.request_repaint();
+        });
+        false
     }
 
     /// 把缓存和当前任务整理成状态圆环要显示的数据。
@@ -9784,6 +9971,7 @@ impl eframe::App for App {
             self.page_key = page;
             // 别的页面可能改了内容或快照，回到启动台时重新读取。
             self.home_cache = None;
+            self.home_verified = None;
             self.tuning_cache.clear();
             self.page_enter_at = now;
         }
@@ -9839,6 +10027,10 @@ impl eframe::App for App {
         self.rollback_overlay(ui.ctx());
         self.install_review_overlay(ui.ctx());
         self.log_overlay(ui.ctx());
+        self.launch_overlay(ui.ctx());
+        if let Some(shots) = &mut self.shots {
+            shots.viewer(ui.ctx());
+        }
         motion::focus_ring(ui.ctx());
     }
 }
@@ -10028,6 +10220,37 @@ fn chip(ui: &mut egui::Ui, text: &str, selected: bool) -> egui::Response {
             .corner_radius(motion::R)
             .min_size(egui::vec2(0.0, 28.0)),
     )
+}
+
+/// 启动台大标题的字号：64 号放得下就用 64，放不下按宽度缩小，最小 30；
+/// 30 号还放不下就换行（返回 true）。
+fn fit_title(ui: &egui::Ui, text: &str, max_width: f32) -> (f32, bool) {
+    const MAX: f32 = 64.0;
+    const MIN: f32 = 30.0;
+    let measured = ui.fonts_mut(|f| {
+        f.layout_no_wrap(
+            text.to_string(),
+            egui::FontId::new(MAX, light_family()),
+            egui::Color32::WHITE,
+        )
+        .size()
+        .x
+    });
+    if measured <= max_width {
+        return (MAX, false);
+    }
+    let size = (MAX * max_width / measured * 0.98).floor();
+    if size >= MIN {
+        (size, false)
+    } else {
+        // 两行能放下的最大字号，留一点余量给断行位置。
+        (
+            (MAX * 2.0 * max_width / measured * 0.9)
+                .floor()
+                .clamp(24.0, MIN),
+            true,
+        )
+    }
 }
 
 /// 下载量用中文单位，避免卡片里塞一长串数字。
@@ -10230,6 +10453,7 @@ fn version_row(ui: &mut egui::Ui, row: &Row, active: bool) -> egui::Response {
     status_dot(&mut child, row.health.missing == 0);
     child.vertical(|ui| {
         ui.spacing_mut().item_spacing.y = 2.0;
+        // 列表里放不下就省略，悬停整行看全名。
         ui.add(egui::Label::new(egui::RichText::new(&row.label).size(14.0)).truncate());
         ui.label(
             egui::RichText::new(format!("{} · {}", row.mc, row.loader.name()))
@@ -10237,7 +10461,7 @@ fn version_row(ui: &mut egui::Ui, row: &Row, active: bool) -> egui::Response {
                 .color(t::sub()),
         );
     });
-    response
+    response.on_hover_text(&row.label)
 }
 
 /// 启动台的一栏摘要。
@@ -11211,6 +11435,104 @@ fn text_field(ui: &mut egui::Ui, text: &mut String, hint: &str, width: f32) -> e
     )
 }
 
+/// 按宽度从中间省略：路径的开头（盘符、用户目录）和结尾（具体是哪个版本）都留着。
+fn elide_middle(ui: &egui::Ui, text: &str, font: &egui::FontId, max_width: f32) -> String {
+    let width = |s: &str| {
+        ui.fonts_mut(|f| {
+            f.layout_no_wrap(s.to_string(), font.clone(), egui::Color32::WHITE)
+                .size()
+                .x
+        })
+    };
+    if width(text) <= max_width {
+        return text.to_string();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let (mut lo, mut hi) = (0usize, chars.len());
+    while lo < hi {
+        let keep = (lo + hi).div_ceil(2);
+        let head = keep * 2 / 5;
+        let tail = keep - head;
+        let candidate: String = chars[..head]
+            .iter()
+            .chain(std::iter::once(&'…'))
+            .chain(&chars[chars.len() - tail..])
+            .collect();
+        if width(&candidate) <= max_width {
+            lo = keep;
+        } else {
+            hi = keep - 1;
+        }
+    }
+    let head = lo * 2 / 5;
+    let tail = lo - head;
+    chars[..head]
+        .iter()
+        .chain(std::iter::once(&'…'))
+        .chain(&chars[chars.len() - tail..])
+        .collect()
+}
+
+/// 「标签 · 路径 · 打开」一行：标签和按钮宽度固定，路径占剩下的地方，太长从中间省略；
+/// 悬停看全路径，点一下复制。返回「打开」是否被点了。
+fn path_row(ui: &mut egui::Ui, label: &str, path: &std::path::Path) -> bool {
+    let full = path.display().to_string();
+    let font = egui::FontId::proportional(13.0);
+    let mut open = false;
+    ui.horizontal(|ui| {
+        let row_w = ui.available_width();
+        ui.allocate_ui_with_layout(
+            egui::vec2(64.0, 24.0),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.set_min_width(64.0);
+                ui.label(egui::RichText::new(label).size(13.0).color(t::sub()));
+            },
+        );
+        let path_w = (row_w - 64.0 - 54.0 - 16.0).max(60.0);
+        let shown = elide_middle(ui, &full, &font, path_w);
+        let response = ui
+            .allocate_ui_with_layout(
+                egui::vec2(path_w, 24.0),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.set_min_width(path_w);
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(&shown)
+                                .font(font.clone())
+                                .color(t::sub()),
+                        )
+                        .sense(egui::Sense::click()),
+                    )
+                },
+            )
+            .inner;
+        if response.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Copy);
+        }
+        let copied_id = egui::Id::unique(("path_copied", label));
+        if response.clicked() {
+            ui.ctx().copy_text(full.clone());
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(copied_id, ui.input(|i| i.time)));
+        }
+        let copied = ui
+            .ctx()
+            .data(|d| d.get_temp::<f64>(copied_id))
+            .is_some_and(|at| ui.input(|i| i.time) - at < 1.5);
+        response.on_hover_text(if copied {
+            format!("已复制\n{full}")
+        } else {
+            format!("{full}\n点一下复制")
+        });
+        if motion::secondary_sized(ui, "打开", true, 54.0, 24.0, 10.0).clicked() {
+            open = true;
+        }
+    });
+    open
+}
+
 /// 搜索框：左边一个放大镜，有内容时右边一个清除按钮。
 fn search_field(ui: &mut egui::Ui, text: &mut String, hint: &str, width: f32) -> egui::Response {
     let response = ui.add(
@@ -11592,6 +11914,24 @@ fn install_fonts(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 }
 
+/// 窗口和任务栏图标：和 exe、deb 用同一张图。
+fn app_icon() -> egui::IconData {
+    const PNG: &[u8] =
+        include_bytes!("../../../packaging/linux/icons/io.github.dkjsiogu.cairn-256.png");
+    match image::load_from_memory(PNG) {
+        Ok(image) => {
+            let image = image.into_rgba8();
+            let (width, height) = image.dimensions();
+            egui::IconData {
+                rgba: image.into_raw(),
+                width,
+                height,
+            }
+        }
+        Err(_) => egui::IconData::default(),
+    }
+}
+
 fn main() -> eframe::Result<()> {
     let root = std::env::args_os()
         .nth(1)
@@ -11612,15 +11952,18 @@ fn main() -> eframe::Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size(size)
             .with_min_inner_size([900.0, 620.0])
-            .with_title("nailong"),
+            .with_title("Cairn")
+            .with_app_id("cairn")
+            .with_icon(app_icon()),
         ..Default::default()
     };
     eframe::run_native(
-        "nailong",
+        "cairn",
         options,
         Box::new(move |cc| {
             t::install(&cc.egui_ctx);
             install_fonts(&cc.egui_ctx);
+            root.migrate_legacy_cache();
             let app = App::new(root);
             app.theme_pref.apply(&cc.egui_ctx);
             Ok(Box::new(app))

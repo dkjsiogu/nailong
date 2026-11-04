@@ -621,7 +621,7 @@ fn slim_is_complete(path: &Path) -> bool {
 
 fn shared_slim_path(name: &str) -> Option<PathBuf> {
     directories::BaseDirs::new()
-        .map(|dirs| dirs.cache_dir().join("nailong").join("patches").join(name))
+        .map(|dirs| dirs.cache_dir().join("cairn").join("patches").join(name))
 }
 
 fn copy_atomic(from: &Path, to: &Path) -> Result<()> {

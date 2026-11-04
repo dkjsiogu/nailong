@@ -141,7 +141,8 @@ fn memory() -> (Option<u32>, Option<u32>) {
 }
 
 /// 设置里的回收器选项。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum GcChoice {
     #[default]
     Auto,
@@ -272,14 +273,19 @@ fn parse_size_mb(text: &str) -> Option<u32> {
 }
 
 /// 按启动时会选中的 Java 读出负载，界面用它预览参数。
+/// `chosen` 是这个版本指定的 Java；None 时和启动一样按版本要求自动选。
 pub fn workload(
     root: &Root,
     profile: &str,
     game_dir: &Path,
     javas: &[JavaRuntime],
+    chosen: Option<&JavaRuntime>,
 ) -> Result<(Workload, JavaRuntime)> {
     let resolved = manifest::resolve(root, profile, &Context::current())?;
-    let java = java::select(crate::launch::required_java(&resolved), javas)?;
+    let java = match chosen {
+        Some(java) => java.clone(),
+        None => java::select(crate::launch::required_java(&resolved), javas)?,
+    };
     Ok((Workload::new(&java, &resolved, game_dir), java))
 }
 

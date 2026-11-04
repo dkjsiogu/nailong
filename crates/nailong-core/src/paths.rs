@@ -1,6 +1,25 @@
 use crate::error::{Result, io};
 use std::path::{Path, PathBuf};
 
+/// 数据目录里的程序名。0.37 起叫 Cairn，以前叫 nailong。
+const APP_DIR: &str = "cairn";
+const LEGACY_APP_DIR: &str = "nailong";
+
+/// 旧版的数据在 `<系统数据目录>/nailong`：新目录还不存在时整个搬过来（同一块盘上只是改名）；
+/// 搬不动（例如被占用或跨磁盘）就继续用旧目录，什么都不丢。
+fn data_home(base: &Path) -> PathBuf {
+    let new = base.join(APP_DIR);
+    let old = base.join(LEGACY_APP_DIR);
+    if !new.exists() && old.is_dir() {
+        return if std::fs::rename(&old, &new).is_ok() {
+            new
+        } else {
+            old
+        };
+    }
+    new
+}
+
 #[derive(Debug, Clone)]
 pub struct Root {
     dir: PathBuf,
@@ -15,7 +34,7 @@ impl Root {
     }
 
     pub fn default_root() -> PathBuf {
-        // Windows: portable by default — game data lives next to nailong.exe.
+        // Windows：默认便携，游戏数据放在程序旁边的 .minecraft，改名不影响。
         #[cfg(windows)]
         if let Ok(exe) = std::env::current_exe()
             && let Some(dir) = exe.parent()
@@ -23,8 +42,17 @@ impl Root {
             return dir.join(".minecraft");
         }
         directories::BaseDirs::new()
-            .map(|d| d.data_dir().join("nailong").join(".minecraft"))
+            .map(|d| data_home(d.data_dir()).join(".minecraft"))
             .unwrap_or_else(|| PathBuf::from(".minecraft"))
+    }
+
+    /// 0.37 以前缓存在 `cache/nailong`：新目录还没有时直接改名过去。
+    pub fn migrate_legacy_cache(&self) {
+        let old = self.dir.join("cache").join(LEGACY_APP_DIR);
+        let new = self.cache();
+        if !new.exists() && old.is_dir() {
+            let _ = std::fs::rename(old, new);
+        }
     }
 
     pub fn dir(&self) -> &Path {
@@ -52,7 +80,7 @@ impl Root {
     }
 
     pub fn cache(&self) -> PathBuf {
-        self.dir.join("cache").join("nailong")
+        self.dir.join("cache").join(APP_DIR)
     }
 
     pub fn instances(&self) -> PathBuf {
@@ -166,6 +194,30 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod root_tests {
     use super::*;
+
+    #[test]
+    fn moves_the_old_data_dir_once() {
+        let n = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!("cairn-rename-{}-{n}", std::process::id()));
+        std::fs::create_dir_all(base.join("nailong/.minecraft/saves/World")).unwrap();
+        std::fs::write(base.join("nailong/.minecraft/ui.json"), b"{}").unwrap();
+        assert_eq!(data_home(&base), base.join("cairn"));
+        assert!(base.join("cairn/.minecraft/saves/World").is_dir());
+        assert!(base.join("cairn/.minecraft/ui.json").is_file());
+        assert!(!base.join("nailong").exists());
+        // 新目录已经在了：不再动旧目录。
+        std::fs::create_dir_all(base.join("nailong/.minecraft")).unwrap();
+        assert_eq!(data_home(&base), base.join("cairn"));
+        assert!(base.join("nailong").exists());
+        let root = Root::new(base.join("cairn/.minecraft"));
+        std::fs::create_dir_all(root.dir().join("cache/nailong/logs")).unwrap();
+        root.migrate_legacy_cache();
+        assert!(root.cache().join("logs").is_dir());
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     #[test]
     fn relative_roots_become_absolute() {
