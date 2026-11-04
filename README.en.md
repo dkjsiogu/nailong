@@ -8,7 +8,7 @@ A small, native Minecraft: Java Edition launcher written in Rust. Windows ships 
 
 [简体中文](README.md) | **English**
 
-> Current version: **0.33.0** (preview)
+> Current version: **0.34.0** (preview)
 >
 > Goals: small binaries, few dependencies, visible install progress, and a repair path after interruption. See [implementation status](docs/design/14-implementation-status.md) for exact boundaries.
 
@@ -26,6 +26,8 @@ nailong tries to do one thing simply:
 It is not a universal launcher, and it is not 1.0 yet. What works and what does not is laid out below.
 
 ## Interface
+
+0.34 adds automatic JVM tuning: memory defaults to Auto, and the heap size comes from RAM, CPU threads, the Java version and the mod count, with tuned G1 flags and generational ZGC for large modpacks on strong machines. The initial heap follows free memory at launch so a busy machine still starts. Settings shows the result, the reasoning and the full flag list, and everything can be overridden. In the same world with 100 s of sprinting, GC runs dropped from 15 to 8 and total pause time by about a third. See [19 · JVM tuning](docs/design/19-jvm-tuning.md).
 
 0.33 rebuilds the interface in nailong's own **Fog Blue** style and stops imitating Minecraft: minimal and matte, with dark and light themes that follow the system by default. A status ring on Home shows file integrity, every mod and your world snapshots. It carries no text at rest; hovering a layer brings a small animation and an explanation, clicking jumps to the matching page, and it also works from the keyboard. A single muted accent replaces glow and gradients, and idle CPU stays at 0.0%. See the [design spec](docs/design/18-ui-fog.md).
 
@@ -139,8 +141,8 @@ Drag a `.mrpack` or `.zip` into the window to start an import. A single mod `.ja
 
 | Platform | File | Size | Requirements |
 |---|---|---:|---|
-| Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | ~10 MB | Windows 10/11, Java 21 |
-| Linux x64 (deb) | [nailong_0.33.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.33.0_amd64.deb) | ~3.6 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
+| Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | ~8 MB | Windows 10/11, Java 21 |
+| Linux x64 (deb) | [nailong_0.34.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.34.0_amd64.deb) | ~3.4 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
 
 Checksums: [SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS).
 
@@ -157,7 +159,7 @@ Java 21 must be installed. nailong searches for it automatically and shows a war
 ### Linux (Debian / Ubuntu)
 
 ```bash
-sudo apt install ./nailong_0.33.0_amd64.deb
+sudo apt install ./nailong_0.34.0_amd64.deb
 nailong
 ```
 

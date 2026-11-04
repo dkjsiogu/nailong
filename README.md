@@ -8,7 +8,7 @@
 
 **简体中文** | [English](README.en.md)
 
-> 当前版本：**0.33.0**（预览版）
+> 当前版本：**0.34.0**（预览版）
 >
 > 目标：小体积、少依赖、安装过程可见、中断可补。功能边界见 [实现状态](docs/design/14-implementation-status.md)。
 
@@ -26,6 +26,8 @@ nailong 的思路很直：
 它不是“万能启动器”，也还不是 1.0。能做和不能做的，下文列清楚了。
 
 ## 界面
+
+0.34 加入 JVM 自动调参：内存默认「自动」，按电脑内存、处理器、Java 版本和 Mod 数量算出堆大小，配好 G1 参数，大整合包配强机器时自动换分代 ZGC；初始堆看启动时的空闲内存，避免内存紧张时启动失败。设置里能看到结果、依据和完整参数，也能手动改。实测同一个世界里疾跑 100 秒，回收次数从 15 次降到 8 次，停顿总时长少约三分之一。详见 [19 · JVM 自动调参](docs/design/19-jvm-tuning.md)。
 
 0.33 把界面整体重做成自己的「雾蓝」风格，不再模仿 Minecraft：简洁、哑光，有深色和浅色两套，默认跟随系统。启动台右侧是一个状态圆环，文件完整度、每个 Mod 和存档快照都画在上面，平时不带文字，鼠标放上去才有动效和说明，点击可以跳到对应页面，也能用键盘操作。界面只用一个低饱和的雾蓝强调色，没有发光和渐变，空闲 CPU 仍为 0.0%。设计规范见 [18 · 雾蓝界面](docs/design/18-ui-fog.md)。
 
@@ -140,8 +142,8 @@ nailong 的思路很直：
 
 | 平台 | 文件 | 大小 | 要求 |
 |---|---|---:|---|
-| Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | 约 10 MB | Windows 10/11，Java 21 |
-| Linux x64 (deb) | [nailong_0.33.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.33.0_amd64.deb) | 约 3.6 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
+| Windows x64 | [nailong.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong.exe) | 约 8 MB | Windows 10/11，Java 21 |
+| Linux x64 (deb) | [nailong_0.34.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/nailong_0.34.0_amd64.deb) | 约 3.4 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
 
 校验值：[SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS)。
 
@@ -158,7 +160,7 @@ nailong 的思路很直：
 ### Linux（Debian / Ubuntu）
 
 ```bash
-sudo apt install ./nailong_0.33.0_amd64.deb
+sudo apt install ./nailong_0.34.0_amd64.deb
 nailong
 ```
 
