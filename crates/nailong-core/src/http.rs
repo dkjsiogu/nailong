@@ -45,7 +45,7 @@ impl Http {
         });
         let client = reqwest::blocking::Client::builder()
             .user_agent(format!(
-                "cairn/{} (+https://github.com/dkjsiogu/nailong)",
+                "cairn/{} (+https://github.com/dkjsiogu/cairn)",
                 env!("CARGO_PKG_VERSION")
             ))
             .timeout(Duration::from_secs(180))

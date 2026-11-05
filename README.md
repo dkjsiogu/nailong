@@ -1,7 +1,7 @@
 # Cairn
 
-[![CI](https://github.com/dkjsiogu/nailong/actions/workflows/ci.yml/badge.svg)](https://github.com/dkjsiogu/nailong/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/dkjsiogu/nailong?label=release)](https://github.com/dkjsiogu/nailong/releases/latest)
+[![CI](https://github.com/dkjsiogu/cairn/actions/workflows/ci.yml/badge.svg)](https://github.com/dkjsiogu/cairn/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/dkjsiogu/cairn?label=release)](https://github.com/dkjsiogu/cairn/releases/latest)
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
 
 轻量、原生的 Minecraft: Java Edition 启动器，使用 Rust 编写。0.37 起改名 **Cairn**（原名 nailong）。Windows 只有一个 exe，Linux 只有一个 deb；不捆绑 Java 运行时，Windows 端也不需要安装器。
@@ -166,10 +166,10 @@ Cairn 是登山者叠在路边的石堆：它不帮你走路，只标出回去�
 
 | 平台 | 文件 | 大小 | 要求 |
 |---|---|---:|---|
-| Windows x64 | [cairn.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/cairn.exe) | 约 9 MB | Windows 10/11，Java 21 |
-| Linux x64 (deb) | [cairn_0.37.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/cairn_0.37.0_amd64.deb) | 约 3.7 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
+| Windows x64 | [cairn.exe](https://github.com/dkjsiogu/cairn/releases/latest/download/cairn.exe) | 约 9 MB | Windows 10/11，Java 21 |
+| Linux x64 (deb) | [cairn_0.37.0_amd64.deb](https://github.com/dkjsiogu/cairn/releases/latest/download/cairn_0.37.0_amd64.deb) | 约 3.7 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
 
-校验值：[SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS)。
+校验值：[SHA256SUMS](https://github.com/dkjsiogu/cairn/releases/latest/download/SHA256SUMS)。
 
 ### Windows
 

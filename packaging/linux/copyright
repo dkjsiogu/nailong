@@ -1,6 +1,6 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: Cairn
-Source: https://github.com/dkjsiogu/nailong
+Source: https://github.com/dkjsiogu/cairn
 
 Files: *
 Copyright: 2026 dkjsiogu

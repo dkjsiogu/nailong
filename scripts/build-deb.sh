@@ -76,7 +76,7 @@ Installed-Size: $installed_kb
 Maintainer: dkjsiogu <123802475+dkjsiogu@users.noreply.github.com>
 Depends: libc6 (>= $glibc_req), libgcc-s1, libgl1, libegl1, libx11-6, libxext6, libxcursor1, libxi6, libxrandr2, libxkbcommon0
 Recommends: openjdk-21-jre | default-jre, fonts-noto-cjk
-Homepage: https://github.com/dkjsiogu/nailong
+Homepage: https://github.com/dkjsiogu/cairn
 Replaces: nailong
 Conflicts: nailong
 Provides: nailong

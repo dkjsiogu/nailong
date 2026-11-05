@@ -1,7 +1,7 @@
 # Cairn
 
-[![CI](https://github.com/dkjsiogu/nailong/actions/workflows/ci.yml/badge.svg)](https://github.com/dkjsiogu/nailong/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/dkjsiogu/nailong?label=release)](https://github.com/dkjsiogu/nailong/releases/latest)
+[![CI](https://github.com/dkjsiogu/cairn/actions/workflows/ci.yml/badge.svg)](https://github.com/dkjsiogu/cairn/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/dkjsiogu/cairn?label=release)](https://github.com/dkjsiogu/cairn/releases/latest)
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
 
 A small, native Minecraft: Java Edition launcher written in Rust. Renamed to **Cairn** in 0.37 (formerly nailong). Windows ships as a single executable, Linux as a single `.deb`. No bundled Java runtime, and no installer needed on Windows either.
@@ -165,10 +165,10 @@ Drag a `.mrpack` or `.zip` into the window to start an import. A single mod `.ja
 
 | Platform | File | Size | Requirements |
 |---|---|---:|---|
-| Windows x64 | [cairn.exe](https://github.com/dkjsiogu/nailong/releases/latest/download/cairn.exe) | ~9 MB | Windows 10/11, Java 21 |
-| Linux x64 (deb) | [cairn_0.37.0_amd64.deb](https://github.com/dkjsiogu/nailong/releases/latest/download/cairn_0.37.0_amd64.deb) | ~3.4 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
+| Windows x64 | [cairn.exe](https://github.com/dkjsiogu/cairn/releases/latest/download/cairn.exe) | ~9 MB | Windows 10/11, Java 21 |
+| Linux x64 (deb) | [cairn_0.37.0_amd64.deb](https://github.com/dkjsiogu/cairn/releases/latest/download/cairn_0.37.0_amd64.deb) | ~3.4 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
 
-Checksums: [SHA256SUMS](https://github.com/dkjsiogu/nailong/releases/latest/download/SHA256SUMS).
+Checksums: [SHA256SUMS](https://github.com/dkjsiogu/cairn/releases/latest/download/SHA256SUMS).
 
 ### Windows
 
