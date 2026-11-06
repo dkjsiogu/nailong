@@ -112,6 +112,7 @@ pub fn prepare(
             sha1: None,
             size: None,
             verify_existing: false,
+            label: None,
         },
         &format!("下载 {label} 完整安装包"),
         sink,
@@ -262,6 +263,8 @@ fn range_slim(http: &Http, url: &str, dest: &Path, label: &str, sink: &Sink) -> 
             bytes_done: done,
             bytes_total: total_bytes,
             indeterminate: false,
+            current: None,
+            source: None,
         });
     }
     write_slim(dest, &files)?;

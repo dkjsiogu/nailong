@@ -5,7 +5,7 @@
 //! - 缩略图在后台解码、缩小，缓存到 `cache/cairn/thumbs/`，下次秒出；不卡界面。
 //! - 只有动画进行中或有图在加载时才请求重绘，空闲 CPU 仍为 0；尊重「减少动效」。
 
-use super::*;
+use crate::prelude::*;
 use std::hash::{Hash, Hasher};
 
 const THUMB_W: u32 = 320;

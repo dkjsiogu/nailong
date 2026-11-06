@@ -1,7 +1,7 @@
-# 14 · 原型实现状态（0.1 → 0.37.0）
+# 14 · 原型实现状态（0.1 → 0.38.0）
 
 > 日期：2026-11-04
-> 对应发布：GitHub Release `v0.37.0` 的 `cairn.exe`、`cairn_0.37.0_amd64.deb`（0.37 起改名 Cairn）
+> 对应发布：GitHub Release `v0.38.0` 的 `cairn.exe`、`cairn_0.38.0_amd64.deb`（0.37 起改名 Cairn）
 > 目的：把「设计稿」和「已经跑起来的代码」分开记账，避免把计划当成已完成。
 
 ## 1. 一句话结论
@@ -47,6 +47,8 @@
 0.34.0 加入 JVM 自动调参（`tuning.rs`，规范见 `docs/design/19-jvm-tuning.md`）：内存默认自动，按物理内存、逻辑处理器、Java 版本、加载器和 Mod 数量算出堆大小，配官方启动器那套 G1 参数并按堆放大 Region；Java 25 加紧凑对象头；大整合包配强机器时自动换分代 ZGC。设置里显示结果、依据和完整参数，可手动指定内存、回收器或追加 JVM 参数；CLI 增加 `--gc`、`--jvm-arg`，`--dry-run` 打印计算过程。生成的参数在本机 OpenJDK 11/17/21/25 和 GraalVM 21 上逐一启动验证。顺带修复 CLI 传相对 `--game-dir` 时游戏目录被解析两次的问题。
 
 0.34.1 修复 26.x 无法安装和启动：版本文件 `default-user-jvm` 的首条没有 `rules`，解析失败；`${natives_directory}` 误指向 `java` 子目录，`java.library.path` 变成 `.../java/java`。实测 26.1、26.3 原版可安装并进入世界。调参在版本文件带官方默认时跟随官方（26.x 为 ZGC + 紧凑对象头 + 预先占用 + 字符串去重，初始堆 2 GB）。Java 选择改为够用里最低的大版本，同版本优先 64 位 OpenJDK。
+
+0.38.0 下载体验和界面框架（见 `docs/design/23-ui-framework.md`）。core：`Progress` 多了 `current`（刚开始下载的文件，资源文件用资源索引里的真名）和 `source`（下载用的主机），`FileSpec.label` 给进度显示用；`runtime.rs` 按 Mojang 的运行时清单下载 Java（平台映射、按版本文件里的组件或够用里最低的大版本选择、清单 SHA-1 校验、优先 LZMA 压缩版并用 `lzma-rs` 解压、逐个 SHA-1、可执行权限和符号链接、`.part` 目录完成后改名），`java::find_all(root)` 一并找数据目录里的运行时；`update.rs` 查 GitHub 最新版本、按平台选文件、按 SHA256SUMS 校验、Windows 改名替换正在运行的程序并重启。CLI 加了 `java-install` 和 `update`。界面：`main.rs` 拆成 `app`、`msg`、`model`、`play`、`activity`、`widgets`、`fonts`、`pages/`（home、versions、worlds、progress、shots、content/{browse,detail,library,drop}）和 `dialogs/`（settings、account、params、log、rollback、review、update），统一 `use crate::prelude::*`；App 的状态从 155 个平铺字段收成按功能分组的结构体（content、worlds、login、rollback、install、home、play、env、prefs、update）；进度页改用 `Activity`（步骤和耗时、刚下载的文件、来源、速度、剩余时间）；缺 Java 时启动前自动下载、下完接着启动；侧栏更新提示和更新弹窗，Release 的说明改用发版提交的说明。实测：界面里真实下载 Java 17（11.8 MB/s，133 个文件），`cairn-cli java-install 21` 15 秒装好并能运行；重构前后各页面截图一致。
 
 0.37.0 改名 Cairn 并按 Windows 实测反馈改了七处（目标见 `docs/product/goal-0.37.md`）。改名：GUI 二进制 `cairn`、CLI `cairn-cli`、deb 包 `cairn`（Replaces/Conflicts/Provides nailong）、桌面文件和 AppStream id `io.github.dkjsiogu.cairn`（`<replaces>` 旧 id）；Linux 默认数据目录 `~/.local/share/nailong` 首次启动时整体改名为 `~/.local/share/cairn`，改名失败就继续用旧目录；数据目录里的 `cache/nailong` 同样改名；Windows 仍是 exe 旁边的 `.minecraft`。0.37 发布后 GitHub 仓库也改名为 `dkjsiogu/cairn`（旧地址自动跳转）；crate 名和版本目录里的 `.nailong-*` 标记文件不变。exe：`crates/nailong-ui/build.rs` 用 winresource 写入 `packaging/windows/cairn.ico`（16–256 七种尺寸）和版本信息，CI 检查 ProductName；窗口和任务栏图标用同一张 PNG。eframe 补上 `clipboard` 特性：0.36 关掉默认特性时漏了它，复制只在进程内有效、输入框粘贴不了外部文字。启动参数：`launchcfg.rs` 按版本存 Java、内存、回收器、额外 JVM 参数、窗口大小（`launch-settings.json`，全部跟随全局时不写），`LaunchOptions.java` 指定 Java 并在版本不够时给出原因，`launch::preview` 不碰磁盘地生成命令，`Prepared::display_lines`/`command_line` 给界面显示和复制（令牌打码）；启动台在「开始游戏」下放参数胶囊，点开是按版本编辑的窗口和实时命令行预览。截图墙：`shots.rs` 读游戏目录的 `screenshots/`，后台解码、缩小到 320×180 并缓存到 `cache/cairn/thumbs/`，左键从缩略图放大成大图（←/→、Esc），右键或 Ctrl+C 把原图复制到剪贴板，动画只在进行中请求重绘。已安装内容：索引记下每个文件的大小和修改时间（纳秒），没变就不再打开压缩包；进页面先显示索引，后台核对后替换；启动台的 Mod 数也在后台核对。文字：启动台版本名按宽度缩小字号、太长两行并让出空间；路径行（设置、版本页）从中间省略、悬停全路径、点击复制。下载提示：实测 HMCL 3.16.4 的 exe 也没签名，区别在下载量；CI 预留 SignPath 签名任务（`vars.SIGNPATH_ORGANIZATION_ID` 为空时跳过），说明见 `docs/design/22-windows-trust.md`。实测：Xvfb 下深浅两套、1120×720 和 900×620 截图；右键复制后 X 剪贴板里是 1920×1080 的 image/png；交叉编译的 Windows exe 资源表里有 7 个 RT_ICON、1 个 RT_GROUP_ICON 和 RT_VERSION。
 
@@ -143,7 +145,7 @@
 | 大文件分段下载 | `core::http` | 完成 | client jar 4 段并行、段续传、源回退 |
 | 重复安装快速路径 | `core::install::forge` / `neoforge` | 完成 | health 通过则 0 下载、0 processor |
 | Windows 交叉编译 | `x86_64-pc-windows-gnu` | 通过 | 无 MinGW DLL 依赖，仅系统 DLL |
-| 发布包 | GitHub Release `v0.37.0` | 完成（CI 构建） | 单 exe 约 8 MB / deb 约 3.4 MB |
+| 发布包 | GitHub Release `v0.38.0` | 完成（CI 构建） | 单 exe 约 8 MB / deb 约 3.4 MB |
 
 ### 2.1 实测记录
 

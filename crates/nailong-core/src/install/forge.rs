@@ -35,6 +35,8 @@ pub fn install_with(
             bytes_done: 1,
             bytes_total: 1,
             indeterminate: false,
+            current: None,
+            source: None,
         });
         return Ok(id);
     }
@@ -90,6 +92,8 @@ pub fn install_with(
             bytes_done: 1,
             bytes_total: 1,
             indeterminate: false,
+            current: None,
+            source: None,
         });
         println!("✓ Forge {version}（{mc}）安装完成（复用本机客户端）");
         return Ok(id);
@@ -128,6 +132,8 @@ pub fn install_with(
         bytes_done: 1,
         bytes_total: 1,
         indeterminate: false,
+        current: None,
+        source: None,
     });
     println!("✓ Forge {version}（{mc}）安装完成");
     Ok(id)

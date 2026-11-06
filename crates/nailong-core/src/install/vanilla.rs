@@ -36,6 +36,8 @@ pub fn install_with(root: &Root, mc: &str, mirror: &str, sink: &Sink) -> Result<
         bytes_done: 1,
         bytes_total: 1,
         indeterminate: false,
+        current: None,
+        source: None,
     });
     println!("✓ Minecraft {mc} 安装完成");
     Ok(())
@@ -97,6 +99,7 @@ pub fn install_client_libs(
         sha1: client.sha1.clone(),
         size: client.size,
         verify_existing: true,
+        label: None,
     };
     (sink)(Progress::stage("下载客户端"));
     println!("→ 下载客户端…");
@@ -135,6 +138,7 @@ pub fn install_assets_with(root: &Root, mc: &str, mirror: &str, sink: &Sink) -> 
             sha1: ai.sha1.clone(),
             size: ai.size,
             verify_existing: true,
+            label: None,
         },
         "读取资源索引",
         sink,
@@ -149,7 +153,7 @@ pub fn install_assets_with(root: &Root, mc: &str, mirror: &str, sink: &Sink) -> 
         .and_then(|v| v.as_object())
         .ok_or_else(|| Error::Install("资源索引缺少 objects".into()))?;
     let mut specs = Vec::with_capacity(objects.len());
-    for (_name, obj) in objects {
+    for (name, obj) in objects {
         let Some(hash) = obj.get("hash").and_then(|v| v.as_str()) else {
             continue;
         };
@@ -165,6 +169,8 @@ pub fn install_assets_with(root: &Root, mc: &str, mirror: &str, sink: &Sink) -> 
             sha1: Some(hash.to_string()),
             size,
             verify_existing: false,
+            // 文件名是哈希，进度里显示资源索引里的真名，例如 minecraft/sounds/step.ogg。
+            label: Some(name.clone()),
         });
     }
     println!("→ 下载资源（{} 个文件）…", specs.len());
@@ -180,6 +186,7 @@ pub fn install_assets_with(root: &Root, mc: &str, mirror: &str, sink: &Sink) -> 
                 sha1: logging.file.sha1.clone(),
                 size: logging.file.size,
                 verify_existing: true,
+                label: None,
             },
             "下载日志配置",
             sink,

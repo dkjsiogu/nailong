@@ -1283,6 +1283,7 @@ pub fn download_plan(
             sha1: version.sha1.clone(),
             size: version.size,
             verify_existing: true,
+            label: None,
         });
     }
     let count = specs.len();

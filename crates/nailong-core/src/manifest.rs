@@ -300,6 +300,8 @@ pub struct Resolved {
     pub arguments: Arguments,
     pub legacy_arguments: Option<String>,
     pub java_major: Option<u32>,
+    /// 官方运行时清单里的组件名，例如 `java-runtime-delta`；下载 Java 时优先用它。
+    pub java_component: Option<String>,
     pub logging: Option<LoggingClient>,
     pub chain: Vec<String>,
 }
@@ -344,6 +346,7 @@ pub fn resolve(root: &Root, id: &str, _ctx: &Context) -> Result<Resolved> {
         return Err(Error::MissingFile(client_jar));
     }
     let java_major = merged.java_version.as_ref().map(|j| j.major_version);
+    let java_component = merged.java_version.as_ref().map(|j| j.component.clone());
     let logging = merged.logging.and_then(|l| l.client);
     Ok(Resolved {
         id: merged.id,
@@ -355,6 +358,7 @@ pub fn resolve(root: &Root, id: &str, _ctx: &Context) -> Result<Resolved> {
         arguments: merged.arguments.unwrap_or_default(),
         legacy_arguments: merged.legacy_arguments,
         java_major,
+        java_component,
         logging,
         chain,
     })
@@ -717,6 +721,7 @@ pub fn client_download(root: &Root, resolved: &Resolved) -> Result<crate::http::
         sha1: d.sha1,
         size: d.size,
         verify_existing: true,
+        label: None,
     })
 }
 
@@ -762,6 +767,7 @@ pub fn library_specs_for(
                 sha1,
                 size: None,
                 verify_existing: false,
+                label: None,
             });
         }
     }
@@ -795,6 +801,7 @@ fn spec_from_artifact(root: &Root, lib: &Library, a: &Artifact) -> crate::http::
         sha1: a.sha1.clone(),
         size: a.size,
         verify_existing: true,
+        label: None,
     }
 }
 

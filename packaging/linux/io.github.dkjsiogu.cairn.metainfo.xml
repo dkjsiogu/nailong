@@ -28,6 +28,11 @@
   <url type="bugtracker">https://github.com/dkjsiogu/cairn/issues</url>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.38.0" date="2026-11-07">
+      <description>
+        <p>The download page now shows the finished steps, the files just downloaded, the source (Mojang or the BMCLAPI mirror), speed and time left. When no suitable Java is installed, Cairn downloads Mojang's official runtime and then launches the game. A quiet update check shows a badge when a new version is out, with release notes and a verified download. The interface code is reorganised into modules per page and dialog.</p>
+      </description>
+    </release>
     <release version="0.37.0" date="2026-11-05">
       <description>
         <p>Renamed to Cairn (formerly nailong); the Linux data directory moves over automatically and the deb replaces the old package. Home now shows the launch settings this version will use and opens per-version settings for Java, memory, collector, JVM flags and window size with a copyable command-line preview. A screenshot wall on Home opens images on left click and copies them to the clipboard on right click. Installed content opens instantly from a cache that only re-reads changed files, long version names are shown in full, and the Windows exe has an icon and version information.</p>

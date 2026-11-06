@@ -33,6 +33,10 @@ enum Commands {
     List,
     /// 列出检测到的 Java
     Java,
+    /// 下载官方的 Java 运行时到数据目录（例如 21、17、8）
+    JavaInstall { major: u32 },
+    /// 查一下有没有新版本的 Cairn
+    Update,
     /// 查看某个版本的解析结果
     Info { profile: String },
     /// 安装
@@ -182,8 +186,45 @@ fn main() -> anyhow::Result<()> {
             }
             println!("\n✓ 结论已保存，所有版本的「自动」回收器按它选");
         }
+        Commands::JavaInstall { major } => {
+            let http = nailong_core::http::Http::new(&cli.mirror)?;
+            let offer = nailong_core::runtime::find(&http, major, None)?;
+            println!(
+                "→ 下载 Java {}（{} {}）",
+                offer.major, offer.component, offer.version
+            );
+            let last = Arc::new(Mutex::new(String::new()));
+            let sink = from_fn(move |p: Progress| {
+                let line = format!(
+                    "  {} {:>3}%{}",
+                    p.stage,
+                    (p.fraction() * 100.0) as u32,
+                    p.source.map(|s| format!(" · {s}")).unwrap_or_default()
+                );
+                let mut last = last.lock().unwrap();
+                if *last != line {
+                    println!("{line}");
+                    *last = line;
+                }
+            });
+            let java = nailong_core::runtime::install(&root, &http, &offer, &sink)?;
+            println!("✓ 已装好：{}", java.display());
+        }
+        Commands::Update => {
+            let http = nailong_core::http::Http::new("official")?;
+            let release = nailong_core::update::latest(&http)?;
+            let current = nailong_core::update::current();
+            if nailong_core::update::is_newer(&release.version, current) {
+                println!(
+                    "有新版本 {}（现在是 {current}）：{}",
+                    release.version, release.page
+                );
+            } else {
+                println!("已经是最新版 {current}（GitHub 最新 {}）", release.version);
+            }
+        }
         Commands::Java => {
-            let all = java::find_all();
+            let all = java::find_all(&root);
             if all.is_empty() {
                 println!("没有检测到 Java");
             }

@@ -552,6 +552,7 @@ fn import_mcbbs_files(
                     sha1: hash.clone(),
                     size: None,
                     verify_existing: true,
+                    label: None,
                 });
             }
         }
@@ -982,6 +983,7 @@ fn curse_file_spec(
         sha1,
         size,
         verify_existing: true,
+        label: None,
     })
 }
 
@@ -1090,6 +1092,7 @@ fn import_files_and_overrides(
             sha1: file.hashes.get("sha1").cloned(),
             size: file.file_size,
             verify_existing: true,
+            label: None,
         });
     }
     if !specs.is_empty() {
@@ -1147,6 +1150,8 @@ fn extract_prefixes(
                 bytes_done: 0,
                 bytes_total: 0,
                 indeterminate: true,
+                current: None,
+                source: None,
             });
         }
     }
@@ -1220,6 +1225,8 @@ fn finish_instance(
         bytes_done: 1,
         bytes_total: 1,
         indeterminate: false,
+        current: None,
+        source: None,
     });
     println!(
         "✓ 整合包 {} 导入完成（{}）",

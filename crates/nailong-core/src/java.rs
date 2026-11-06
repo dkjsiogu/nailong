@@ -1,4 +1,5 @@
 use crate::error::{Error, Result};
+
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -43,8 +44,9 @@ impl JavaRuntime {
     }
 }
 
-pub fn find_all() -> Vec<JavaRuntime> {
-    let mut candidates = Vec::new();
+/// 本机能找到的所有 Java：系统里装的，加上启动器自己下载到数据目录的。
+pub fn find_all(root: &crate::paths::Root) -> Vec<JavaRuntime> {
+    let mut candidates = crate::runtime::installed(root);
     if let Ok(home) = std::env::var("JAVA_HOME") {
         candidates.push(PathBuf::from(home).join("bin").join(java_exe()));
     }
@@ -197,10 +199,9 @@ pub fn major_from_version(v: &str) -> u32 {
             .and_then(|s| s.parse().ok())
             .unwrap_or(8)
     } else {
-        v.split('.')
-            .next()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0)
+        // 只取开头的数字：`21.0.7`、`25-ea`，以及 Mojang 运行时清单里的 `8u51`。
+        let digits: String = v.chars().take_while(|c| c.is_ascii_digit()).collect();
+        digits.parse().unwrap_or(0)
     }
 }
 

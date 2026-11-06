@@ -44,6 +44,8 @@ pub fn install_with(
             bytes_done: 1,
             bytes_total: 1,
             indeterminate: false,
+            current: None,
+            source: None,
         });
         return Ok(installed_id);
     }
@@ -95,6 +97,8 @@ pub fn install_with(
             bytes_done: 1,
             bytes_total: 1,
             indeterminate: false,
+            current: None,
+            source: None,
         });
         println!("✓ NeoForge {version}（{mc}）安装完成（复用本机客户端，profile: {id}）");
         return Ok(id);
@@ -134,6 +138,8 @@ pub fn install_with(
         bytes_done: 1,
         bytes_total: 1,
         indeterminate: false,
+        current: None,
+        source: None,
     });
     println!("✓ NeoForge {version}（{mc}）安装完成（profile: {id}）");
     Ok(id)

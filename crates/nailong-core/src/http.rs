@@ -19,6 +19,8 @@ pub struct FileSpec {
     pub sha1: Option<String>,
     pub size: Option<u64>,
     pub verify_existing: bool,
+    /// 进度里显示的名字；None 时用文件名。资源文件的文件名是哈希，所以给它真名。
+    pub label: Option<String>,
 }
 
 pub struct Http {
@@ -470,6 +472,13 @@ impl Http {
         if let Some(parent) = spec.dest.parent() {
             std::fs::create_dir_all(parent).map_err(|e| io(parent, e))?;
         }
+        // 真要下载了：告诉界面在下哪个文件。已有的文件不报名字，补全时列表才不会被刷满。
+        let label = spec.label.clone().unwrap_or_else(|| {
+            spec.dest
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default()
+        });
         // A single large file (the 26 MB client jar is the common case) gets
         // four parallel ranges.  Batches of many small files stay one request
         // per file to avoid a 16 x 4 connection explosion.
@@ -486,6 +495,9 @@ impl Http {
                 Ok(Some(response)) if response.total == Some(size)
             );
             if range_ok {
+                if let Some(batch) = batch {
+                    batch.started(&label, &primary);
+                }
                 match self.try_download_segmented(&primary, &spec.dest, size, expected, batch) {
                     Ok(()) => {
                         if let Some(batch) = batch {
@@ -516,6 +528,9 @@ impl Http {
             for (index, url) in urls.iter().enumerate() {
                 if index > 0 {
                     println!("! 切换备用源: {url}");
+                }
+                if let Some(batch) = batch {
+                    batch.started(&label, url);
                 }
                 match self.try_download(url, &spec.dest, spec.sha1.as_deref(), spec.size, batch) {
                     Ok(()) => {
@@ -670,6 +685,7 @@ impl Http {
             bytes_done: AtomicU64::new(0),
             bytes_total: total_bytes,
             last_emit_ms: AtomicU64::new(0),
+            current: std::sync::Mutex::new((None, None)),
         };
         batch.emit(true);
         let workers = specs.len().clamp(1, 16);
@@ -788,9 +804,24 @@ struct Batch<'a> {
     bytes_done: AtomicU64,
     bytes_total: u64,
     last_emit_ms: AtomicU64,
+    /// 最近开始下载的文件和它的来源主机。
+    current: std::sync::Mutex<(Option<String>, Option<String>)>,
+}
+
+/// `https://host/path` 里的 host。
+fn host_of(url: &str) -> Option<String> {
+    let rest = url.split_once("://")?.1;
+    Some(rest.split(['/', '?']).next()?.to_string()).filter(|h| !h.is_empty())
 }
 
 impl Batch<'_> {
+    fn started(&self, label: &str, url: &str) {
+        if let Ok(mut current) = self.current.lock() {
+            *current = (Some(label.to_string()), host_of(url));
+        }
+        self.emit(false);
+    }
+
     fn file_done(&self, size: u64) {
         if size > 0 {
             self.bytes_done.fetch_add(size, Ordering::Relaxed);
@@ -812,6 +843,11 @@ impl Batch<'_> {
         {
             return;
         }
+        let (current, source) = self
+            .current
+            .lock()
+            .map(|current| current.clone())
+            .unwrap_or_default();
         let progress = Progress {
             stage: self.stage.clone(),
             files_done: self.files_done.load(Ordering::Relaxed),
@@ -819,6 +855,8 @@ impl Batch<'_> {
             bytes_done: self.bytes_done.load(Ordering::Relaxed),
             bytes_total: self.bytes_total,
             indeterminate: false,
+            current,
+            source,
         };
         (self.sink)(progress);
     }
@@ -915,6 +953,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn reads_the_host_of_a_url() {
+        assert_eq!(
+            host_of("https://piston-data.mojang.com/v1/objects/abc/client.jar").as_deref(),
+            Some("piston-data.mojang.com")
+        );
+        assert_eq!(
+            host_of("https://bmclapi2.bangbang93.com?x=1").as_deref(),
+            Some("bmclapi2.bangbang93.com")
+        );
+        assert_eq!(host_of("not a url"), None);
+    }
+
+    #[test]
     fn mirror_candidates_keep_primary_first() {
         let http = Http::new("bmcl").unwrap();
         let original = "https://libraries.minecraft.net/com/example/lib.jar";
@@ -966,6 +1017,7 @@ mod tests {
             sha1: None,
             size: Some(8 * 1024 * 1024),
             verify_existing: false,
+            label: None,
         };
         let canceller = std::thread::spawn(|| {
             std::thread::sleep(Duration::from_millis(60));

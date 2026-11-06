@@ -156,6 +156,12 @@ pub fn preview(root: &Root, profile: &str, opts: &LaunchOptions) -> Result<Prepa
     build(root, profile, opts, false)
 }
 
+/// 这个版本需要的 Java：最低大版本，以及官方运行时的组件名（版本文件里写了的话）。
+pub fn java_requirement(root: &Root, profile: &str) -> Result<(u32, Option<String>)> {
+    let resolved = manifest::resolve(root, profile, &Context::current())?;
+    Ok((required_java(&resolved), resolved.java_component.clone()))
+}
+
 /// 这个版本需要的最低 Java 大版本。
 pub fn required_java_for(root: &Root, profile: &str) -> Result<u32> {
     Ok(required_java(&manifest::resolve(
@@ -166,7 +172,11 @@ pub fn required_java_for(root: &Root, profile: &str) -> Result<u32> {
 }
 
 /// 用户指定了 Java 就用它（版本不够时说清楚），否则按版本要求自动选。
-pub fn choose_java(required: u32, chosen: Option<&std::path::Path>) -> Result<java::JavaRuntime> {
+pub fn choose_java(
+    root: &Root,
+    required: u32,
+    chosen: Option<&std::path::Path>,
+) -> Result<java::JavaRuntime> {
     match chosen {
         Some(path) => {
             let runtime = java::probe(path)
@@ -180,7 +190,7 @@ pub fn choose_java(required: u32, chosen: Option<&std::path::Path>) -> Result<ja
             }
             Ok(runtime)
         }
-        None => java::select(required, &java::find_all()),
+        None => java::select(required, &java::find_all(root)),
     }
 }
 
@@ -190,7 +200,7 @@ fn build(root: &Root, profile: &str, opts: &LaunchOptions, write: bool) -> Resul
     ctx.features.demo = opts.demo;
     let resolved = manifest::resolve(root, profile, &ctx)?;
     let required = required_java(&resolved);
-    let java_rt = choose_java(required, opts.java.as_deref())?;
+    let java_rt = choose_java(root, required, opts.java.as_deref())?;
     if write {
         println!(
             "→ 版本 {}，使用 {}（需要 Java {required}）",
@@ -920,7 +930,12 @@ mod tests {
 
     #[test]
     fn a_too_old_java_is_refused_with_a_reason() {
-        let missing = choose_java(21, Some(std::path::Path::new("/nonexistent/bin/java")));
+        let root = Root::new(std::env::temp_dir());
+        let missing = choose_java(
+            &root,
+            21,
+            Some(std::path::Path::new("/nonexistent/bin/java")),
+        );
         assert!(
             missing
                 .unwrap_err()

@@ -12,6 +12,10 @@ pub struct Progress {
     pub bytes_done: u64,
     pub bytes_total: u64,
     pub indeterminate: bool,
+    /// 刚开始或刚下完的文件，给人看的名字（例如 `minecraft/sounds/step.ogg`）。
+    pub current: Option<String>,
+    /// 正在用的下载源主机，例如 `piston-data.mojang.com` 或 `bmclapi2.bangbang93.com`。
+    pub source: Option<String>,
 }
 
 impl Progress {

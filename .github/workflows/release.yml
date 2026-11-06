@@ -141,6 +141,16 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
+      # 发布说明用这次发版提交的说明：启动器的更新弹窗会显示它。
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Release notes from the commit message
+        run: |
+          git log -1 --format=%B | grep -v '^Co-Authored-By' > notes.md
+          cat notes.md
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -167,5 +177,5 @@ jobs:
             gh release create "$TAG" release/* \
               --repo "$GITHUB_REPOSITORY" \
               --title "Cairn ${TAG#v}" \
-              --generate-notes
+              --notes-file notes.md
           fi

@@ -49,6 +49,8 @@ pub fn install_with(
         bytes_done: 1,
         bytes_total: 1,
         indeterminate: false,
+        current: None,
+        source: None,
     });
     println!("✓ Fabric {loader}（{mc}）安装完成");
     Ok(id)

@@ -1360,7 +1360,8 @@ mod tests {
     #[test]
     #[ignore = "需要本机装有 Java"]
     fn generated_flags_start_every_installed_java() {
-        for java in java::find_all() {
+        let root = crate::paths::Root::new(crate::paths::Root::default_root());
+        for java in java::find_all(&root) {
             for gc in GcChoice::ALL {
                 let w = Workload {
                     java_major: java.major,

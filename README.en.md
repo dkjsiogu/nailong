@@ -8,7 +8,7 @@ A small, native Minecraft: Java Edition launcher written in Rust. Renamed to **C
 
 [简体中文](README.md) | **English**
 
-> Current version: **0.37.0** (preview)
+> Current version: **0.38.0** (preview)
 >
 > Goals: small binaries, few dependencies, visible install progress, and a repair path after interruption. See [implementation status](docs/design/14-implementation-status.md) for exact boundaries.
 
@@ -26,6 +26,14 @@ A cairn is the pile of stones hikers leave by a trail: it does not walk for you,
 It is not a universal launcher, and it is not 1.0 yet. What works and what does not is laid out below.
 
 ## Interface
+
+0.38 makes downloading solid and gives the interface code a clear structure:
+
+- **See what is being downloaded**: the progress page lists the finished steps and how long each took, the current step, the last few files (asset files by their real names), whether they come from Mojang or the BMCLAPI mirror, the speed and the time left.
+- **Automatic Java**: if no suitable Java is installed when you press Launch, Cairn downloads Mojang's official runtime and then launches; nothing to hunt down and nothing changed on the system. The compressed files are preferred (about a third of the size) and every file is verified. Settings, first-run setup and launch settings can download it too.
+- **Launcher updates**: a quiet check at start (at most every 12 hours) shows a small badge in the sidebar when a new version exists. The dialog shows the release notes and verifies the download against SHA256SUMS; Windows restarts into the new version in one click, Linux gets a copyable install command. Settings has a manual "Check for updates".
+- **A framework for the UI code**: the 12,000-line `main.rs` is now modules per page and dialog, state is grouped by feature, and background tasks share one progress model. See [23 · UI framework](docs/design/23-ui-framework.md) (Chinese).
+- Long version names no longer cover the buttons on the Worlds page.
 
 0.37 renames the launcher to Cairn and smooths out what happens before and after you press Launch:
 
@@ -166,7 +174,7 @@ Drag a `.mrpack` or `.zip` into the window to start an import. A single mod `.ja
 | Platform | File | Size | Requirements |
 |---|---|---:|---|
 | Windows x64 | [cairn.exe](https://github.com/dkjsiogu/cairn/releases/latest/download/cairn.exe) | ~9 MB | Windows 10/11, Java 21 |
-| Linux x64 (deb) | [cairn_0.37.0_amd64.deb](https://github.com/dkjsiogu/cairn/releases/latest/download/cairn_0.37.0_amd64.deb) | ~3.4 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
+| Linux x64 (deb) | [cairn_0.38.0_amd64.deb](https://github.com/dkjsiogu/cairn/releases/latest/download/cairn_0.38.0_amd64.deb) | ~3.4 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
 
 Checksums: [SHA256SUMS](https://github.com/dkjsiogu/cairn/releases/latest/download/SHA256SUMS).
 
@@ -183,7 +191,7 @@ Java 21 must be installed. Cairn searches for it automatically and shows a warni
 ### Linux (Debian / Ubuntu)
 
 ```bash
-sudo apt install ./cairn_0.37.0_amd64.deb
+sudo apt install ./cairn_0.38.0_amd64.deb
 cairn
 ```
 
@@ -237,6 +245,8 @@ The deb only contains the GUI; building from source also produces the CLI:
 
 ```bash
 ./target/release/cairn-cli --root /path/to/.minecraft list
+./target/release/cairn-cli --root /path/to/.minecraft java-install 21   # download the official Java 21 runtime
+./target/release/cairn-cli update                                     # check for a newer Cairn
 ./target/release/cairn-cli --root /path/to/.minecraft install neoforge 1.21.1 21.1.209
 ./target/release/cairn-cli --root /path/to/.minecraft install modpack ~/Downloads/pack.mrpack
 ./target/release/cairn-cli --root /path/to/.minecraft install modpack ~/Downloads/pack.zip

@@ -17,6 +17,8 @@ md-5.workspace = true
 zip.workspace = true
 flate2 = "1"
 crc32fast = "1"
+# Java 运行时的压缩文件是 LZMA；纯 Rust 实现，不依赖系统的 liblzma。
+lzma-rs = "0.3"
 rayon.workspace = true
 directories.workspace = true
 uuid.workspace = true

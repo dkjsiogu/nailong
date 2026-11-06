@@ -673,7 +673,7 @@ pub fn run(root: &Root, sink: &Sink) -> Result<Store> {
     cancel::check()?;
     cleanup_legacy(root);
     let machine = Machine::detect();
-    let javas = java::find_all();
+    let javas = java::find_all(root);
     let (picked, mut skipped) = candidates(&javas);
     if picked.is_empty() {
         return Err(Error::Launch(

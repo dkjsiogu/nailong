@@ -1,10 +1,7 @@
 //! 日志窗口。启动失败时一步打开这次的游戏输出，错误行标红，能认出的原因放在最上面；
 //! 不用再去设置 › 数据目录 › cache › logs 里翻文件。
 
-use super::{
-    action_link, bold_family, chip, display_family, escape_pressed, human_age, human_size,
-    open_folder, reveal_file, search_field, short_text,
-};
+use crate::prelude::*;
 use crate::{motion, theme as t};
 use eframe::egui;
 use nailong_core::launch;
@@ -433,5 +430,32 @@ impl LogView {
             close = true;
         }
         close
+    }
+}
+
+impl App {
+    /// 打开日志窗口。游戏异常退出时直接是这次的游戏输出，启动器自己出的错是启动器记录。
+    pub(crate) fn open_log(&mut self) {
+        let game = match (&self.play.last, &self.error) {
+            (Some(_), Some(error)) => error.starts_with("游戏异常退出"),
+            (Some(last), None) => !matches!(last.outcome, log::Outcome::Failed(_)),
+            (None, _) => false,
+        };
+        self.show_settings = false;
+        self.login.open = false;
+        self.log_view = Some(log::LogView::new(if game {
+            log::Tab::Game
+        } else {
+            log::Tab::Launcher
+        }));
+    }
+
+    pub(crate) fn log_overlay(&mut self, ctx: &egui::Context) {
+        let Some(view) = &mut self.log_view else {
+            return;
+        };
+        if view.show(ctx, self.play.last.as_ref(), &self.log) {
+            self.log_view = None;
+        }
     }
 }

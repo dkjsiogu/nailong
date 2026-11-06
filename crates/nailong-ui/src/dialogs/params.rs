@@ -4,7 +4,7 @@
 //! 点任何一个都能改；改的只是这个版本，没改的跟随全局设置。窗口里有完整的命令行预览，
 //! 和真正启动时由同一段代码生成，可以复制。
 
-use super::*;
+use crate::prelude::*;
 
 /// 一个参数胶囊：上面的标签小、下面的值清楚；单独设置过的有强调色边框。
 fn pill(ui: &mut egui::Ui, label: &str, value: &str, custom: bool, warn: bool) -> egui::Response {
@@ -90,7 +90,7 @@ impl App {
                 {
                     open = true;
                 }
-                let gc = cfg.gc.unwrap_or(self.gc);
+                let gc = cfg.gc.unwrap_or(self.prefs.gc);
                 let collector = if gc == tuning::GcChoice::Auto {
                     format!("{} 自动", plan.collector.label())
                 } else {
@@ -115,7 +115,7 @@ impl App {
             {
                 open = true;
             }
-            let extra = tuning::split_args(cfg.jvm_args.as_deref().unwrap_or(&self.jvm_args));
+            let extra = tuning::split_args(cfg.jvm_args.as_deref().unwrap_or(&self.prefs.jvm_args));
             if !extra.is_empty() || cfg.jvm_args.is_some() {
                 let value = if extra.is_empty() {
                     "无".to_string()
@@ -155,17 +155,18 @@ impl App {
         let global_plan = self.plan_for(&row, &global).map(|(plan, _)| plan);
         self.poll_preview(ctx, &row, &mut edit, planned.as_ref().map(|(_, java)| java));
 
-        let mut javas: Vec<java::JavaRuntime> = self.javas.clone();
-        for extra in &self.extra_javas {
+        let mut javas: Vec<java::JavaRuntime> = self.env.javas.clone();
+        for extra in &self.env.extra_javas {
             if !javas.iter().any(|j| j.path == extra.path) {
                 javas.push(extra.clone());
             }
         }
-        let auto_java = java::select(required, &self.javas).ok();
+        let auto_java = java::select(required, &self.env.javas).ok();
         let now = ctx.input(|i| i.time);
         let mut save = false;
         let mut close = false;
         let mut pick_java = false;
+        let mut download_java = false;
         let screen = ctx.content_rect();
         let width = (screen.width() - 120.0).clamp(520.0, 680.0);
         let modal = egui::Modal::new(egui::Id::unique("launch_modal"))
@@ -255,9 +256,17 @@ impl App {
                             );
                         }
                         ui.add_space(4.0);
-                        if action_link(ui, "选择别的 java 程序…").clicked() {
-                            pick_java = true;
-                        }
+                        ui.horizontal(|ui| {
+                            if action_link(ui, "选择别的 java 程序…").clicked() {
+                                pick_java = true;
+                            }
+                            if action_link(ui, &format!("下载官方 Java {required}"))
+                                .on_hover_text("Mojang 官方的运行时，放在数据目录里，不改系统；下好后「自动」会用它")
+                                .clicked()
+                            {
+                                download_java = true;
+                            }
+                        });
 
                         // 内存。
                         ui.add_space(12.0);
@@ -265,7 +274,7 @@ impl App {
                         let follow_memory = global_plan
                             .as_ref()
                             .map(|plan| {
-                                if self.memory.is_none() {
+                                if self.prefs.memory.is_none() {
                                     format!("跟随全局 · 自动 {}", tuning::gb(plan.heap_mb))
                                 } else {
                                     format!("跟随全局 · {}", tuning::gb(plan.heap_mb))
@@ -294,7 +303,7 @@ impl App {
                         ui.add_space(12.0);
                         section(ui, "回收器");
                         ui.horizontal(|ui| {
-                            let follow = format!("跟随全局 · {}", self.gc.label());
+                            let follow = format!("跟随全局 · {}", self.prefs.gc.label());
                             if chip(ui, &follow, edit.draft.gc.is_none()).clicked() {
                                 edit.draft.gc = None;
                             }
@@ -352,7 +361,7 @@ impl App {
                         ui.add_space(12.0);
                         section(ui, "额外 JVM 参数");
                         ui.horizontal(|ui| {
-                            let follow = if self.jvm_args.trim().is_empty() {
+                            let follow = if self.prefs.jvm_args.trim().is_empty() {
                                 "跟随全局 · 无".to_string()
                             } else {
                                 "跟随全局".to_string()
@@ -363,7 +372,7 @@ impl App {
                             if chip(ui, "单独设置", edit.draft.jvm_args.is_some()).clicked()
                                 && edit.draft.jvm_args.is_none()
                             {
-                                edit.draft.jvm_args = Some(self.jvm_args.clone());
+                                edit.draft.jvm_args = Some(self.prefs.jvm_args.clone());
                             }
                         });
                         if let Some(args) = &mut edit.draft.jvm_args {
@@ -374,9 +383,9 @@ impl App {
                                 "和自动参数冲突时以这里为准",
                                 ui.available_width(),
                             );
-                        } else if !self.jvm_args.trim().is_empty() {
+                        } else if !self.prefs.jvm_args.trim().is_empty() {
                             ui.label(
-                                egui::RichText::new(&self.jvm_args)
+                                egui::RichText::new(&self.prefs.jvm_args)
                                     .size(12.5)
                                     .monospace()
                                     .color(t::dim()),
@@ -514,6 +523,13 @@ impl App {
         if modal.backdrop_response.clicked() || escape_pressed(ctx) {
             close = true;
         }
+        if download_java {
+            let component = launch::java_requirement(&self.root, &row.profile)
+                .ok()
+                .and_then(|(_, component)| component);
+            self.start_java_download(required, component, None);
+            return;
+        }
         if pick_java
             && let Some(path) = rfd::FileDialog::new()
                 .set_title("选择 java 程序（bin 目录里的 java / javaw）")
@@ -521,8 +537,8 @@ impl App {
         {
             match java::probe(&path) {
                 Ok(runtime) => {
-                    if !self.extra_javas.iter().any(|j| j.path == runtime.path) {
-                        self.extra_javas.push(runtime.clone());
+                    if !self.env.extra_javas.iter().any(|j| j.path == runtime.path) {
+                        self.env.extra_javas.push(runtime.clone());
                     }
                     edit.draft.java = Some(runtime.path);
                 }
@@ -535,9 +551,11 @@ impl App {
             match launchcfg::save(&self.root, &row.id, &edit.draft) {
                 Ok(()) => {
                     if edit.draft.is_default() {
-                        self.launch_cfgs.remove(&row.id);
+                        self.play.versions.remove(&row.id);
                     } else {
-                        self.launch_cfgs.insert(row.id.clone(), edit.draft.clone());
+                        self.play
+                            .versions
+                            .insert(row.id.clone(), edit.draft.clone());
                     }
                     self.notice = Some(format!(
                         "已保存「{}」的启动参数",
@@ -583,7 +601,7 @@ impl App {
         let settings = self.tuning_settings(&edit.draft);
         let [width, height] = edit.draft.window();
         let opts = LaunchOptions {
-            username: self.username.clone(),
+            username: self.prefs.username.clone(),
             memory_mb: settings.memory_mb,
             gc: settings.gc,
             jvm_args: settings.extra,

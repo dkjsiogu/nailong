@@ -17,9 +17,11 @@ pub mod mods;
 pub mod paths;
 pub mod progress;
 pub mod rollback;
+pub mod runtime;
 pub mod saves;
 pub mod snapshots;
 pub mod tuning;
+pub mod update;
 
 pub use error::{Error, Result};
 pub use paths::Root;

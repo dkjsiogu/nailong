@@ -8,7 +8,7 @@
 
 **简体中文** | [English](README.en.md)
 
-> 当前版本：**0.37.0**（预览版）
+> 当前版本：**0.38.0**（预览版）
 >
 > 目标：小体积、少依赖、安装过程可见、中断可补。功能边界见 [实现状态](docs/design/14-implementation-status.md)。
 
@@ -26,6 +26,14 @@ Cairn 是登山者叠在路边的石堆：它不帮你走路，只标出回去�
 它不是“万能启动器”，也还不是 1.0。能做和不能做的，下文列清楚了。
 
 ## 界面
+
+0.38 把下载体验做扎实，并把界面代码整理成清楚的框架：
+
+- **看得见在下什么**：下载页列出做完了哪几步、各用了多久，正在做哪一步，刚下载的几个文件（资源文件显示真名），来自 Mojang 官方还是 BMCLAPI 镜像，速度和剩余时间。
+- **Java 自动下载**：点「开始游戏」时如果没有合适的 Java，直接下载 Mojang 官方的运行时，下完接着启动，不用自己去找、也不改系统。优先下压缩版（约三分之一大小），每个文件都校验。设置、首次引导和启动参数里也能手动下。
+- **启动器更新**：启动时安静地查一次（最多 12 小时一次），有新版本时侧栏出现小提示；点开能看更新说明，下载后按 SHA256SUMS 校验。Windows 一键重启到新版本，Linux 给出能复制的安装命令。设置里也能手动「检查更新」。
+- **界面代码的框架**：12000 多行的 `main.rs` 拆成按页面和弹窗划分的模块，状态按功能分组，后台任务统一用一套进度模型。见 [23 · 界面代码的框架](docs/design/23-ui-framework.md)。
+- 顺带修了存档页的版本名太长时会压住按钮。
 
 0.37 改名 Cairn，并按实测反馈理顺启动前后的体验：
 
@@ -167,7 +175,7 @@ Cairn 是登山者叠在路边的石堆：它不帮你走路，只标出回去�
 | 平台 | 文件 | 大小 | 要求 |
 |---|---|---:|---|
 | Windows x64 | [cairn.exe](https://github.com/dkjsiogu/cairn/releases/latest/download/cairn.exe) | 约 9 MB | Windows 10/11，Java 21 |
-| Linux x64 (deb) | [cairn_0.37.0_amd64.deb](https://github.com/dkjsiogu/cairn/releases/latest/download/cairn_0.37.0_amd64.deb) | 约 3.7 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
+| Linux x64 (deb) | [cairn_0.38.0_amd64.deb](https://github.com/dkjsiogu/cairn/releases/latest/download/cairn_0.38.0_amd64.deb) | 约 3.7 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
 
 校验值：[SHA256SUMS](https://github.com/dkjsiogu/cairn/releases/latest/download/SHA256SUMS)。
 
@@ -184,7 +192,7 @@ Cairn 是登山者叠在路边的石堆：它不帮你走路，只标出回去�
 ### Linux（Debian / Ubuntu）
 
 ```bash
-sudo apt install ./cairn_0.37.0_amd64.deb
+sudo apt install ./cairn_0.38.0_amd64.deb
 cairn
 ```
 
@@ -239,6 +247,8 @@ deb 只装 GUI；自己构建会同时得到 CLI：
 
 ```bash
 ./target/release/cairn-cli --root /path/to/.minecraft list
+./target/release/cairn-cli --root /path/to/.minecraft java-install 21   # 下载官方 Java 21 到数据目录
+./target/release/cairn-cli update                                     # 查有没有新版本
 ./target/release/cairn-cli --root /path/to/.minecraft install neoforge 1.21.1 21.1.209
 ./target/release/cairn-cli --root /path/to/.minecraft install modpack ~/Downloads/pack.mrpack
 ./target/release/cairn-cli --root /path/to/.minecraft install modpack ~/Downloads/pack.zip

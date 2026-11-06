@@ -144,7 +144,7 @@ pub fn install_client(
         .unwrap_or_default();
     let client_processors: Vec<&&Value> = processors.iter().filter(|p| is_client(p)).collect();
     let total = client_processors.len().max(1);
-    let java = find_java()?;
+    let java = find_java(root)?;
     let log_path = root
         .cache()
         .join("logs")
@@ -208,6 +208,8 @@ pub fn install_client(
             bytes_done: 0,
             bytes_total: 0,
             indeterminate: false,
+            current: None,
+            source: None,
         });
         println!("→ {label} 处理器 {}/{}: {main_class}", index + 1, total);
         let log = OpenOptions::new()
@@ -272,6 +274,8 @@ pub fn install_client(
             bytes_done: 0,
             bytes_total: 0,
             indeterminate: false,
+            current: None,
+            source: None,
         });
     }
 
@@ -342,6 +346,7 @@ fn installer_specs(root: &Root, profile: &Value) -> Result<Vec<FileSpec>> {
                 .map(str::to_string),
             size: artifact.get("size").and_then(|v| v.as_u64()),
             verify_existing: true,
+            label: None,
         });
     }
     Ok(specs)
@@ -483,8 +488,8 @@ fn main_class(jar: &Path) -> Result<String> {
     Err(Error::Install("processor 缺少 Main-Class".into()))
 }
 
-fn find_java() -> Result<java::JavaRuntime> {
-    let all = java::find_all();
+fn find_java(root: &Root) -> Result<java::JavaRuntime> {
+    let all = java::find_all(root);
     all.iter()
         .find(|j| j.major >= 21)
         .or_else(|| all.iter().find(|j| j.major >= 17))
