@@ -31,6 +31,14 @@ eframe = { version = "0.37", default-features = false, features = ["glow", "defa
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
+# 调试构建只留行号：出错时回溯照样指到哪一行，但每个二进制从 300 多 MB 降到几十 MB。
+# 依赖不带调试信息，很少需要单步进它们的代码。
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 [profile.release]
 opt-level = "z"
 lto = "fat"
