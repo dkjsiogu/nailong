@@ -31,8 +31,9 @@ impl App {
         let (tx, rx) = mpsc::channel();
         self.install.catalog_rx = Some(rx);
         let root = self.root.clone();
+        let source = self.prefs.source.clone();
         std::thread::spawn(move || {
-            let result = catalog::load(&root, "official").map_err(|e| e.to_string());
+            let result = catalog::load(&root, &source).map_err(|e| e.to_string());
             let _ = tx.send(Msg::Catalog(result));
         });
     }
@@ -82,6 +83,7 @@ impl App {
         self.log.push(format!("导入整合包 {name}"));
 
         let root = self.root.clone();
+        let source = self.prefs.source.clone();
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         let tx = Arc::new(Mutex::new(tx));
@@ -94,7 +96,7 @@ impl App {
             })
         };
         std::thread::spawn(move || {
-            let msg = match modpack::import_pack(&root, &path, "official", &sink) {
+            let msg = match modpack::import_pack(&root, &path, &source, &sink) {
                 Ok(instance) => Msg::InstallDone(format!("instance:{}", instance.id)),
                 Err(Error::Cancelled) => Msg::InstallCancelled,
                 Err(e) => Msg::InstallFailed(e.to_string()),
@@ -152,6 +154,7 @@ impl App {
         self.log.push(format!("安装 {target_label}"));
 
         let root = self.root.clone();
+        let source = self.prefs.source.clone();
         let point_dir = root.version_dir(&target);
         let point_files = vec![format!("{target}.json"), format!("{target}.jar")];
         let point_json = point_dir.join(format!("{target}.json"));
@@ -178,13 +181,13 @@ impl App {
             }
             let result: Result<String, Error> = match loader {
                 LoaderKind::Vanilla => {
-                    vanilla::install_with(&root, &mc, "official", &sink).map(|()| target.clone())
+                    vanilla::install_with(&root, &mc, &source, &sink).map(|()| target.clone())
                 }
-                LoaderKind::Fabric => fabric::install_with(&root, &mc, &version, "official", &sink),
+                LoaderKind::Fabric => fabric::install_with(&root, &mc, &version, &source, &sink),
                 LoaderKind::NeoForge => {
-                    neoforge::install_with(&root, &mc, &version, "official", &sink)
+                    neoforge::install_with(&root, &mc, &version, &source, &sink)
                 }
-                LoaderKind::Forge => forge::install_with(&root, &mc, &version, "official", &sink),
+                LoaderKind::Forge => forge::install_with(&root, &mc, &version, &source, &sink),
             };
             let msg = match result {
                 Ok(id) => Msg::InstallDone(id),

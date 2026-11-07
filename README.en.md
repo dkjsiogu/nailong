@@ -8,7 +8,7 @@ A small, native Minecraft: Java Edition launcher written in Rust. Renamed to **C
 
 [简体中文](README.md) | **English**
 
-> Current version: **0.38.0** (preview)
+> Current version: **0.39.0** (preview)
 >
 > Goals: small binaries, few dependencies, visible install progress, and a repair path after interruption. See [implementation status](docs/design/14-implementation-status.md) for exact boundaries.
 
@@ -26,6 +26,13 @@ A cairn is the pile of stones hikers leave by a trail: it does not walk for you,
 It is not a universal launcher, and it is not 1.0 yet. What works and what does not is laid out below.
 
 ## Interface
+
+0.39 adds the community's public mirrors, so downloads keep working when the official servers do not answer:
+
+- **Automatic mirror fallback**: game files, libraries and loaders fall back to [BMCLAPI](https://bmclapidoc.bangbang93.com/); the Modrinth and CurseForge APIs fall back to [MCIM](https://github.com/mcmod-info-mirror). A host that failed is remembered for five minutes, so the next requests go straight to the mirror instead of waiting for a timeout each time. Every file is still checked against the official hashes.
+- **Choose the download source**: Settings offers "Official first" (default) or "Mirror first" (game files and loaders from BMCLAPI first, usually faster in mainland China). Modrinth and CurseForge always try the official API first.
+- **See which source is used**: the download page names the source; the Content page shows a quiet note, with the mirror's sync time, while MCIM is in use.
+- **Keys stay home**: the CurseForge API key is only sent to CurseForge and is dropped when falling back to a mirror. Rules and what we promised both mirrors: [24 · Download sources](docs/design/24-download-sources.md) (Chinese).
 
 0.38 makes downloading solid and gives the interface code a clear structure:
 
@@ -110,7 +117,7 @@ More screenshots (versions, install, search, detail, progress, first launch, set
 - Vanilla, Fabric, NeoForge, Forge — versions come from the official manifests, no manual entry.
 - Native Forge/NeoForge install: we fetch only `install_profile`, `version.json`, and the client patch (~3 MB). The full installer is never kept.
 - Once the version JSON is ready, assets, client/libraries, loader patches, and processors run in parallel where possible.
-- Large files download in four ranged segments with resumable parts and automatic fallback to a mirror source.
+- Large files download in four ranged segments with resumable parts and automatic fallback to a mirror (BMCLAPI, MCIM) when the official host does not answer.
 - A machine-wide loader-patch cache; client/libraries use SHA1-addressed blobs and are hardlinked into place. Existing files only get a cheap size check.
 - Patched clients found locally are reused: we scan official / PCL / HMCL / Prism / MultiMC / Modrinth and sibling `.minecraft` roots; a matching SHA1 (or a valid NeoForge JAR shape) skips the patch and processors.
 - Reinstalling an intact Forge/NeoForge instance is a fast no-op — no re-download, no repeated processors.
@@ -174,7 +181,7 @@ Drag a `.mrpack` or `.zip` into the window to start an import. A single mod `.ja
 | Platform | File | Size | Requirements |
 |---|---|---:|---|
 | Windows x64 | [cairn.exe](https://github.com/dkjsiogu/cairn/releases/latest/download/cairn.exe) | ~9 MB | Windows 10/11, Java 21 |
-| Linux x64 (deb) | [cairn_0.38.0_amd64.deb](https://github.com/dkjsiogu/cairn/releases/latest/download/cairn_0.38.0_amd64.deb) | ~3.4 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
+| Linux x64 (deb) | [cairn_0.39.0_amd64.deb](https://github.com/dkjsiogu/cairn/releases/latest/download/cairn_0.39.0_amd64.deb) | ~3.4 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
 
 Checksums: [SHA256SUMS](https://github.com/dkjsiogu/cairn/releases/latest/download/SHA256SUMS).
 
@@ -191,7 +198,7 @@ Java 21 must be installed. Cairn searches for it automatically and shows a warni
 ### Linux (Debian / Ubuntu)
 
 ```bash
-sudo apt install ./cairn_0.38.0_amd64.deb
+sudo apt install ./cairn_0.39.0_amd64.deb
 cairn
 ```
 
@@ -315,6 +322,13 @@ docs/
 ```
 
 See the [design index](docs/design/00-overview.md) and the [implementation status](docs/design/14-implementation-status.md).
+
+## Thanks
+
+- [BMCLAPI](https://bmclapidoc.bangbang93.com/) (bangbang93) mirrors Minecraft and mod loader downloads.
+- [MCIM](https://github.com/mcmod-info-mirror) (mcmod-info-mirror) mirrors the Modrinth and CurseForge APIs.
+
+Both are free community services. Cairn uses them as they ask: official first, source shown, no re-wrapping. See [24](docs/design/24-download-sources.md).
 
 ## License
 

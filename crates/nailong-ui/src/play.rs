@@ -282,6 +282,7 @@ impl App {
         ));
         self.log.push(format!("下载 Java {required}"));
         let root = self.root.clone();
+        let source = self.prefs.source.clone();
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         std::thread::spawn(move || {
@@ -289,7 +290,7 @@ impl App {
             let sink = from_fn(move |p| {
                 let _ = progress.send(Msg::Progress(p));
             });
-            let result = nailong_core::http::Http::new("official").and_then(|http| {
+            let result = nailong_core::http::Http::new(&source).and_then(|http| {
                 let offer = nailong_core::runtime::find(&http, required, component.as_deref())?;
                 nailong_core::runtime::install(&root, &http, &offer, &sink)
                     .map(|_| format!("Java {}（官方运行时 {}）", offer.major, offer.version))

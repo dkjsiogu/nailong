@@ -106,6 +106,7 @@ impl Activity {
 pub(crate) fn source_name(host: &str) -> String {
     let named = [
         ("bmclapi", "BMCLAPI 镜像"),
+        ("mcimirror", "MCIM 镜像"),
         ("mojang.com", "Mojang 官方"),
         ("minecraft.net", "Mojang 官方"),
         ("neoforged.net", "NeoForge 官方"),
@@ -189,6 +190,7 @@ mod tests {
     fn names_sources_and_formats_numbers() {
         assert_eq!(source_name("bmclapi2.bangbang93.com"), "BMCLAPI 镜像");
         assert_eq!(source_name("cdn.modrinth.com"), "Modrinth");
+        assert_eq!(source_name("mod.mcimirror.top"), "MCIM 镜像");
         assert_eq!(source_name("example.org"), "example.org");
         assert_eq!(rate(13.0 * 1024.0 * 1024.0), "13.0 MB/s");
         assert_eq!(rate(512.0 * 1024.0), "512 KB/s");

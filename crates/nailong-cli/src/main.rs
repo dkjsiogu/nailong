@@ -19,7 +19,7 @@ struct Cli {
     #[arg(long, global = true)]
     root: Option<PathBuf>,
 
-    /// 下载源：official | bmcl（国内镜像）
+    /// 下载源：official（官方优先，连不上自动换镜像）| bmcl（镜像优先）
     #[arg(long, global = true, default_value = "official")]
     mirror: String,
 

@@ -370,6 +370,7 @@ impl App {
         }
 
         ui.add_space(8.0);
+        mirror_note(ui);
         if let Some(error) = self.content.error.clone() {
             let mut reload = false;
             let empty = self.content.browse.is_empty() && !self.content.browse_loading;
@@ -600,6 +601,7 @@ impl App {
             return;
         }
         ui.add_space(4.0);
+        mirror_note(ui);
         for warning in &self.content.warnings {
             ui.label(egui::RichText::new(warning).size(13.0).color(t::warn()));
         }

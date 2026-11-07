@@ -488,6 +488,35 @@ pub(crate) fn pick_content_files(kind: mods::ContentKind) -> Vec<PathBuf> {
     .unwrap_or_default()
 }
 
+/// 官方连不上、正在用镜像时，在内容页顶上说一声：数据可能晚一些，官方恢复后自动换回。
+pub(crate) fn mirror_note(ui: &mut egui::Ui) {
+    let down: Vec<(&str, nailong_core::http::Fallback)> = [
+        ("Modrinth", "api.modrinth.com"),
+        ("CurseForge", "api.curseforge.com"),
+    ]
+    .into_iter()
+    .filter_map(|(name, host)| nailong_core::http::fallback_for(host).map(|f| (name, f)))
+    .collect();
+    let Some((_, first)) = down.first() else {
+        return;
+    };
+    let names: Vec<&str> = down.iter().map(|(name, _)| *name).collect();
+    let mut text = format!(
+        "{} 官方暂时连不上，正在用 {}",
+        names.join(" 和 "),
+        source_name(&first.via)
+    );
+    if let Some(secs) = down.iter().filter_map(|(_, f)| f.synced).min() {
+        text.push_str(&format!(" · 数据{}同步", human_age(secs)));
+    }
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("•").size(12.5).color(t::warn()));
+        ui.label(egui::RichText::new(text).size(12.5).color(t::sub()))
+            .on_hover_text("镜像的数据可能比官方晚一些；几分钟后会再试官方，连上了就自动换回来");
+    });
+    ui.add_space(6.0);
+}
+
 /// 内容接口的原始错误常带完整 URL；界面上只留一句可行动的话。
 pub(crate) fn content_error(message: String) -> String {
     let text = message.trim();
@@ -497,7 +526,7 @@ pub(crate) fn content_error(message: String) -> String {
         || text.contains("dns error")
         || text.contains("timed out")
     {
-        "网络连接失败，请检查网络或代理后重试".to_string()
+        "官方和镜像都没连上，请检查网络或代理后重试".to_string()
     } else if text.starts_with("HTTP ") {
         "内容服务暂时不可用，请稍后重试".to_string()
     } else if text.contains("操作已取消") {

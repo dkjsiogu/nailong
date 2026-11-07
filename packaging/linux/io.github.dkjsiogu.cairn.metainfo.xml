@@ -28,6 +28,11 @@
   <url type="bugtracker">https://github.com/dkjsiogu/cairn/issues</url>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.39.0" date="2026-11-07">
+      <description>
+        <p>Downloads now fall back to community mirrors when the official servers do not answer: BMCLAPI for Minecraft and mod loader files, MCIM for the Modrinth and CurseForge APIs. A failed host is remembered for five minutes so the rest go straight to the mirror, every file is still checked against the official hashes, and API keys are never sent to a mirror. Settings can choose official-first or mirror-first, credits both mirrors, and the Content page says when a mirror is in use.</p>
+      </description>
+    </release>
     <release version="0.38.0" date="2026-11-07">
       <description>
         <p>The download page now shows the finished steps, the files just downloaded, the source (Mojang or the BMCLAPI mirror), speed and time left. When no suitable Java is installed, Cairn downloads Mojang's official runtime and then launches the game. A quiet update check shows a badge when a new version is out, with release notes and a verified download. The interface code is reorganised into modules per page and dialog.</p>

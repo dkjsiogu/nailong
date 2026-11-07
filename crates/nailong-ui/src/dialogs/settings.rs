@@ -609,6 +609,9 @@ impl App {
                             });
                         ui.add_space(12.0);
 
+                        self.source_card(ui);
+                        ui.add_space(12.0);
+
                         egui::Frame::new()
                             .fill(t::bg())
                             .stroke(egui::Stroke::new(1.0, t::hairline()))
@@ -756,6 +759,71 @@ impl App {
         if open_log {
             self.open_log();
         }
+    }
+}
+
+/// 两种下载源。镜像只是后备或加速，文件照样按官方给的校验值核对。
+const SOURCES: [(&str, &str, &str); 2] = [
+    ("official", "官方优先", "先连官方，连不上自动换镜像"),
+    (
+        "bmcl",
+        "镜像优先",
+        "游戏文件和加载器先走 BMCLAPI，国内通常更快；Mod 平台仍先连官方",
+    ),
+];
+
+impl App {
+    /// 下载源和镜像致谢。
+    pub(crate) fn source_card(&mut self, ui: &mut egui::Ui) {
+        egui::Frame::new()
+            .fill(t::bg())
+            .stroke(egui::Stroke::new(1.0, t::hairline()))
+            .corner_radius(motion::R)
+            .inner_margin(egui::Margin::symmetric(14, 10))
+            .show(ui, |ui| {
+                ui.set_width(442.0);
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("下载源").size(13.0).color(t::sub()));
+                    ui.add_space(8.0);
+                    for (key, label, _) in SOURCES {
+                        if chip(ui, label, self.prefs.source == key).clicked() {
+                            self.prefs.source = key.to_string();
+                            self.save_ui_config();
+                        }
+                    }
+                });
+                ui.add_space(4.0);
+                let hint = SOURCES
+                    .iter()
+                    .find(|(key, _, _)| *key == self.prefs.source)
+                    .map_or("", |(_, _, hint)| hint);
+                ui.label(egui::RichText::new(hint).size(12.5).color(t::sub()));
+                ui.add_space(2.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    let dim = |text: &str| egui::RichText::new(text).size(12.5).color(t::dim());
+                    let link = |text: &str| egui::RichText::new(text).size(12.5);
+                    ui.label(dim("镜像由 "));
+                    if ui
+                        .link(link("BMCLAPI"))
+                        .on_hover_text("bangbang93 维护的 Minecraft 下载镜像 · 点开看说明和赞助")
+                        .clicked()
+                    {
+                        open_url("https://bmclapidoc.bangbang93.com/");
+                    }
+                    ui.label(dim(" 和 "));
+                    if ui
+                        .link(link("MCIM"))
+                        .on_hover_text(
+                            "mcmod-info-mirror 维护的 Modrinth / CurseForge 接口镜像 · 只在官方连不上时用",
+                        )
+                        .clicked()
+                    {
+                        open_url("https://github.com/mcmod-info-mirror");
+                    }
+                    ui.label(dim(" 免费提供，感谢维护者"));
+                });
+            });
     }
 }
 

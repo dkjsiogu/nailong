@@ -10,7 +10,7 @@
 
 use crate::cancel;
 use crate::error::{Error, Result, io};
-use crate::http::{FileSpec, Http, rewrite_mirror, sha1_file};
+use crate::http::{FileSpec, Http, sha1_file};
 use crate::java;
 use crate::paths::Root;
 use crate::progress::{Progress, Sink};
@@ -48,21 +48,6 @@ pub struct Offer {
 
 pub fn dir(root: &Root) -> PathBuf {
     root.dir().join("runtime")
-}
-
-/// 先试官方地址，不通再试镜像。元数据请求很小，失败得快。
-fn get_text(http: &Http, url: &str) -> Result<String> {
-    match http.get_text(url) {
-        Ok(text) => Ok(text),
-        Err(Error::Cancelled) => Err(Error::Cancelled),
-        Err(first) => {
-            let mirror = rewrite_mirror(url, "bmcl");
-            if mirror == url {
-                return Err(first);
-            }
-            http.get_text(&mirror)
-        }
-    }
 }
 
 /// 从总清单里挑：版本里写明的组件优先；否则选够用里大版本最低的。
@@ -104,7 +89,7 @@ pub fn choose(
 pub fn find(http: &Http, required: u32, preferred: Option<&str>) -> Result<Offer> {
     let platform = platform()
         .ok_or_else(|| Error::Install("这个系统没有官方的 Java 运行时，需要自己安装".into()))?;
-    let index: Value = serde_json::from_str(&get_text(http, INDEX)?)
+    let index: Value = serde_json::from_str(&http.get_text(INDEX)?)
         .map_err(|e| Error::Install(format!("Java 运行时清单解析失败: {e}")))?;
     choose(&index, platform, required, preferred)
         .ok_or_else(|| Error::Install(format!("官方没有给这个系统提供 Java {required}")))
@@ -278,7 +263,7 @@ pub fn install(root: &Root, http: &Http, offer: &Offer, sink: &Sink) -> Result<P
         return Ok(java);
     }
     (sink)(Progress::stage(format!("准备下载 Java {}", offer.major)));
-    let text = get_text(http, &offer.manifest_url)?;
+    let text = http.get_text(&offer.manifest_url)?;
     if let Some(expected) = &offer.manifest_sha1 {
         use sha1::{Digest, Sha1};
         let actual = crate::http::hex(&Sha1::digest(text.as_bytes()));

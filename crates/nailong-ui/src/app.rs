@@ -733,6 +733,7 @@ impl App {
             "theme": self.prefs.theme.key(),
             "update_checked": self.prefs.update_checked,
             "update_skip": self.prefs.update_skip,
+            "source": self.prefs.source,
         });
         if let Ok(bytes) = serde_json::to_vec_pretty(&value) {
             let _ = std::fs::write(self.root.dir().join("ui.json"), bytes);
@@ -833,6 +834,8 @@ pub(crate) struct UiPrefs {
     pub(crate) update_checked: u64,
     /// 玩家选了「跳过这个版本」的版本号。
     pub(crate) update_skip: String,
+    /// 下载源：`official` 官方优先（连不上自动换镜像），`bmcl` 镜像优先。
+    pub(crate) source: String,
 }
 
 /// 玩家名、内存和外观存在数据目录的 `ui.json`，随设置弹窗关闭落盘。
@@ -881,6 +884,10 @@ pub(crate) fn load_ui_prefs(root: &Root) -> UiPrefs {
             .and_then(|value| value.as_str())
             .unwrap_or_default()
             .to_string(),
+        source: match get("source").and_then(|value| value.as_str()) {
+            Some("bmcl") => "bmcl".into(),
+            _ => "official".into(),
+        },
     }
 }
 

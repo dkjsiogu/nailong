@@ -1,7 +1,7 @@
-# 14 · 原型实现状态（0.1 → 0.38.0）
+# 14 · 原型实现状态（0.1 → 0.39.0）
 
-> 日期：2026-11-04
-> 对应发布：GitHub Release `v0.38.0` 的 `cairn.exe`、`cairn_0.38.0_amd64.deb`（0.37 起改名 Cairn）
+> 日期：2026-11-07
+> 对应发布：GitHub Release `v0.39.0` 的 `cairn.exe`、`cairn_0.39.0_amd64.deb`（0.37 起改名 Cairn）
 > 目的：把「设计稿」和「已经跑起来的代码」分开记账，避免把计划当成已完成。
 
 ## 1. 一句话结论
@@ -47,6 +47,8 @@
 0.34.0 加入 JVM 自动调参（`tuning.rs`，规范见 `docs/design/19-jvm-tuning.md`）：内存默认自动，按物理内存、逻辑处理器、Java 版本、加载器和 Mod 数量算出堆大小，配官方启动器那套 G1 参数并按堆放大 Region；Java 25 加紧凑对象头；大整合包配强机器时自动换分代 ZGC。设置里显示结果、依据和完整参数，可手动指定内存、回收器或追加 JVM 参数；CLI 增加 `--gc`、`--jvm-arg`，`--dry-run` 打印计算过程。生成的参数在本机 OpenJDK 11/17/21/25 和 GraalVM 21 上逐一启动验证。顺带修复 CLI 传相对 `--game-dir` 时游戏目录被解析两次的问题。
 
 0.34.1 修复 26.x 无法安装和启动：版本文件 `default-user-jvm` 的首条没有 `rules`，解析失败；`${natives_directory}` 误指向 `java` 子目录，`java.library.path` 变成 `.../java/java`。实测 26.1、26.3 原版可安装并进入世界。调参在版本文件带官方默认时跟随官方（26.x 为 ZGC + 紧凑对象头 + 预先占用 + 字符串去重，初始堆 2 GB）。Java 选择改为够用里最低的大版本，同版本优先 64 位 OpenJDK。
+
+0.39.0 公共镜像（见 `docs/design/24-download-sources.md`）。core：`http::fallback_urls` 给每个地址排好候选——Mojang 和加载器官方 ↔ BMCLAPI 互为后备（「镜像优先」时 BMCLAPI 在前），Modrinth / CurseForge 接口总是官方在前、MCIM（`mod.mcimirror.top`，UA 已在 mcim-rust-api#12 登记）在后，Mod 文件不走 MCIM（它的文件地址只是 302 回官方 CDN）；`get_text` / `get_json` / `get_bytes` / `get_json_with_headers` 统一走 `get_with`：每轮试一遍候选、官方的 400/404/410/422 直接作数、镜像的 404 等官方也连不上才作数；`x-api-key` / `Authorization` / `Cookie` 只发给原本的主机；官方连不上而后备成功时记五分钟（`fallback_for(host)`），期间同一主机先走后备，批量下载也一样；MCIM 回答里最旧的 `sync_at` 记下来给界面。`runtime.rs` 去掉自己的镜像重试。界面：设置里「下载源」（官方优先 / 镜像优先，存 `ui.json` 的 `source`，安装、整合包导入、版本目录和 Java 下载都按它走）和镜像致谢；内容页在用 MCIM 时显示提示和同步时间；下载页来源认得「MCIM 镜像」。实测：本地代理拦掉 `api.modrinth.com` 时搜索 0.8 秒从 MCIM 拿到结果，不拦时不碰 MCIM；拦掉 Mojang 全部五个主机时 `cairn-cli install vanilla 1.12.2` 53 秒装完。
 
 0.38.0 下载体验和界面框架（见 `docs/design/23-ui-framework.md`）。core：`Progress` 多了 `current`（刚开始下载的文件，资源文件用资源索引里的真名）和 `source`（下载用的主机），`FileSpec.label` 给进度显示用；`runtime.rs` 按 Mojang 的运行时清单下载 Java（平台映射、按版本文件里的组件或够用里最低的大版本选择、清单 SHA-1 校验、优先 LZMA 压缩版并用 `lzma-rs` 解压、逐个 SHA-1、可执行权限和符号链接、`.part` 目录完成后改名），`java::find_all(root)` 一并找数据目录里的运行时；`update.rs` 查 GitHub 最新版本、按平台选文件、按 SHA256SUMS 校验、Windows 改名替换正在运行的程序并重启。CLI 加了 `java-install` 和 `update`。界面：`main.rs` 拆成 `app`、`msg`、`model`、`play`、`activity`、`widgets`、`fonts`、`pages/`（home、versions、worlds、progress、shots、content/{browse,detail,library,drop}）和 `dialogs/`（settings、account、params、log、rollback、review、update），统一 `use crate::prelude::*`；App 的状态从 155 个平铺字段收成按功能分组的结构体（content、worlds、login、rollback、install、home、play、env、prefs、update）；进度页改用 `Activity`（步骤和耗时、刚下载的文件、来源、速度、剩余时间）；缺 Java 时启动前自动下载、下完接着启动；侧栏更新提示和更新弹窗，Release 的说明改用发版提交的说明。实测：界面里真实下载 Java 17（11.8 MB/s，133 个文件），`cairn-cli java-install 21` 15 秒装好并能运行；重构前后各页面截图一致。
 
@@ -116,7 +118,7 @@
 | 规则（OS/arch/features/versionRange） | `core::manifest` | 完成 | 单元测试（含 Windows 版本区间） |
 | Maven 坐标、classifier、`@zip` 扩展 | `core::manifest` | 完成 | 单元测试 |
 | 原版安装（client jar / libraries / assets / logging） | `core::install::vanilla` | 完成 | 空目录安装 1.21.1，3911 个资源对象 |
-| 并行下载、sha1 校验、重试、BMCLAPI 重写 | `core::http` | 完成 | 实际安装；镜像参数可切换 |
+| 并行下载、sha1 校验、重试、镜像后备（BMCLAPI、MCIM） | `core::http` | 完成 | 实际安装；官方被拦时自动换镜像 |
 | Java 扫描与版本选择 | `core::java` | 完成 | 识别 GraalVM 21 / OpenJDK 21 |
 | natives 解压与去重 | `core::launch` | 完成 | 1.21.1 启动 |
 | 启动参数拼接、日志落盘 | `core::launch` | 完成 | `--print-plan` + 实际启动 |
@@ -145,7 +147,7 @@
 | 大文件分段下载 | `core::http` | 完成 | client jar 4 段并行、段续传、源回退 |
 | 重复安装快速路径 | `core::install::forge` / `neoforge` | 完成 | health 通过则 0 下载、0 processor |
 | Windows 交叉编译 | `x86_64-pc-windows-gnu` | 通过 | 无 MinGW DLL 依赖，仅系统 DLL |
-| 发布包 | GitHub Release `v0.38.0` | 完成（CI 构建） | 单 exe 约 8 MB / deb 约 3.4 MB |
+| 发布包 | GitHub Release `v0.39.0` | 完成（CI 构建） | 单 exe 约 8 MB / deb 约 3.4 MB |
 
 ### 2.1 实测记录
 

@@ -8,7 +8,7 @@
 
 **简体中文** | [English](README.en.md)
 
-> 当前版本：**0.38.0**（预览版）
+> 当前版本：**0.39.0**（预览版）
 >
 > 目标：小体积、少依赖、安装过程可见、中断可补。功能边界见 [实现状态](docs/design/14-implementation-status.md)。
 
@@ -26,6 +26,13 @@ Cairn 是登山者叠在路边的石堆：它不帮你走路，只标出回去�
 它不是“万能启动器”，也还不是 1.0。能做和不能做的，下文列清楚了。
 
 ## 界面
+
+0.39 接上社区的公共镜像，官方连不上也能下：
+
+- **自动换镜像**：游戏文件、库和加载器连不上官方时换 [BMCLAPI](https://bmclapidoc.bangbang93.com/)；Modrinth 和 CurseForge 的接口连不上时换 [MCIM](https://github.com/mcmod-info-mirror)。连不上的主机记五分钟，这期间直接走镜像，不用每个文件都等超时。换了源也照样按官方的校验值核对。
+- **下载源可选**：设置里选「官方优先」（默认）或「镜像优先」（游戏文件和加载器先走 BMCLAPI，国内通常更快）。Modrinth 和 CurseForge 不论选哪种都先连官方。
+- **看得见用的是谁**：下载页写着来自哪个源；内容页在用 MCIM 时顶部有一行提示，带数据的同步时间。
+- **密钥不外发**：CurseForge 的密钥只发给 CurseForge，换到镜像时去掉。规则和答应两个镜像的事见 [24 · 下载源和镜像](docs/design/24-download-sources.md)。
 
 0.38 把下载体验做扎实，并把界面代码整理成清楚的框架：
 
@@ -110,7 +117,7 @@ Cairn 是登山者叠在路边的石堆：它不帮你走路，只标出回去�
 - 原版、Fabric、NeoForge、Forge 都支持，版本从官方清单读，不用手输。
 - Forge / NeoForge 走原生安装：只取 `install_profile`、`version.json` 和客户端补丁（约 3 MB），完整安装器不落盘。
 - 安装拆成阶段：版本 JSON 就绪后，资源、client/libraries、加载器补丁和 processor 并行推进。
-- 大文件按 4 段 Range 下载，段文件可续传；主源失败自动切备用源。
+- 大文件按 4 段 Range 下载，段文件可续传；官方连不上自动换镜像（BMCLAPI、MCIM），见 [24](docs/design/24-download-sources.md)。
 - 本机补丁缓存；客户端和运行库按 SHA1 存 blob，硬链接到目标路径；已有文件只做轻量检查。
 - 本机现成的 patched client 也能复用：自动扫官方 / PCL / HMCL / Prism / MultiMC / Modrinth 和相邻 `.minecraft`，SHA1 匹配（NeoForge 走 JAR 结构校验）后直接复用，跳过补丁和 processor。
 - 已完整安装的 Forge / NeoForge 再装一次等于 no-op，不会重复下载、重跑 processor。
@@ -175,7 +182,7 @@ Cairn 是登山者叠在路边的石堆：它不帮你走路，只标出回去�
 | 平台 | 文件 | 大小 | 要求 |
 |---|---|---:|---|
 | Windows x64 | [cairn.exe](https://github.com/dkjsiogu/cairn/releases/latest/download/cairn.exe) | 约 9 MB | Windows 10/11，Java 21 |
-| Linux x64 (deb) | [cairn_0.38.0_amd64.deb](https://github.com/dkjsiogu/cairn/releases/latest/download/cairn_0.38.0_amd64.deb) | 约 3.7 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
+| Linux x64 (deb) | [cairn_0.39.0_amd64.deb](https://github.com/dkjsiogu/cairn/releases/latest/download/cairn_0.39.0_amd64.deb) | 约 3.7 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
 
 校验值：[SHA256SUMS](https://github.com/dkjsiogu/cairn/releases/latest/download/SHA256SUMS)。
 
@@ -192,7 +199,7 @@ Cairn 是登山者叠在路边的石堆：它不帮你走路，只标出回去�
 ### Linux（Debian / Ubuntu）
 
 ```bash
-sudo apt install ./cairn_0.38.0_amd64.deb
+sudo apt install ./cairn_0.39.0_amd64.deb
 cairn
 ```
 
@@ -317,6 +324,13 @@ docs/
 ```
 
 详细设计见 [设计文档索引](docs/design/00-overview.md)；实现进度与已知偏差见 [实现状态](docs/design/14-implementation-status.md)。
+
+## 致谢
+
+- [BMCLAPI](https://bmclapidoc.bangbang93.com/)（bangbang93）提供 Minecraft 和加载器的下载镜像。
+- [MCIM](https://github.com/mcmod-info-mirror)（mcmod-info-mirror）提供 Modrinth 和 CurseForge 的接口镜像。
+
+两者都是免费的社区服务，Cairn 按它们的要求使用：官方优先、写明来源、不做二次封装，见 [24](docs/design/24-download-sources.md)。
 
 ## 许可
 
