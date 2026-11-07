@@ -261,6 +261,30 @@ impl Http {
         Err(last.unwrap_or_else(|| Error::Install(format!("请求失败: {url}"))))
     }
 
+    /// GET 一次（不换镜像），返回状态码、某个响应头和正文。认证服务器的 ALI 头要用它。
+    pub fn get_with_header(
+        &self,
+        url: &str,
+        header: &str,
+    ) -> Result<(u16, Option<String>, String)> {
+        cancel::check()?;
+        let response = self.client.get(url).send().map_err(|e| Error::Net {
+            url: url.to_string(),
+            source: e,
+        })?;
+        let status = response.status().as_u16();
+        let value = response
+            .headers()
+            .get(header)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+        let text = response.text().map_err(|e| Error::Net {
+            url: url.to_string(),
+            source: e,
+        })?;
+        Ok((status, value, text))
+    }
+
     /// 取回二进制内容（图标之类的小文件），上限 4 MiB，避免误拉大文件。
     pub fn get_bytes(&self, url: &str) -> Result<Vec<u8>> {
         self.get_with(url, &[], |response, used| {
@@ -1104,6 +1128,10 @@ pub fn rewrite_mirror(url: &str, mirror: &str) -> String {
         (
             "https://maven.minecraftforge.net",
             "https://bmclapi2.bangbang93.com/maven",
+        ),
+        (
+            "https://authlib-injector.yushi.moe",
+            "https://bmclapi2.bangbang93.com/mirrors/authlib-injector",
         ),
         (
             "https://maven.neoforged.net/releases",

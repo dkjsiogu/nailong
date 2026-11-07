@@ -1,5 +1,7 @@
 # 07 · 账户与认证
 
+> **0.40 更新**：现在可以同时留好几个账户（微软 / 外置登录 / 离线），存在 `accounts.json`；外置登录按 authlib-injector 规范实现。以 [25 · 多账户和截图](25-accounts-and-shots.md) 为准，本页其余部分是微软登录的细节。
+
 > **2026-10-25 更新**：回环回调以 `http://localhost`（根路径）为准，登录前自动探测候选 redirect_uri。
 >
 > **2026-10-24 更新**：Minecraft Services 的 AppID allowlist 已获批。设备码流程被当前 Entra 应用配置拒绝（`AADSTS70002: The client application must be marked as 'mobile'`，即未开启「允许公共客户端流」），而浏览器授权码 + PKCE 回环可直接使用，因此实现以 PKCE 为主路径；设备码代码保留作后续开关。

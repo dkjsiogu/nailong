@@ -8,7 +8,7 @@ A small, native Minecraft: Java Edition launcher written in Rust. Renamed to **C
 
 [简体中文](README.md) | **English**
 
-> Current version: **0.39.0** (preview)
+> Current version: **0.40.0** (preview)
 >
 > Goals: small binaries, few dependencies, visible install progress, and a repair path after interruption. See [implementation status](docs/design/14-implementation-status.md) for exact boundaries.
 
@@ -26,6 +26,14 @@ A cairn is the pile of stones hikers leave by a trail: it does not walk for you,
 It is not a universal launcher, and it is not 1.0 yet. What works and what does not is laid out below.
 
 ## Interface
+
+0.40: multiple accounts and a Screenshots page.
+
+- **Accounts**: Microsoft, external login (authlib-injector, e.g. LittleSkin) and offline, switched from the bottom-left. Avatars show the skin. External login needs only the skin site address; pick a profile if there are several. Passwords are not stored; expired logins are caught before launch.
+- **Screenshots page**: the fifth sidebar entry, with Overview, Time, Places (version › world or server) and People, plus search.
+- **Screenshot info**: games started from Cairn write the world or server, account and version into the PNG text chunk when you take a screenshot. Pixels are untouched; this can be turned off. Older screenshots are inferred from game logs.
+- **Viewer**: zoom, 1:1, pan, paging; copy, set as world icon, move to trash.
+- Details: [25 · Accounts and screenshots](docs/design/25-accounts-and-shots.md) (Chinese).
 
 0.39 adds the community's public mirrors, so downloads keep working when the official servers do not answer:
 
@@ -163,10 +171,10 @@ Drag a `.mrpack` or `.zip` into the window to start an import. A single mod `.ja
 
 ### Everyday use
 
-- Microsoft account login from the account chip at the bottom of the sidebar: browser authorization code + PKCE on a loopback port, automatic token refresh, and `--accessToken` / `--uuid` / `--xuid` at launch.
-- Tokens live in `account.json` under the data directory (mode 0600 on Unix) and never appear in logs; logging out deletes it.
-- Offline-account launch (singleplayer / LAN) still works when nobody is signed in.
-- Settings: the sidebar footer opens one dialog for player name, memory, Java status, game/data folders and logs; player name and memory persist in `ui.json`.
+- Accounts: switch from the bottom of the sidebar; several Microsoft, external (authlib-injector) and offline accounts are supported. Microsoft uses browser authorization code + PKCE with automatic refresh; external accounts launch with authlib-injector attached (downloaded from the official site or the BMCLAPI mirror, verified by SHA-256).
+- Credentials live in `accounts.json` under the data directory (mode 0600 on Unix), never appear in logs, and passwords are never stored; removing an account deletes its credentials.
+- Screenshots: browse by time, place and person; place and player are written into the image when taken (optional).
+- Settings: the sidebar footer opens one dialog for accounts, memory, Java status, game/data folders and logs; preferences persist in `ui.json`.
 - Automatic JVM tuning: memory defaults to Auto. Heap size comes from physical RAM, CPU threads, the Java version and the mod count, with tuned G1 flags; large modpacks on strong machines switch to generational ZGC. Settings shows the calculation and the full flag list, and you can still set memory, the collector or extra JVM arguments by hand. See [19 · JVM tuning](docs/design/19-jvm-tuning.md) (Chinese).
 - Versions: base versions required by a loader are hidden from the main picker and protected from deletion; this page only launches, repairs, reveals the folder and deletes. Content and saves live in their own sidebar places.
 - Saves: a first-class page with a version picker at the top; list worlds with size and modified time. Backups are **git-style snapshots**: content-defined chunking stores only changed chunks, so a second backup usually adds a few MB; restore, delete and prune by count.
@@ -181,7 +189,7 @@ Drag a `.mrpack` or `.zip` into the window to start an import. A single mod `.ja
 | Platform | File | Size | Requirements |
 |---|---|---:|---|
 | Windows x64 | [cairn.exe](https://github.com/dkjsiogu/cairn/releases/latest/download/cairn.exe) | ~9 MB | Windows 10/11, Java 21 |
-| Linux x64 (deb) | [cairn_0.39.0_amd64.deb](https://github.com/dkjsiogu/cairn/releases/latest/download/cairn_0.39.0_amd64.deb) | ~3.4 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
+| Linux x64 (deb) | [cairn_0.40.0_amd64.deb](https://github.com/dkjsiogu/cairn/releases/latest/download/cairn_0.40.0_amd64.deb) | ~3.4 MB | Ubuntu 24.04+ / glibc ≥ 2.39, Java 21 |
 
 Checksums: [SHA256SUMS](https://github.com/dkjsiogu/cairn/releases/latest/download/SHA256SUMS).
 
@@ -198,7 +206,7 @@ Java 21 must be installed. Cairn searches for it automatically and shows a warni
 ### Linux (Debian / Ubuntu)
 
 ```bash
-sudo apt install ./cairn_0.39.0_amd64.deb
+sudo apt install ./cairn_0.40.0_amd64.deb
 cairn
 ```
 
@@ -303,7 +311,7 @@ Windows release builds use MSVC with the static CRT in GitHub Actions. `x86_64-p
 ## Not implemented yet
 
 - Microsoft tokens are stored in a 0600 file instead of the OS keychain (Credential Manager / Secret Service).
-- Launcher self-update, skins, and full modpack updates.
+- Uploading or changing skins, and full modpack updates.
 - Stopping a running game / cancelling a launch.
 - Real Windows testing and macOS support.
 
@@ -327,6 +335,7 @@ See the [design index](docs/design/00-overview.md) and the [implementation statu
 
 - [BMCLAPI](https://bmclapidoc.bangbang93.com/) (bangbang93) mirrors Minecraft and mod loader downloads.
 - [MCIM](https://github.com/mcmod-info-mirror) (mcmod-info-mirror) mirrors the Modrinth and CurseForge APIs.
+- [authlib-injector](https://github.com/yushijinhun/authlib-injector) (yushijinhun) makes external login possible.
 
 Both are free community services. Cairn uses them as they ask: official first, source shown, no re-wrapping. See [24](docs/design/24-download-sources.md).
 

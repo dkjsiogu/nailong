@@ -28,6 +28,7 @@ pub(crate) use std::time::{Duration, Instant};
 pub(crate) use crate::activity::*;
 pub(crate) use crate::app::*;
 pub(crate) use crate::dialogs::account::*;
+pub(crate) use crate::dialogs::add_account::*;
 pub(crate) use crate::dialogs::log;
 pub(crate) use crate::dialogs::rollback::RollbackState;
 pub(crate) use crate::dialogs::settings::*;

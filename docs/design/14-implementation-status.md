@@ -1,7 +1,7 @@
-# 14 · 原型实现状态（0.1 → 0.39.0）
+# 14 · 原型实现状态（0.1 → 0.40.0）
 
 > 日期：2026-11-07
-> 对应发布：GitHub Release `v0.39.0` 的 `cairn.exe`、`cairn_0.39.0_amd64.deb`（0.37 起改名 Cairn）
+> 对应发布：GitHub Release `v0.40.0` 的 `cairn.exe`、`cairn_0.40.0_amd64.deb`（0.37 起改名 Cairn）
 > 目的：把「设计稿」和「已经跑起来的代码」分开记账，避免把计划当成已完成。
 
 ## 1. 一句话结论
@@ -47,6 +47,8 @@
 0.34.0 加入 JVM 自动调参（`tuning.rs`，规范见 `docs/design/19-jvm-tuning.md`）：内存默认自动，按物理内存、逻辑处理器、Java 版本、加载器和 Mod 数量算出堆大小，配官方启动器那套 G1 参数并按堆放大 Region；Java 25 加紧凑对象头；大整合包配强机器时自动换分代 ZGC。设置里显示结果、依据和完整参数，可手动指定内存、回收器或追加 JVM 参数；CLI 增加 `--gc`、`--jvm-arg`，`--dry-run` 打印计算过程。生成的参数在本机 OpenJDK 11/17/21/25 和 GraalVM 21 上逐一启动验证。顺带修复 CLI 传相对 `--game-dir` 时游戏目录被解析两次的问题。
 
 0.34.1 修复 26.x 无法安装和启动：版本文件 `default-user-jvm` 的首条没有 `rules`，解析失败；`${natives_directory}` 误指向 `java` 子目录，`java.library.path` 变成 `.../java/java`。实测 26.1、26.3 原版可安装并进入世界。调参在版本文件带官方默认时跟随官方（26.x 为 ZGC + 紧凑对象头 + 预先占用 + 字符串去重，初始堆 2 GB）。Java 选择改为够用里最低的大版本，同版本优先 64 位 OpenJDK。
+
+0.40.0 多账户和截图（见 `docs/design/25-accounts-and-shots.md`）。core：新的 `accounts`（`accounts.json`，Unix 0600；微软 / 外置 / 离线三种，按「同一个人」去重，启动前 `ready()` 刷新凭证或要求重新登录；首次读取时迁移 0.40 之前的 `account.json`）、`yggdrasil`（authlib-injector 规范：ALI、元数据、authenticate / refresh / validate、多角色绑定、皮肤地址、粘贴的服务器链接、`injector_jar` 下载并按 SHA-256 校验，官方连不上走 BMCLAPI 的 `/mirrors/authlib-injector`）、`shots`（PNG iTXt 关键字 `Cairn` 的读写，原子替换、保留修改时间；文件名时间；`Watcher` 跟着游戏输出在截图那一刻记下世界（看 `session.lock`）、服务器和账户；从 `logs/*.log.gz` 推断以前的截图，结果和关掉写入时的实时记录都在 `shots.json`；`servers.dat` 服务器名）。`launch` 多了 `user_type`、`injector`（在 JVM 参数最前面挂 `-javaagent` 和预取元数据，元数据在命令预览里折叠）、`shots`。`paths::to_trash`（Linux `gio trash`，Windows `SHFileOperationW` 回收站）。新增 `Error::Login`，登录问题不再显示成「安装失败」。界面：左下角账户列表（点一下换、`⋯`/右键菜单、需要重新登录的黄点）、添加账户（Microsoft / 外置登录 / 离线，多角色选择，重新登录时只要输密码）、皮肤脸头像；截图页（侧栏第 5 项：总览 / 时间 / 地点 / 人物、筛选标签、搜索、时间视图只画看得见的行、Ctrl+滚轮调大小）；看大图重写（以鼠标为中心缩放、双击原尺寸、拖动、底部缩略图、在当前这一组里翻页、设为世界图标、两次确认移到回收站）；启动台截图一排和存档页的「N 张截图 ›」都通到截图页；设置里账户卡片换成多账户，去掉「玩家名」，加「截图写入地点和人物」开关。实测：LittleSkin 的 ALI 和登录错误、authlib-injector 官方下载；生成 35 张带信息的截图逐页截图核对深浅两套主题。
 
 0.39.0 公共镜像（见 `docs/design/24-download-sources.md`）。core：`http::fallback_urls` 给每个地址排好候选——Mojang 和加载器官方 ↔ BMCLAPI 互为后备（「镜像优先」时 BMCLAPI 在前），Modrinth / CurseForge 接口总是官方在前、MCIM（`mod.mcimirror.top`，UA 已在 mcim-rust-api#12 登记）在后，Mod 文件不走 MCIM（它的文件地址只是 302 回官方 CDN）；`get_text` / `get_json` / `get_bytes` / `get_json_with_headers` 统一走 `get_with`：每轮试一遍候选、官方的 400/404/410/422 直接作数、镜像的 404 等官方也连不上才作数；`x-api-key` / `Authorization` / `Cookie` 只发给原本的主机；官方连不上而后备成功时记五分钟（`fallback_for(host)`），期间同一主机先走后备，批量下载也一样；MCIM 回答里最旧的 `sync_at` 记下来给界面。`runtime.rs` 去掉自己的镜像重试。界面：设置里「下载源」（官方优先 / 镜像优先，存 `ui.json` 的 `source`，安装、整合包导入、版本目录和 Java 下载都按它走）和镜像致谢；内容页在用 MCIM 时显示提示和同步时间；下载页来源认得「MCIM 镜像」。实测：本地代理拦掉 `api.modrinth.com` 时搜索 0.8 秒从 MCIM 拿到结果，不拦时不碰 MCIM；拦掉 Mojang 全部五个主机时 `cairn-cli install vanilla 1.12.2` 53 秒装完。
 
@@ -123,6 +125,8 @@
 | natives 解压与去重 | `core::launch` | 完成 | 1.21.1 启动 |
 | 启动参数拼接、日志落盘 | `core::launch` | 完成 | `--print-plan` + 实际启动 |
 | 离线账户 UUID | `core::launch` | 完成 | 与 Java `nameUUIDFromBytes` 对齐，单元测试 |
+| 多账户（微软 / 外置登录 / 离线） | `core::accounts`、`core::yggdrasil` | 完成 | 单元测试；LittleSkin 实连（找接口、错误翻译）；待真实外置账号进游戏走一遍 |
+| 截图的时间地点人物 | `core::shots` | 完成 | PNG 读写、日志推断、实时写入的单元测试；待真实游戏里按 F2 走一遍 |
 | NeoForge 安装 | `core::install::neoforge` | 完成（精简数据 + 原生 processors） | 1.21.1 / 21.1.209 安装并启动到渲染 |
 | NeoForge 启动 | `core::launch` | 完成 | 到主菜单；纹理图集加载完成 |
 | Fabric 安装 / 启动 | `core::install::fabric` | 完成（原生 profile） | 1.21.1 / 0.19.5 安装并启动到渲染 |
@@ -147,7 +151,7 @@
 | 大文件分段下载 | `core::http` | 完成 | client jar 4 段并行、段续传、源回退 |
 | 重复安装快速路径 | `core::install::forge` / `neoforge` | 完成 | health 通过则 0 下载、0 processor |
 | Windows 交叉编译 | `x86_64-pc-windows-gnu` | 通过 | 无 MinGW DLL 依赖，仅系统 DLL |
-| 发布包 | GitHub Release `v0.39.0` | 完成（CI 构建） | 单 exe 约 8 MB / deb 约 3.4 MB |
+| 发布包 | GitHub Release `v0.40.0` | 完成（CI 构建） | 单 exe 约 8 MB / deb 约 3.4 MB |
 
 ### 2.1 实测记录
 
@@ -185,8 +189,7 @@
 | 异步 runtime + 事件总线 + 可取消任务 | 阻塞调用 + 线程 + 进程级取消标志（单任务） | 下载、分段、解压和 processor 已可取消；未引入 async runtime |
 | 实例（Instance）抽象、配置存储 | 整合包实例已有独立 game dir；普通版本下载 Mod 后启用 `.nailong-isolated`，game dir 指向版本目录 | 版本级隔离已可用；仍无每实例 Java/内存配置 |
 | 完整 GUI（路由/向导/下载中心） | 版本页、安装页、版本管理、下载中心（浏览 + 搜索，Mod / 资源包 / 光影，含已安装管理与更新检查） | 无整合包浏览器；更新需手动点，不做后台静默更新 |
-| 正版登录 / 自动更新 | 未实现 | 下一步做账户与更新 |
-| 微软正版登录 | **已实现（浏览器 PKCE）**，待真实账号走一遍 | 令牌存 0600 文件，未接系统钥匙串 |
+| 微软正版登录 | **已实现（浏览器 PKCE）**，0.40 起可以同时留好几个 | 令牌存 `accounts.json`（0600），未接系统钥匙串 |
 | 自动更新 / 签名 / 崩溃报告 | 未实现 | 发布前补齐 |
 | 单元/集成测试体系 | **75 个测试**（66 core + 9 UI），另有 7 个真实网络冒烟测试默认忽略（搜索、下载、浏览、一键安装、无过滤浏览、设备码、回环探测） | 缺夹具、mock HTTP、启动 argv 快照、Windows CI |
 

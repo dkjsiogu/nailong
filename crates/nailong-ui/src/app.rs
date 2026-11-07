@@ -7,9 +7,9 @@ impl App {
         let javas = java::find_all(&root);
         let java_ok = javas.iter().any(|j| j.major >= 21);
         let java_label = javas.iter().find(|j| j.major >= 21).map(|j| j.label());
-        let account = auth::load(&root);
         let backup_cfg = snapshots::load_config(&root);
         let prefs = load_ui_prefs(&root);
+        let accounts = load_accounts(&root, &prefs.username);
         let (icon_jobs, icon_job_rx) = mpsc::channel::<(String, String)>();
         let (icon_done, icon_rx) = mpsc::channel::<(String, Vec<u8>)>();
         std::thread::spawn(move || {
@@ -42,7 +42,6 @@ impl App {
                 cache: None,
                 scan: None,
                 verified: None,
-                shots: None,
             },
             prefs,
             install: InstallForm {
@@ -66,13 +65,7 @@ impl App {
                 error: None,
                 rx: None,
             },
-            login: LoginState {
-                open: false,
-                url: None,
-                rx: None,
-                busy: false,
-                error: None,
-            },
+            login: LoginState::default(),
             worlds: WorldsState {
                 row: None,
                 selected: None,
@@ -161,14 +154,14 @@ impl App {
             log: vec!["启动器已就绪".into()],
             log_view: None,
             show_saves: false,
-            account,
+            show_gallery: false,
+            gallery: Default::default(),
+            accounts,
             show_settings: false,
             pending_install: None,
             version_cache: None,
             page_key: 255,
             page_enter_at: 0.0,
-            modal_key: 0,
-            modal_started: 0.0,
             rx: None,
         };
         app.play.versions = launchcfg::load_all(&app.root);
@@ -215,6 +208,16 @@ impl App {
                         app.open_saves(row);
                     }
                 }
+                "gallery" | "gallery-time" | "gallery-places" | "gallery-people" => {
+                    use crate::pages::gallery::GalleryTab;
+                    app.open_gallery(None);
+                    app.gallery.tab = match screen.as_str() {
+                        "gallery-time" => GalleryTab::Time,
+                        "gallery-places" => GalleryTab::Places,
+                        "gallery-people" => GalleryTab::People,
+                        _ => GalleryTab::Overview,
+                    };
+                }
                 "installed" => {
                     if let Some(row) = row {
                         app.content.row = Some(row);
@@ -223,8 +226,10 @@ impl App {
                         app.start_mods_scan();
                     }
                 }
-                "account" => {
-                    app.account = Some(auth::Account {
+                "account" | "accounts" | "add-account" | "add-external" | "add-offline" => {
+                    use nailong_core::accounts::{Account, Accounts, Login};
+                    let mut accounts = Accounts::default();
+                    let mut steve = Account::from_microsoft(auth::Account {
                         name: "Steve".into(),
                         uuid: "069a79f444e94726a5befca90e38aaf5".into(),
                         access_token: "debug".into(),
@@ -232,8 +237,46 @@ impl App {
                         expires_at: u64::MAX / 2,
                         xuid: None,
                         client_id: String::new(),
+                        skin: None,
                     });
-                    app.login.open = true;
+                    steve.skin = std::env::var("NAILONG_DEBUG_SKIN").ok();
+                    let steve_id = accounts.add(steve);
+                    let mut external = Account::offline("dk_skin");
+                    external.login = Login::External {
+                        api: "https://littleskin.cn/api/yggdrasil/".into(),
+                        server_name: "LittleSkin".into(),
+                        login: "dk@example.com".into(),
+                        access_token: "debug".into(),
+                        client_token: "debug".into(),
+                    };
+                    accounts.add(external);
+                    let mut stale = Account::offline("BuilderZ");
+                    stale.login = Login::External {
+                        api: "https://skin.example.com/api/yggdrasil/".into(),
+                        server_name: "朋友的皮肤站".into(),
+                        login: "builder".into(),
+                        access_token: "debug".into(),
+                        client_token: "debug".into(),
+                    };
+                    stale.stale = true;
+                    accounts.add(stale);
+                    accounts.add(Account::offline("dkjsiogu"));
+                    accounts.select(&steve_id);
+                    app.accounts = accounts;
+                    match screen.as_str() {
+                        "add-account" => app.open_add_account(AddTab::Microsoft),
+                        "add-external" => {
+                            app.open_add_account(AddTab::External);
+                            if let (Some(form), Ok(server)) =
+                                (&mut app.login.add, std::env::var("NAILONG_DEBUG_SERVER"))
+                            {
+                                form.server_input = server;
+                                form.check_now = true;
+                            }
+                        }
+                        "add-offline" => app.open_add_account(AddTab::Offline),
+                        _ => app.login.open = true,
+                    }
                 }
                 "login" => {
                     app.login.url = Some(
@@ -499,6 +542,9 @@ impl App {
         if self.busy.is_some_and(Task::shows_progress) {
             return 10;
         }
+        if self.show_gallery {
+            return 9;
+        }
         if self.show_mods {
             if self.content.show_installed {
                 6
@@ -532,7 +578,7 @@ impl App {
             || self.log_view.is_some()
             || self.launch_edit.is_some()
             || self
-                .home
+                .gallery
                 .shots
                 .as_ref()
                 .is_some_and(|shots| shots.viewing())
@@ -550,6 +596,7 @@ impl App {
                 (egui::Key::Num2, Nav::Versions),
                 (egui::Key::Num3, Nav::Content),
                 (egui::Key::Num4, Nav::Saves),
+                (egui::Key::Num5, Nav::Shots),
             ] {
                 if input.consume_key(egui::Modifiers::CTRL, key) {
                     nav = Some(target);
@@ -734,6 +781,7 @@ impl App {
             "update_checked": self.prefs.update_checked,
             "update_skip": self.prefs.update_skip,
             "source": self.prefs.source,
+            "shots_embed": self.prefs.embed_shots,
         });
         if let Ok(bytes) = serde_json::to_vec_pretty(&value) {
             let _ = std::fs::write(self.root.dir().join("ui.json"), bytes);
@@ -749,8 +797,8 @@ pub(crate) struct App {
     pub(crate) rows: Vec<Row>,
     /// 当前选中的版本行。
     pub(crate) selected: Option<String>,
-    /// 登录的微软账户；None 是离线账户。
-    pub(crate) account: Option<auth::Account>,
+    /// 全部账户和正在用的那个，存在数据目录的 `accounts.json`。
+    pub(crate) accounts: nailong_core::accounts::Accounts,
     /// 玩家名、全局启动参数和外观，存在数据目录的 `ui.json`。
     pub(crate) prefs: UiPrefs,
     // ---- 导航：哪个页面在前面 ----
@@ -758,6 +806,10 @@ pub(crate) struct App {
     pub(crate) show_manage: bool,
     pub(crate) show_mods: bool,
     pub(crate) show_saves: bool,
+    /// 截图页。
+    pub(crate) show_gallery: bool,
+    /// 截图页的状态和全部截图（启动台那一排也用它）。
+    pub(crate) gallery: crate::pages::gallery::GalleryState,
     /// 版本页是否也列出被加载器依赖的原版。
     pub(crate) show_base: bool,
     /// 等待确认删除的版本。
@@ -817,10 +869,6 @@ pub(crate) struct App {
     pub(crate) notice: Option<String>,
     /// 启动器自己的记录，日志窗口的「启动器」标签显示它。
     pub(crate) log: Vec<String>,
-    /// 当前弹窗的编号。
-    pub(crate) modal_key: u8,
-    /// 弹窗打开的时间。
-    pub(crate) modal_started: f64,
 }
 
 pub(crate) struct UiPrefs {
@@ -836,6 +884,8 @@ pub(crate) struct UiPrefs {
     pub(crate) update_skip: String,
     /// 下载源：`official` 官方优先（连不上自动换镜像），`bmcl` 镜像优先。
     pub(crate) source: String,
+    /// 截图时把地点和人物写进图片本身；关掉就只记在 `shots.json`。
+    pub(crate) embed_shots: bool,
 }
 
 /// 玩家名、内存和外观存在数据目录的 `ui.json`，随设置弹窗关闭落盘。
@@ -888,6 +938,9 @@ pub(crate) fn load_ui_prefs(root: &Root) -> UiPrefs {
             Some("bmcl") => "bmcl".into(),
             _ => "official".into(),
         },
+        embed_shots: get("shots_embed")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(true),
     }
 }
 
@@ -895,6 +948,8 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         t::sync(ui.ctx());
         self.poll();
+        self.poll_accounts(ui.ctx());
+        self.tick_shots(ui.ctx());
         self.poll_update(ui.ctx());
         motion::set_reduced(self.prefs.reduce_motion);
         self.handle_shortcuts(ui.ctx());
@@ -925,6 +980,7 @@ impl eframe::App for App {
         let focused = ui.ctx().input(|i| i.focused);
         if focused && !self.window_focused {
             self.rescan_if_changed();
+            self.gallery.stale = true;
         }
         self.window_focused = focused;
         if self.busy.is_some()
@@ -968,6 +1024,8 @@ impl eframe::App for App {
                 ui.add_space((1.0 - eased) * 6.0);
                 if self.busy.is_some_and(Task::shows_progress) {
                     self.progress_view(ui);
+                } else if self.show_gallery {
+                    self.gallery_page(ui);
                 } else if self.show_mods {
                     self.mods_view(ui);
                 } else if self.show_saves {
@@ -980,7 +1038,7 @@ impl eframe::App for App {
                     self.main_view(ui);
                 }
                 // 版本、内容、存档页没有放全局提示的位置，统一放在底部。
-                if matches!(page, 2..=8) {
+                if matches!(page, 2..=9) {
                     self.message_bar(ui);
                 }
                 self.drop_overlay(ui);
@@ -999,8 +1057,11 @@ impl eframe::App for App {
         self.log_overlay(ui.ctx());
         self.launch_overlay(ui.ctx());
         self.update_overlay(ui.ctx());
-        if let Some(shots) = &mut self.home.shots {
-            shots.viewer(ui.ctx());
+        if self.gallery.shots.as_ref().is_some_and(|s| s.viewing()) {
+            let faces = self.player_faces(ui.ctx());
+            if let Some(shots) = &mut self.gallery.shots {
+                shots.viewer(ui.ctx(), &faces);
+            }
         }
         motion::focus_ring(ui.ctx());
     }

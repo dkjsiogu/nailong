@@ -187,16 +187,70 @@ impl App {
                 .extend(plan.warnings.iter().map(|w| format!("注意：{w}")));
         }
         let root = self.root.clone();
-        let username = self.prefs.username.clone();
         let tuning = self.tuning_settings(&cfg);
         let [width, height] = cfg.window();
         let java_path = cfg.java.clone();
-        let account = self.account.clone();
+        let account_id = self.accounts.current.clone();
+        let fallback_name = self.prefs.username.clone();
+        let version_label = row.label.clone();
+        let embed_shots = self.prefs.embed_shots;
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         std::thread::spawn(move || {
-            let mut opts = LaunchOptions {
-                username,
+            use nailong_core::accounts::{self, Ready};
+            let identity = match &account_id {
+                Some(id) => match accounts::ready(&root, id) {
+                    Ok(Ready::Go(identity)) => identity,
+                    Ok(Ready::Relogin { id, reason }) => {
+                        let _ = tx.send(Msg::NeedRelogin(id, reason));
+                        return;
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Msg::LaunchFailed(e.to_string()));
+                        return;
+                    }
+                },
+                None => accounts::Identity {
+                    uuid: launch::offline_uuid(&fallback_name),
+                    name: fallback_name,
+                    access_token: None,
+                    xuid: None,
+                    client_id: None,
+                    user_type: "legacy",
+                    external: None,
+                    kind: "离线".into(),
+                },
+            };
+            let injector = match &identity.external {
+                Some(external) => match nailong_core::yggdrasil::injector_jar(&root) {
+                    Ok(jar) => Some(launch::Injector {
+                        jar,
+                        api: external.api.clone(),
+                        metadata: external.metadata.clone(),
+                    }),
+                    Err(e) => {
+                        let _ =
+                            tx.send(Msg::LaunchFailed(format!("authlib-injector 下载失败：{e}")));
+                        return;
+                    }
+                },
+                None => None,
+            };
+            let opts = LaunchOptions {
+                username: identity.name.clone(),
+                uuid: Some(identity.uuid.clone()),
+                access_token: identity.access_token.clone(),
+                xuid: identity.xuid.clone(),
+                client_id: identity.client_id.clone(),
+                user_type: Some(identity.user_type.to_string()),
+                injector,
+                shots: Some(nailong_core::shots::Tag {
+                    version: version_label,
+                    player: identity.name.clone(),
+                    player_uuid: identity.uuid.clone(),
+                    account: identity.kind.clone(),
+                    embed: embed_shots,
+                }),
                 memory_mb: tuning.memory_mb,
                 gc: tuning.gc,
                 jvm_args: tuning.extra,
@@ -206,23 +260,6 @@ impl App {
                 height,
                 ..Default::default()
             };
-            if let Some(account) = account {
-                match auth::ensure_fresh(&root, &account) {
-                    Ok(fresh) => {
-                        opts.username = fresh.name.clone();
-                        opts.uuid = Some(fresh.uuid.clone());
-                        opts.access_token = Some(fresh.access_token.clone());
-                        opts.xuid = fresh.xuid.clone();
-                        opts.client_id = Some(fresh.client_id.clone());
-                    }
-                    Err(e) => {
-                        let _ = tx.send(Msg::LaunchFailed(format!(
-                            "账户令牌刷新失败：{e}；可在右上角退出登录改用离线账户"
-                        )));
-                        return;
-                    }
-                }
-            }
             let msg = match launch::launch(&root, &row.profile, &opts) {
                 Ok(0) => Msg::LaunchDone(0, None),
                 Ok(code) => {

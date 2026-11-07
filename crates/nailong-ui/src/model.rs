@@ -188,10 +188,17 @@ pub(crate) enum Nav {
     Versions,
     Content,
     Saves,
+    Shots,
 }
 
 impl Nav {
-    pub(crate) const ALL: [Nav; 4] = [Nav::Home, Nav::Versions, Nav::Content, Nav::Saves];
+    pub(crate) const ALL: [Nav; 5] = [
+        Nav::Home,
+        Nav::Versions,
+        Nav::Content,
+        Nav::Saves,
+        Nav::Shots,
+    ];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
@@ -199,6 +206,7 @@ impl Nav {
             Self::Versions => "版本",
             Self::Content => "内容",
             Self::Saves => "存档",
+            Self::Shots => "截图",
         }
     }
 
@@ -208,6 +216,7 @@ impl Nav {
             Self::Versions => "安装、修复与删除版本",
             Self::Content => "Mod、资源包、光影",
             Self::Saves => "世界与快照备份",
+            Self::Shots => "时间、地点、人物",
         }
     }
 }

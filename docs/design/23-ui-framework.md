@@ -18,13 +18,15 @@ crates/nailong-ui/src/
   theme.rs  motion.rs  rings.rs    配色、动效、状态圆环
   pages/         四个一级页面和进度页
     mod.rs         导航和侧边栏
-    home.rs        启动台          shots.rs  截图墙
+    home.rs        启动台          shots.rs  截图的底座：列表、缩略图、启动台那一排、看大图
+    gallery.rs     截图页：总览、时间、地点、人物
     versions.rs    版本            progress.rs 安装和下载进行中
     worlds.rs      存档
     content/       内容：mod.rs 页头和共用部分，browse 发现，detail 项目详情，
                    library 已安装，drop 拖放导入
   dialogs/       盖在页面上的弹窗
-    settings.rs  account.rs  params.rs（启动参数）  log.rs  rollback.rs
+    settings.rs  account.rs（账户列表、微软登录、头像）  add_account.rs（添加账户、外置登录）
+    params.rs（启动参数）  log.rs  rollback.rs
     review.rs（安装确认）  update.rs（启动器更新）
 ```
 

@@ -384,14 +384,15 @@ impl App {
                     self.login.rx = None;
                     match result {
                         Ok(account) => {
-                            if let Err(e) = auth::save(&self.root, &account) {
+                            let name = account.name.clone();
+                            self.accounts
+                                .add(nailong_core::accounts::Account::from_microsoft(account));
+                            if let Err(e) = self.accounts.save(&self.root) {
                                 self.error = Some(e.to_string());
                             }
-                            self.prefs.username = account.name.clone();
-                            self.account = Some(account);
                             self.login.url = None;
                             self.login.error = None;
-                            self.notice = Some("已登录 Microsoft 账户".into());
+                            self.notice = Some(format!("已登录 {name}"));
                         }
                         Err(e) => {
                             self.login.url = None;
@@ -405,6 +406,9 @@ impl App {
                     if let Some(last) = &mut self.play.last {
                         last.outcome = log::Outcome::Exited(code);
                     }
+                    // 启动前可能刷新过凭证，重新读一遍；这局截的图也该出现在截图页了。
+                    self.accounts = nailong_core::accounts::Accounts::load(&self.root);
+                    self.gallery.stale = true;
                     self.busy = None;
                     self.play.running_row = None;
                     // 每玩完一局就给世界留一份快照，比按时间间隔更贴近“坏了能救”。
@@ -425,7 +429,24 @@ impl App {
                         });
                     }
                 }
+                // 账户的后台结果走自己的通道，在 poll_accounts 里处理。
+                Msg::ServerChecked(..)
+                | Msg::ExternalLogin(_)
+                | Msg::AccountAdded(_)
+                | Msg::Face(..) => {}
+                Msg::NeedRelogin(id, reason) => {
+                    if let Some(last) = &mut self.play.last {
+                        last.outcome = log::Outcome::Failed(reason.clone());
+                    }
+                    self.busy = None;
+                    self.play.running_row = None;
+                    self.rx = None;
+                    self.accounts = nailong_core::accounts::Accounts::load(&self.root);
+                    self.log.push(format!("账户要重新登录：{reason}"));
+                    self.relogin(&id, Some(reason.clone()));
+                }
                 Msg::LaunchFailed(e) => {
+                    self.accounts = nailong_core::accounts::Accounts::load(&self.root);
                     if let Some(last) = &mut self.play.last {
                         last.outcome = log::Outcome::Failed(e.clone());
                     }
@@ -529,6 +550,16 @@ pub(crate) enum Msg {
     /// 退出码，以及从游戏输出里认出的原因。
     LaunchDone(i32, Option<String>),
     LaunchFailed(String),
+    /// 开始游戏前发现账户凭证失效：账户编号和原因。
+    NeedRelogin(String, String),
+    /// 外置登录：检查认证服务器（玩家的输入，结果）。
+    ServerChecked(String, Result<nailong_core::yggdrasil::Server, String>),
+    /// 外置登录：密码对了，但有好几个角色要选。
+    ExternalLogin(Result<Box<Pending>, String>),
+    /// 账户加好了（外置登录或选完角色）。
+    AccountAdded(Result<Box<nailong_core::accounts::Account>, String>),
+    /// 皮肤地址和切出来的脸。
+    Face(String, Option<egui::ColorImage>),
     BenchDone(Result<bench::Store, String>),
     BenchCancelled,
     /// Java 下载完：成功时是「Java 21（Microsoft 21.0.7）」这样的说明。

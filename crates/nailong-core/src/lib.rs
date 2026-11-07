@@ -1,3 +1,4 @@
+pub mod accounts;
 pub mod auth;
 pub mod bench;
 pub mod blob;
@@ -19,9 +20,11 @@ pub mod progress;
 pub mod rollback;
 pub mod runtime;
 pub mod saves;
+pub mod shots;
 pub mod snapshots;
 pub mod tuning;
 pub mod update;
+pub mod yggdrasil;
 
 pub use error::{Error, Result};
 pub use paths::Root;

@@ -53,6 +53,9 @@ pub struct Account {
     pub expires_at: u64,
     pub xuid: Option<String>,
     pub client_id: String,
+    /// 正在用的皮肤图片地址。
+    #[serde(default)]
+    pub skin: Option<String>,
 }
 
 impl Account {
@@ -227,7 +230,7 @@ pub fn login_with_msa(msa: &MsaTokens) -> Result<Account> {
     let _ = uhs;
     let mc = minecraft_login(&xsts_uhs, &xsts_token)?;
     ensure_entitlement(&mc.access_token)?;
-    let (profile_id, profile_name) = minecraft_profile(&mc.access_token)?;
+    let (profile_id, profile_name, skin) = minecraft_profile(&mc.access_token)?;
     Ok(Account {
         name: profile_name,
         uuid: profile_id,
@@ -236,6 +239,7 @@ pub fn login_with_msa(msa: &MsaTokens) -> Result<Account> {
         expires_at: now() + mc.expires_in,
         xuid,
         client_id: client_id(),
+        skin,
     })
 }
 
@@ -370,7 +374,7 @@ fn ensure_entitlement(token: &str) -> Result<()> {
     Ok(())
 }
 
-fn minecraft_profile(token: &str) -> Result<(String, String)> {
+fn minecraft_profile(token: &str) -> Result<(String, String, Option<String>)> {
     let http = Http::new("official")?;
     let value = http.get_json_with_headers(
         &format!("{MC_BASE}/minecraft/profile"),
@@ -384,7 +388,19 @@ fn minecraft_profile(token: &str) -> Result<(String, String)> {
         .get("name")
         .and_then(|v| v.as_str())
         .ok_or_else(|| Error::Install("游戏档案缺少用户名".into()))?;
-    Ok((id.to_string(), name.to_string()))
+    let skin = value
+        .get("skins")
+        .and_then(|v| v.as_array())
+        .and_then(|skins| {
+            skins
+                .iter()
+                .find(|s| s.get("state").and_then(|v| v.as_str()) == Some("ACTIVE"))
+                .or(skins.first())
+        })
+        .and_then(|s| s.get("url"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    Ok((id.to_string(), name.to_string(), skin))
 }
 
 pub fn refresh_account(account: &Account) -> Result<Account> {
@@ -728,7 +744,7 @@ fn urlencode(text: &str) -> String {
     out
 }
 
-fn percent_decode(text: &str) -> String {
+pub(crate) fn percent_decode(text: &str) -> String {
     let bytes = text.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut index = 0;
@@ -792,6 +808,7 @@ mod tests {
             expires_at: now() + 3600,
             xuid: Some("123".into()),
             client_id: DEFAULT_CLIENT_ID.into(),
+            skin: None,
         }
     }
 

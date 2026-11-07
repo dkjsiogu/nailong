@@ -7,6 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+chrono.workspace = true
 reqwest.workspace = true
 rustls.workspace = true
 serde.workspace = true
@@ -25,3 +26,6 @@ uuid.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 indicatif.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_Shell"] }

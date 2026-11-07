@@ -1,8 +1,9 @@
-//! 页面导航和侧边栏。四个一级页面：启动台、版本、内容、存档。
+//! 页面导航和侧边栏。五个一级页面：启动台、版本、内容、存档、截图。
 
 use crate::prelude::*;
 
 pub(crate) mod content;
+pub(crate) mod gallery;
 pub(crate) mod home;
 pub(crate) mod progress;
 pub(crate) mod shots;
@@ -14,6 +15,8 @@ impl App {
     pub(crate) fn nav_active(&self) -> Nav {
         if matches!(self.busy, Some(Task::Install)) {
             Nav::Versions
+        } else if self.show_gallery {
+            Nav::Shots
         } else if self.show_mods {
             Nav::Content
         } else if self.show_saves {
@@ -38,9 +41,18 @@ impl App {
                     self.install.repair_target = None;
                 }
                 Nav::Content if !self.content.show_installed => self.open_content(true),
+                // 再点一次「截图」回到总览。
+                Nav::Shots => {
+                    self.gallery.tab = gallery::GalleryTab::Overview;
+                    self.gallery.filter = gallery::Filter::default();
+                    self.gallery.query.clear();
+                }
                 _ => {}
             }
             return;
+        }
+        if nav != Nav::Shots {
+            self.show_gallery = false;
         }
         match nav {
             Nav::Home => {
@@ -71,6 +83,7 @@ impl App {
             }
             Nav::Content => self.open_content(true),
             Nav::Saves => self.open_saves_page(),
+            Nav::Shots => self.open_gallery(None),
         }
     }
 
@@ -139,12 +152,9 @@ impl App {
         let wide = ui.ctx().content_rect().width() >= 1080.0;
         let width = if wide { 190.0 } else { 64.0 };
         let active = self.nav_active();
-        let account_name = self
-            .account
-            .as_ref()
-            .map(|account| account.name.clone())
-            .unwrap_or_else(|| self.prefs.username.clone());
-        let linked = self.account.is_some();
+        let current = self.current_account().cloned();
+        let face = self.face(ui.ctx(), current.as_ref().and_then(|a| a.skin.as_deref()));
+        let mut account_rect = None;
         let busy = self.busy.is_some();
         let login_busy = self.login.busy;
         let enabled = !self.page_locked();
@@ -246,7 +256,9 @@ impl App {
                         }
                         ui.add_space(8.0);
                     }
-                    if sidebar_account(ui, &account_name, linked, wide).clicked() {
+                    let response = sidebar_account(ui, current.as_ref(), face.as_ref(), wide);
+                    account_rect = Some(response.rect);
+                    if response.clicked() {
                         account_clicked = true;
                     }
                     if sidebar_settings(ui, wide, true).clicked() {
@@ -258,12 +270,11 @@ impl App {
         if let Some(nav) = go {
             self.nav_go(nav);
         }
+        if account_rect.is_some() {
+            self.login.anchor = account_rect;
+        }
         if account_clicked {
-            if self.account.is_some() {
-                self.login.open = true;
-            } else {
-                self.start_login();
-            }
+            self.login.open = !self.login.open;
         }
         if update_clicked {
             self.update.open = true;
@@ -367,6 +378,25 @@ pub(crate) fn nav_glyph(painter: &egui::Painter, c: egui::Pos2, nav: Nav, color:
                 );
             }
         }
+        Nav::Shots => {
+            painter.rect_stroke(
+                egui::Rect::from_center_size(c, egui::vec2(15.0, 12.0)),
+                1.5,
+                stroke,
+                egui::StrokeKind::Middle,
+            );
+            painter.add(egui::Shape::line(
+                vec![
+                    p(-5.5, 4.0),
+                    p(-2.0, 0.0),
+                    p(0.8, 2.6),
+                    p(2.6, 1.0),
+                    p(5.5, 4.0),
+                ],
+                stroke,
+            ));
+            painter.circle_filled(p(3.6, -2.4), 1.1, color);
+        }
         Nav::Saves => {
             painter.circle_stroke(c, 7.5, stroke);
             painter.line_segment([p(-7.5, 0.0), p(7.5, 0.0)], stroke);
@@ -377,30 +407,27 @@ pub(crate) fn nav_glyph(painter: &egui::Painter, c: egui::Pos2, nav: Nav, color:
 
 pub(crate) fn sidebar_account(
     ui: &mut egui::Ui,
-    name: &str,
-    linked: bool,
+    account: Option<&nailong_core::accounts::Account>,
+    face: Option<&egui::TextureHandle>,
     wide: bool,
 ) -> egui::Response {
     let (rect, response, color) = nav_row(ui, 36.0, false, true);
+    let name = account.map(|a| a.name.as_str()).unwrap_or("添加账户");
     let center = if wide {
         egui::pos2(rect.left() + 21.0, rect.center().y)
     } else {
         rect.center()
     };
-    ui.painter().circle_stroke(
-        center + egui::vec2(0.0, -3.0),
-        3.2,
-        egui::Stroke::new(1.4, color),
-    );
-    ui.painter().add(egui::Shape::line(
-        (0..=10)
-            .map(|index| {
-                let angle = std::f32::consts::PI * (1.0 + index as f32 / 10.0);
-                center + egui::vec2(6.5 * angle.cos(), 7.0 + 6.0 * angle.sin())
-            })
-            .collect(),
-        egui::Stroke::new(1.4, color),
-    ));
+    let icon = egui::Rect::from_center_size(center, egui::vec2(22.0, 22.0));
+    draw_avatar(ui.painter(), icon, name, face);
+    if account.is_some_and(|a| a.stale) {
+        ui.painter().circle(
+            icon.right_top(),
+            3.5,
+            t::warn(),
+            egui::Stroke::new(1.5, t::bg()),
+        );
+    }
     if wide {
         ui.painter().text(
             egui::pos2(rect.left() + 40.0, rect.center().y),
@@ -410,13 +437,14 @@ pub(crate) fn sidebar_account(
             color,
         );
     }
+    let hint = match account {
+        Some(a) if a.stale => format!("{} · 需要重新登录", a.name),
+        Some(a) => format!("{} · {}", a.name, a.kind_label()),
+        None => "添加账户".into(),
+    };
     response
         .on_hover_cursor(egui::CursorIcon::PointingHand)
-        .on_hover_text(if linked {
-            "Microsoft 正版账户"
-        } else {
-            "离线账户，点击登录 Microsoft"
-        })
+        .on_hover_text(hint)
 }
 
 /// 侧边栏底部的工具入口：设置不是一级页面，做成安静的滑杆图标。

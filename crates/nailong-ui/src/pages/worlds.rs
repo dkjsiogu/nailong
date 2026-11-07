@@ -409,6 +409,7 @@ impl App {
                     });
             });
 
+        let mut open_shots: Option<String> = None;
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::new()
@@ -484,6 +485,23 @@ impl App {
                             .size(13.0)
                             .color(t::dim()),
                     );
+                    // 这个世界里截过的图：数字就是入口，点了去截图页看这一本相簿。
+                    let shot_count = self.gallery.shots.as_ref().map_or(0, |shots| {
+                        shots
+                            .list
+                            .iter()
+                            .filter(|shot| {
+                                shot.game_dir == game_dir
+                                    && shot.meta.world.as_deref() == Some(world.as_str())
+                            })
+                            .count()
+                    });
+                    if shot_count > 0 {
+                        ui.add_space(8.0);
+                        if action_link(ui, &format!("{shot_count} 张截图 ›")).clicked() {
+                            open_shots = Some(world.clone());
+                        }
+                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if motion::secondary_sized(
                             ui,

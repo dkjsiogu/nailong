@@ -1,4 +1,4 @@
-use crate::error::{Result, io};
+use crate::error::{Error, Result, io};
 use std::path::{Path, PathBuf};
 
 /// 数据目录里的程序名。0.37 起叫 Cairn，以前叫 nailong。
@@ -189,6 +189,57 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
         io(path, e)
     })?;
     Ok(())
+}
+
+/// 移到回收站（不是直接删掉）。Linux 用 `gio trash`，Windows 用系统的回收站。
+pub fn to_trash(path: &Path) -> Result<()> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::UI::Shell::{
+            FO_DELETE, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT,
+            SHFILEOPSTRUCTW, SHFileOperationW,
+        };
+        let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+        // 路径要以两个 \0 结尾。
+        let mut from: Vec<u16> = absolute.as_os_str().encode_wide().collect();
+        from.extend_from_slice(&[0, 0]);
+        let mut op = SHFILEOPSTRUCTW {
+            hwnd: std::ptr::null_mut(),
+            wFunc: FO_DELETE,
+            pFrom: from.as_ptr(),
+            pTo: std::ptr::null(),
+            fFlags: (FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT) as _,
+            fAnyOperationsAborted: 0,
+            hNameMappings: std::ptr::null_mut(),
+            lpszProgressTitle: std::ptr::null(),
+        };
+        // SAFETY: 结构体里的指针都指向这里活着的缓冲区，调用是同步的。
+        let code = unsafe { SHFileOperationW(&mut op) };
+        if code != 0 || op.fAnyOperationsAborted != 0 {
+            return Err(Error::Install(format!(
+                "没能移到回收站（{code}）: {}",
+                path.display()
+            )));
+        }
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        let status = std::process::Command::new("gio")
+            .arg("trash")
+            .arg(path)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        match status {
+            Ok(status) if status.success() => Ok(()),
+            _ => Err(Error::Install(format!(
+                "没能移到回收站（需要 gio）: {}",
+                path.display()
+            ))),
+        }
+    }
 }
 
 #[cfg(test)]

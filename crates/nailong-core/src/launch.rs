@@ -31,6 +31,22 @@ pub struct LaunchOptions {
     pub java: Option<PathBuf>,
     pub dry_run: bool,
     pub print_plan: bool,
+    /// `msa`（默认）、`mojang`（外置登录）或 `legacy`（离线）。
+    pub user_type: Option<String>,
+    /// 外置登录：启动时挂上 authlib-injector。
+    pub injector: Option<Injector>,
+    /// 截图时记下时间地点人物；None 就不管截图。
+    pub shots: Option<crate::shots::Tag>,
+}
+
+/// 外置登录要交给 authlib-injector 的东西。
+#[derive(Debug, Clone)]
+pub struct Injector {
+    pub jar: PathBuf,
+    /// 认证服务器的接口地址。
+    pub api: String,
+    /// 接口根路径的元数据原文；有就预取给它，省得它自己再连一次。
+    pub metadata: Option<String>,
 }
 
 impl Default for LaunchOptions {
@@ -52,6 +68,9 @@ impl Default for LaunchOptions {
             java: None,
             dry_run: false,
             print_plan: false,
+            user_type: None,
+            injector: None,
+            shots: None,
         }
     }
 }
@@ -271,7 +290,10 @@ fn build(root: &Root, profile: &str, opts: &LaunchOptions, write: bool) -> Resul
         "auth_xuid".to_string(),
         opts.xuid.clone().unwrap_or_default(),
     );
-    vars.insert("user_type".to_string(), "msa".to_string());
+    vars.insert(
+        "user_type".to_string(),
+        opts.user_type.clone().unwrap_or_else(|| "msa".to_string()),
+    );
     vars.insert("user_properties".to_string(), "{}".to_string());
     vars.insert("version_name".to_string(), resolved.id.clone());
     vars.insert("version_type".to_string(), "release".to_string());
@@ -368,6 +390,21 @@ fn build(root: &Root, profile: &str, opts: &LaunchOptions, write: bool) -> Resul
         }
     }
     jvm = jvm.into_iter().map(|a| substitute(&a, &vars)).collect();
+    // 外置登录：authlib-injector 要在最前面挂上，替游戏把认证请求转到皮肤站。
+    if let Some(injector) = &opts.injector {
+        let mut agent = vec![format!(
+            "-javaagent:{}={}",
+            injector.jar.display(),
+            injector.api
+        )];
+        if let Some(metadata) = &injector.metadata {
+            agent.push(format!(
+                "-Dauthlibinjector.yggdrasil.prefetched={}",
+                crate::yggdrasil::prefetched(metadata)
+            ));
+        }
+        jvm.splice(0..0, agent);
+    }
 
     let mut game = expand_args(&resolved.arguments.game, &ctx);
     if let Some(legacy) = &resolved.legacy_arguments {
@@ -433,6 +470,10 @@ pub fn launch(root: &Root, profile: &str, opts: &LaunchOptions) -> Result<i32> {
     let log = Arc::new(Mutex::new(log_file));
 
     crate::learned::prepare(&prepared.game_dir);
+    let watcher = opts
+        .shots
+        .clone()
+        .map(|tag| Arc::new(crate::shots::Watcher::new(root, &prepared.game_dir, tag)));
     let mut cmd = prepared.command();
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = cmd
@@ -441,9 +482,10 @@ pub fn launch(root: &Root, profile: &str, opts: &LaunchOptions) -> Result<i32> {
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
     let log1 = log.clone();
-    let t1 = stdout.map(|s| std::thread::spawn(move || pump(s, log1)));
+    let watch1 = watcher.clone();
+    let t1 = stdout.map(|s| std::thread::spawn(move || pump(s, log1, watch1)));
     let log2 = log.clone();
-    let t2 = stderr.map(|s| std::thread::spawn(move || pump(s, log2)));
+    let t2 = stderr.map(|s| std::thread::spawn(move || pump(s, log2, watcher)));
     let status = child
         .wait()
         .map_err(|e| Error::Launch(format!("等待游戏失败: {e}")))?;
@@ -612,12 +654,19 @@ pub fn is_error_line(line: &str) -> bool {
         || trimmed.starts_with("Error:")
 }
 
-fn pump<R: std::io::Read + Send + 'static>(reader: R, log: Arc<Mutex<std::fs::File>>) {
+fn pump<R: std::io::Read + Send + 'static>(
+    reader: R,
+    log: Arc<Mutex<std::fs::File>>,
+    watcher: Option<Arc<crate::shots::Watcher>>,
+) {
     let mut out = std::io::stdout();
     for line in BufReader::new(reader).lines() {
         let Ok(line) = line else {
             break;
         };
+        if let Some(watcher) = &watcher {
+            watcher.line(&line);
+        }
         let red = redact(&line);
         let _ = writeln!(out, "{red}");
         let _ = out.flush();
@@ -674,6 +723,12 @@ fn join_paths(paths: &[PathBuf]) -> String {
 
 pub(crate) fn redact(s: &str) -> String {
     // 简单脱敏：--accessToken 的值通常不会出现在游戏日志中；这里处理常见形式
+    if let Some(value) = s.strip_prefix("-Dauthlibinjector.yggdrasil.prefetched=") {
+        return format!(
+            "-Dauthlibinjector.yggdrasil.prefetched=<服务器元数据 {} 字节>",
+            value.len()
+        );
+    }
     let mut out = s.to_string();
     if let Some(pos) = out.find("accessToken=") {
         let start = pos + "accessToken=".len();
@@ -779,7 +834,7 @@ fn guess_java(profile: &str) -> u32 {
     }
 }
 
-pub(crate) fn offline_uuid(name: &str) -> String {
+pub fn offline_uuid(name: &str) -> String {
     use md5::{Digest, Md5};
     let mut h = Md5::new();
     h.update(format!("OfflinePlayer:{name}").as_bytes());

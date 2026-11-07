@@ -482,48 +482,45 @@ impl App {
                             .inner_margin(egui::Margin::symmetric(14, 12))
                             .show(ui, |ui| {
                                 ui.set_width(442.0);
+                                let current = self.accounts.current().cloned();
+                                let count = self.accounts.list.len();
+                                let face =
+                                    self.face(ctx, current.as_ref().and_then(|a| a.skin.as_deref()));
                                 ui.horizontal(|ui| {
-                                    if let Some(account) = &self.account {
-                                        avatar_sized(ui, &account.name, 30.0);
-                                        ui.add_space(8.0);
-                                        ui.vertical(|ui| {
-                                            ui.label(
-                                                egui::RichText::new(&account.name)
-                                                    .size(13.0)
-                                                    .family(bold_family()),
-                                            );
-                                            ui.label(
-                                                egui::RichText::new("Microsoft 账户 · 已登录")
-                                                    .size(13.0)
-                                                    .color(t::ok()),
-                                            );
-                                        });
-                                    } else {
-                                        avatar_sized(ui, &self.prefs.username, 30.0);
-                                        ui.add_space(8.0);
-                                        ui.vertical(|ui| {
-                                            ui.label(
-                                                egui::RichText::new(&self.prefs.username)
-                                                    .size(13.0)
-                                                    .family(bold_family()),
-                                            );
-                                            ui.label(
-                                                egui::RichText::new("离线账户 · 单人 / 局域网")
-                                                    .size(13.0)
-                                                    .color(t::sub()),
-                                            );
-                                        });
-                                    }
+                                    let (rect, _) = ui.allocate_exact_size(
+                                        egui::vec2(30.0, 30.0),
+                                        egui::Sense::hover(),
+                                    );
+                                    let name = current.as_ref().map_or("?", |a| a.name.as_str());
+                                    draw_avatar(ui.painter(), rect, name, face.as_ref());
+                                    ui.add_space(8.0);
+                                    ui.vertical(|ui| {
+                                        ui.label(
+                                            egui::RichText::new(name)
+                                                .size(13.0)
+                                                .family(bold_family()),
+                                        );
+                                        let (line, color) = match &current {
+                                            Some(a) if a.stale => {
+                                                (format!("{} · 需要重新登录", a.kind_label()), t::warn())
+                                            }
+                                            Some(a) => (
+                                                if count > 1 {
+                                                    format!("{} · 共 {count} 个账户", a.kind_label())
+                                                } else {
+                                                    a.kind_label()
+                                                },
+                                                t::sub(),
+                                            ),
+                                            None => ("还没有账户".into(), t::sub()),
+                                        };
+                                        ui.label(egui::RichText::new(line).size(13.0).color(color));
+                                    });
                                     ui.with_layout(
                                         egui::Layout::right_to_left(egui::Align::Center),
                                         |ui| {
-                                            let label = if self.account.is_some() {
-                                                "管理账户"
-                                            } else {
-                                                "登录 Microsoft"
-                                            };
                                             if motion::secondary_sized(
-                                                ui, label, true, 112.0, 30.0, 10.5,
+                                                ui, "切换或添加", true, 112.0, 30.0, 10.5,
                                             )
                                             .clicked()
                                             {
@@ -542,13 +539,6 @@ impl App {
                             .inner_margin(egui::Margin::symmetric(14, 12))
                             .show(ui, |ui| {
                                 ui.set_width(442.0);
-                                ui.horizontal(|ui| {
-                                    ui.label(
-                                        egui::RichText::new("玩家名").size(13.0).color(t::sub()),
-                                    );
-                                    text_field(ui, &mut self.prefs.username, "", 150.0);
-                                });
-                                ui.add_space(8.0);
                                 ui.horizontal(|ui| {
                                     status_dot(ui, self.env.java_ok);
                                     let label = self.env.java_label.clone().unwrap_or_else(|| {
@@ -657,6 +647,35 @@ impl App {
                                         },
                                     );
                                 });
+                                ui.add_space(6.0);
+                                ui.horizontal(|ui| {
+                                    if toggle_switch(ui, self.prefs.embed_shots).clicked() {
+                                        self.prefs.embed_shots = !self.prefs.embed_shots;
+                                        self.save_ui_config();
+                                    }
+                                    ui.label(
+                                        egui::RichText::new("截图写入地点和人物").size(13.0).color(
+                                            if self.prefs.embed_shots { t::ink() } else { t::sub() },
+                                        ),
+                                    )
+                                    .on_hover_text(
+                                        "写入 PNG 文字块，不改像素；关闭后只保存在启动器",
+                                    );
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            ui.label(
+                                                egui::RichText::new(if self.prefs.embed_shots {
+                                                    "写入图片"
+                                                } else {
+                                                    "仅保存在启动器"
+                                                })
+                                                .size(13.0)
+                                                .color(t::sub()),
+                                            );
+                                        },
+                                    );
+                                });
                             });
                         ui.add_space(12.0);
 
@@ -700,7 +719,7 @@ impl App {
                         ui.add_space(10.0);
                         ui.label(
                             egui::RichText::new(
-                                "快捷键：Ctrl+1–4 切换页面 · Ctrl+F 搜索 · Ctrl+L 日志 · Ctrl+, 设置 · Esc 关闭弹窗",
+                                "快捷键：Ctrl+1–5 切换页面 · Ctrl+F 搜索 · Ctrl+L 日志 · Ctrl+, 设置 · Esc 关闭弹窗",
                             )
                             .size(13.0)
                             .color(t::sub()),
@@ -726,11 +745,7 @@ impl App {
         if open_account {
             self.save_ui_config();
             self.show_settings = false;
-            if self.account.is_some() {
-                self.login.open = true;
-            } else {
-                self.start_login();
-            }
+            self.login.open = true;
         }
         if let Some(dir) = open_dir {
             open_folder(&dir);

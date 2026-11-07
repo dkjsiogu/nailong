@@ -6,7 +6,7 @@
 
 | 镜像 | 管什么 | 维护者 | 需要申请吗 |
 | --- | --- | --- | --- |
-| [BMCLAPI](https://bmclapidoc.bangbang93.com/) | Mojang 的版本清单、游戏文件、库、资源，Fabric / Forge / NeoForge 的 Maven | bangbang93 | 不需要；要求在下载界面写明来源，不做二次封装 |
+| [BMCLAPI](https://bmclapidoc.bangbang93.com/) | Mojang 的版本清单、游戏文件、库、资源，Fabric / Forge / NeoForge 的 Maven，authlib-injector（0.40 起，外置登录用） | bangbang93 | 不需要；要求在下载界面写明来源，不做二次封装 |
 | [MCIM](https://github.com/mcmod-info-mirror) | Modrinth 和 CurseForge 的接口 | mcmod-info-mirror | 需要登记 UA，Cairn 已在 [mcim-rust-api#12](https://github.com/mcmod-info-mirror/mcim-rust-api/issues/12) 登记 |
 
 ## 2. 先连谁

@@ -600,8 +600,10 @@ impl App {
         };
         let settings = self.tuning_settings(&edit.draft);
         let [width, height] = edit.draft.window();
+        let current = self.accounts.current();
         let opts = LaunchOptions {
-            username: self.prefs.username.clone(),
+            username: current.map_or_else(|| self.prefs.username.clone(), |a| a.name.clone()),
+            uuid: current.map(|a| a.uuid.clone()),
             memory_mb: settings.memory_mb,
             gc: settings.gc,
             jvm_args: settings.extra,

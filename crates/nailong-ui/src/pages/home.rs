@@ -5,29 +5,34 @@ use crate::prelude::*;
 impl App {
     /// 启动台下方的截图墙：游戏真正写截图的目录（和启动时的游戏目录一致）。
     pub(crate) fn screenshot_strip(&mut self, ui: &mut egui::Ui, row: &Row, width: f32) {
-        let dir = row
+        let game_dir = row
             .game_dir
             .clone()
-            .unwrap_or_else(|| self.root.dir().to_path_buf())
-            .join("screenshots");
-        if self
-            .home
-            .shots
-            .as_ref()
-            .is_none_or(|shots| shots.dir() != dir)
-        {
-            self.home.shots = Some(shots::Shots::new(
-                ui.ctx(),
-                dir.clone(),
-                self.root.cache().join("thumbs"),
-            ));
+            .unwrap_or_else(|| self.root.dir().to_path_buf());
+        if self.gallery.shots.is_none() {
+            self.gallery.shots = Some(shots::Shots::new(ui.ctx(), self.root.clone()));
+            self.gallery.stale = true;
         }
-        let Some(shots) = &mut self.home.shots else {
+        let Some(shots) = &mut self.gallery.shots else {
             return;
         };
-        if shots.strip(ui, width) {
+        let (open_dir, open_gallery) = shots.strip(ui, &game_dir, width);
+        if open_dir {
+            let dir = game_dir.join("screenshots");
             let _ = std::fs::create_dir_all(&dir);
             open_folder(&dir);
+        }
+        if open_gallery {
+            let version = shots
+                .list
+                .iter()
+                .find(|shot| shot.game_dir == game_dir)
+                .map(|shot| shot.version.clone())
+                .unwrap_or_else(|| row.label.clone());
+            self.open_gallery(Some(crate::pages::gallery::Filter {
+                version: Some(version),
+                ..Default::default()
+            }));
         }
     }
 
@@ -812,6 +817,4 @@ pub(crate) struct HomeState {
     pub(crate) scan: Option<(String, mpsc::Receiver<Vec<installed::InstalledEntry>>)>,
     /// 这一轮缓存里已经核对过的版本行。
     pub(crate) verified: Option<String>,
-    /// 启动台截图墙，跟着当前版本的游戏目录。
-    pub(crate) shots: Option<shots::Shots>,
 }

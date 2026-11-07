@@ -57,6 +57,10 @@ pub enum Error {
     #[error("启动失败: {0}")]
     Launch(String),
 
+    /// 登录和账户的问题，原样给人看。
+    #[error("{0}")]
+    Login(String),
+
     #[error("操作已取消")]
     Cancelled,
 }

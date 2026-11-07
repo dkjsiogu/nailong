@@ -28,6 +28,11 @@
   <url type="bugtracker">https://github.com/dkjsiogu/cairn/issues</url>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.40.0" date="2026-11-07">
+      <description>
+        <p>Multiple accounts: Microsoft, external login (authlib-injector, e.g. LittleSkin) and offline, switched from the sidebar. Passwords are not stored. New Screenshots page with overview, time, place and people views. Screenshots taken in games started from Cairn record the world or server and the player in the PNG text chunk. The viewer can zoom, pan, set a world icon and move files to the trash.</p>
+      </description>
+    </release>
     <release version="0.39.0" date="2026-11-07">
       <description>
         <p>Downloads now fall back to community mirrors when the official servers do not answer: BMCLAPI for Minecraft and mod loader files, MCIM for the Modrinth and CurseForge APIs. A failed host is remembered for five minutes so the rest go straight to the mirror, every file is still checked against the official hashes, and API keys are never sent to a mirror. Settings can choose official-first or mirror-first, credits both mirrors, and the Content page says when a mirror is in use.</p>

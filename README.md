@@ -8,7 +8,7 @@
 
 **简体中文** | [English](README.en.md)
 
-> 当前版本：**0.39.0**（预览版）
+> 当前版本：**0.40.0**（预览版）
 >
 > 目标：小体积、少依赖、安装过程可见、中断可补。功能边界见 [实现状态](docs/design/14-implementation-status.md)。
 
@@ -26,6 +26,14 @@ Cairn 是登山者叠在路边的石堆：它不帮你走路，只标出回去�
 它不是“万能启动器”，也还不是 1.0。能做和不能做的，下文列清楚了。
 
 ## 界面
+
+0.40：多账户和截图页。
+
+- **多账户**：支持微软正版、外置登录（authlib-injector，如 LittleSkin）和离线账户，在左下角切换。头像显示皮肤。外置登录只需填皮肤站地址，多角色时可选择。不保存密码；登录失效时启动前提示重新登录。
+- **截图页**：侧栏第 5 项，分总览、时间、地点（版本 › 存档或服务器）、人物四个视图，支持搜索。
+- **截图信息**：从 Cairn 启动的游戏，截图时把存档或服务器、账户和版本写入 PNG 文字块，不改像素，可在设置里关闭。旧截图从游戏日志推断。
+- **看图**：缩放、原尺寸、拖动、翻页；复制、设为世界图标、移到回收站。
+- 详见 [25 · 多账户和截图](docs/design/25-accounts-and-shots.md)。
 
 0.39 接上社区的公共镜像，官方连不上也能下：
 
@@ -164,10 +172,10 @@ Cairn 是登山者叠在路边的石堆：它不帮你走路，只标出回去�
 
 ### 日常使用
 
-- 微软正版账户登录：点左侧边栏底部的账户（离线时显示「点击登录」），走浏览器授权码 + PKCE（本地回环端口），成功后自动刷新令牌；启动时带 `--accessToken` / `--uuid` / `--xuid`。
-- 令牌存在数据目录的 `account.json`（Unix 0600），不写日志；退出登录会删除。
-- 离线账户启动（单人 / 局域网），没登录时就是原来的离线模式。
-- 设置：侧边栏底部「设置」集中玩家名、内存、Java 状态、游戏/数据目录和日志；玩家名与内存写入 `ui.json`，下次打开还在。
+- 账户：在侧边栏底部切换，支持多个微软正版、外置登录（authlib-injector）和离线账户。微软走浏览器授权码 + PKCE，令牌自动刷新；外置登录启动时自动加载 authlib-injector（官方或 BMCLAPI 镜像下载，SHA-256 校验）。
+- 凭证存在数据目录的 `accounts.json`（Unix 0600），不写日志，不存密码；移除账户会删掉它的凭证。
+- 截图：侧栏「截图」按时间、地点、人物浏览；截图时写入地点和人物（可关闭）。
+- 设置：侧边栏底部「设置」集中账户、内存、Java 状态、游戏/数据目录和日志；内存等偏好写入 `ui.json`，下次打开还在。
 - JVM 自动调参：内存默认「自动」，按电脑内存、处理器、Java 版本和 Mod 数量算出堆大小，并配好 G1 参数；大整合包配强机器时自动换分代 ZGC。设置里能看到计算过程和完整参数，也能手动指定内存、回收器或追加 JVM 参数。算法和依据见 [19 · JVM 自动调参](docs/design/19-jvm-tuning.md)。
 - 版本：加载器依赖的原版自动隐藏；被依赖的版本不能误删；只负责启动、补全、打开目录和删除，内容与存档分别去左侧对应入口。
 - 存档：一级页面，顶部可直接切换版本；列出世界、显示大小和最近修改时间；备份是 **git 式快照**——按内容分块（CDC）只存改动过的块，第二次备份通常只增加几 MB；可恢复、删除、按份数自动清理。
@@ -182,7 +190,7 @@ Cairn 是登山者叠在路边的石堆：它不帮你走路，只标出回去�
 | 平台 | 文件 | 大小 | 要求 |
 |---|---|---:|---|
 | Windows x64 | [cairn.exe](https://github.com/dkjsiogu/cairn/releases/latest/download/cairn.exe) | 约 9 MB | Windows 10/11，Java 21 |
-| Linux x64 (deb) | [cairn_0.39.0_amd64.deb](https://github.com/dkjsiogu/cairn/releases/latest/download/cairn_0.39.0_amd64.deb) | 约 3.7 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
+| Linux x64 (deb) | [cairn_0.40.0_amd64.deb](https://github.com/dkjsiogu/cairn/releases/latest/download/cairn_0.40.0_amd64.deb) | 约 3.7 MB | Ubuntu 24.04+ / glibc ≥ 2.39，Java 21 |
 
 校验值：[SHA256SUMS](https://github.com/dkjsiogu/cairn/releases/latest/download/SHA256SUMS)。
 
@@ -199,7 +207,7 @@ Cairn 是登山者叠在路边的石堆：它不帮你走路，只标出回去�
 ### Linux（Debian / Ubuntu）
 
 ```bash
-sudo apt install ./cairn_0.39.0_amd64.deb
+sudo apt install ./cairn_0.40.0_amd64.deb
 cairn
 ```
 
@@ -304,7 +312,7 @@ Windows 发布版由 GitHub Actions 使用 MSVC + 静态 CRT 构建；也可以�
 
 ## 还没做
 
-- 启动器自身自动更新、皮肤、完整整合包更新。
+- 皮肤上传和更换、完整整合包更新。
 - 启动后的停止游戏 / 启动取消。
 - Windows 实机验证、macOS 支持。
 
@@ -329,6 +337,7 @@ docs/
 
 - [BMCLAPI](https://bmclapidoc.bangbang93.com/)（bangbang93）提供 Minecraft 和加载器的下载镜像。
 - [MCIM](https://github.com/mcmod-info-mirror)（mcmod-info-mirror）提供 Modrinth 和 CurseForge 的接口镜像。
+- [authlib-injector](https://github.com/yushijinhun/authlib-injector)（yushijinhun）让外置登录成为可能。
 
 两者都是免费的社区服务，Cairn 按它们的要求使用：官方优先、写明来源、不做二次封装，见 [24](docs/design/24-download-sources.md)。
 
